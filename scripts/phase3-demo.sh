@@ -27,7 +27,8 @@ for i in $(seq 1 90); do
   STATUS=$(curl -sf $CP/tasks/$TASK | jq -r .status)
   echo "  [$i] $STATUS"
   case "$STATUS" in
-    REVIEW_PENDING|BLOCKED|REJECTED) break ;;
+    REVIEW_PENDING|BLOCKED|REJECTED|VERIFYING) ;;   # print but don't break on VERIFYING
+esac
   esac
   sleep 2
 done

@@ -29,11 +29,21 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	task, _ := h.Tasks.Get(ctx, run.TaskID)
 
 	// Re-provision fresh worktree + container
-	ws, err := workspace.Provision(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r")
+	// ws, err := workspace.Provision(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r")
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r", h.SetupTimeout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer func() {
+		if err != nil {
+			workspace.Cleanup(ctx, ws, task.RepoPath)
+		}
+	}()
 
 	// Restore worktree from checkpoint
 	if err := workspace.ApplyDiff(ctx, ws.WorktreePath, run.LastCheckpoint.WorkspaceDiff); err != nil {

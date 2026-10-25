@@ -3,43 +3,57 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/verification"
 )
 
 type Handlers struct {
-	Tasks            store.TaskRepo
-	Runs             store.RunRepo
-	Events           store.EventRepo
-	SM               *statemachine.Service
-	Adapter          *adapter.Client
-	WorkerImage      string
-	SelfURL          string // e.g. http://localhost:8080 — used as callback base
-	SystemPrompt     string
-	AllowedProviders []string
+	Tasks                   store.TaskRepo
+	Runs                    store.RunRepo
+	Events                  store.EventRepo
+	Verifications           store.VerificationRepo
+	SM                      *statemachine.Service
+	Adapter                 *adapter.Client
+	Verifier                *verification.Runner
+	WorkerImage             string
+	SelfURL                 string
+	SystemPrompt            string
+	AllowedProviders        []string
+	MaxVerificationAttempts int
+	SetupTimeout            time.Duration
 }
 
 func NewHandlers(
 	tasks store.TaskRepo,
 	runs store.RunRepo,
 	events store.EventRepo,
+	verifications store.VerificationRepo,
 	sm *statemachine.Service,
 	adapterClient *adapter.Client,
+	verifier *verification.Runner,
 	workerImage, selfURL, systemPrompt string,
 	allowedProviders []string,
+	maxVerificationAttempts int,
+	setupTimeout time.Duration,
 ) *Handlers {
 	return &Handlers{
-		Tasks:            tasks,
-		Runs:             runs,
-		Events:           events,
-		SM:               sm,
-		Adapter:          adapterClient,
-		WorkerImage:      workerImage,
-		SelfURL:          selfURL,
-		SystemPrompt:     systemPrompt,
-		AllowedProviders: allowedProviders,
+		Tasks:                   tasks,
+		Runs:                    runs,
+		Events:                  events,
+		Verifications:           verifications,
+		SM:                      sm,
+		Adapter:                 adapterClient,
+		Verifier:                verifier,
+		WorkerImage:             workerImage,
+		SelfURL:                 selfURL,
+		SystemPrompt:            systemPrompt,
+		AllowedProviders:        allowedProviders,
+		MaxVerificationAttempts: maxVerificationAttempts,
+		SetupTimeout:            setupTimeout,
 	}
 }
 

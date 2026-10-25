@@ -1,8 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { providerFromEnv } from "./provider-factory.js";
 import { runAgent, type AgentState } from "./agent.js";
 import type { ModelMessage } from "./types.js";
@@ -49,9 +46,10 @@ interface StartBody {
     status: string;
     workspaceDiff: string;
   };
+  diagnostics?: string;
 }
 
-app.post("/runs", async (req, res) => {
+app.post("/runs", async (req: express.Request, res: express.Response) => {
   const body = req.body as StartBody;
   if (!body.runId || !body.containerName || !body.worktreePath || !body.task || !body.callbackUrl) {
     return res.status(400).json({ error: "runId, containerName, worktreePath, task, callbackUrl are required" });
@@ -78,6 +76,18 @@ app.post("/runs", async (req, res) => {
 
   // Fire and forget — the loop posts callbacks to the control plane.
   void (async () => {
+    let resumeFrom: any = undefined;
+    if (body.checkpoint) {
+      const msgs = [...body.checkpoint.messages];
+      if (body.diagnostics) {
+        msgs.push({ role: "user", content: body.diagnostics });
+      }
+      resumeFrom = {
+        messages: msgs,
+        stepCount: body.checkpoint.stepCount,
+        usage: body.checkpoint.usage,
+      };
+    }
     try {
       await runAgent(
         {
@@ -88,13 +98,7 @@ app.post("/runs", async (req, res) => {
           maxRetries: body.maxRetries ?? 2,
           wallClockMs: body.wallClockMs ?? 1_800_000,
           systemPrompt: body.systemPrompt ?? IMPLEMENTER_SYSTEM,
-          resumeFrom: body.checkpoint
-            ? {
-                messages: body.checkpoint.messages,
-                stepCount: body.checkpoint.stepCount,
-                usage: body.checkpoint.usage,
-              }
-            : undefined,
+          resumeFrom,
           isCancelled: () => cancelled,
           onCheckpoint: async (state) => {
             const diff = await getWorkspaceDiff(body.containerName);
@@ -134,13 +138,13 @@ app.post("/runs", async (req, res) => {
   })();
 });
 
-app.post("/runs/:id/cancel", (req, res) => {
+app.post("/runs/:id/cancel", (req: express.Request, res: express.Response) => {
   const a = active.get(req.params.id);
   if (a) { a.cancel(); return res.json({ ok: true }); }
   res.status(404).json({ ok: false, error: "not running" });
 });
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req: express.Request, res: express.Response) => res.json({ ok: true }));
 
 // -- helpers --
 

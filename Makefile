@@ -33,6 +33,14 @@ phase3-demo:
 phase3-resume-demo:
 	bash scripts/phase3-resume-demo.sh
 
+.PHONY: phase4-demo phase4-blocked-demo
+
+phase4-demo:
+	bash scripts/phase4-demo.sh
+
+phase4-blocked-demo:
+	bash scripts/phase4-blocked-demo.sh
+
 
 # RUN IT
 # # 1. Build the worker image

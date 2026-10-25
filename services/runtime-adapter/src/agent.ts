@@ -12,6 +12,12 @@ export interface AgentConfig {
   wallClockMs: number;
   systemPrompt: string;
   onCheckpoint?: (state: AgentState) => Promise<void>;
+  resumeFrom?: {
+    messages: ModelMessage[];
+    stepCount: number;
+    usage: ModelUsage[];
+  };
+  isCancelled: () => boolean;
 }
 
 export interface AgentState {
@@ -22,6 +28,7 @@ export interface AgentState {
   finishedAt?: string;
   status: "running" | "complete" | "blocked" | "error";
   blockedReason?: string;
+
 }
 
 export interface AgentResult {

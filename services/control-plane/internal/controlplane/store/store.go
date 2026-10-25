@@ -20,9 +20,17 @@ type RunRepo interface {
 	UpdateStatus(ctx context.Context, id string, status domain.RunStatus, reason string, at time.Time) error
 	SaveCheckpoint(ctx context.Context, id string, cp *domain.Checkpoint, at time.Time) error
 	MarkStale(ctx context.Context, before time.Time) ([]*domain.WorkflowRun, error)
+
+	// Phase 4 additions:
+	UpdateWorkspace(ctx context.Context, id, worktreePath, containerName string, at time.Time) error
+	UpdateVerification(ctx context.Context, id string, attempt int, passed bool, status domain.RunStatus, reason string, at time.Time) error
 }
 
 type EventRepo interface {
 	Append(ctx context.Context, e *domain.Event) error
 	ListByRun(ctx context.Context, runID string) ([]*domain.Event, error)
+}
+type VerificationRepo interface {
+	Create(ctx context.Context, vr *domain.VerificationRun) error
+	LatestForRun(ctx context.Context, runID string) (*domain.VerificationRun, error)
 }

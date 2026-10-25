@@ -42,5 +42,6 @@ type Task struct {
 	Provenance  Provenance `bson:"provenance" json:"provenance"`
 	CreatedAt   time.Time  `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
+	DiffScope []string `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 }
 

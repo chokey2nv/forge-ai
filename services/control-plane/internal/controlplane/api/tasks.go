@@ -21,6 +21,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		RepoPath    string        `json:"repoPath"`
 		BaseCommit  string        `json:"baseCommit"`
 		Budget      domain.Budget `json:"budget"`
+		DiffScope   []string      `json:"diffScope,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -46,6 +47,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		BaseCommit:  body.BaseCommit,
 		Status:      domain.StatusCreated,
 		Budget:      body.Budget,
+		DiffScope:   body.DiffScope,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -93,7 +95,12 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runID := "run-" + uuid.NewString()[:8]
-	ws, err := workspace.Provision(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID)
+	// ws, err := workspace.Provision(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID)
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

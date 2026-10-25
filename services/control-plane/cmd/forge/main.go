@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/runner"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	mongo_store "github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store/mongo"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/verification"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -57,11 +59,23 @@ func main() {
 	sm := &statemachine.Service{Tasks: taskRepo, Events: eventRepo}
 	adapterClient := &adapter.Client{BaseURL: adapterURL}
 
-	// ---- handler & router ----
-	h := api.NewHandlers(
+	/**
+		h := api.NewHandlers(
 		taskRepo, runRepo, eventRepo, sm, adapterClient,
 		workerImage, selfURL, defaultImplementerSystemPrompt(),
 		allowed,
+	)*/
+
+	// ---- handler & router ----
+	verificationRepo := mongo_store.NewVerificationRepo(db)
+	verifier := verification.NewRunner()
+
+	h := api.NewHandlers(
+		taskRepo, runRepo, eventRepo, verificationRepo, sm, adapterClient, verifier,
+		workerImage, selfURL, defaultImplementerSystemPrompt(),
+		allowed,
+		parseInt(envOr("MAX_VERIFICATION_ATTEMPTS", "2"), 2),
+		parseDuration(envOr("VERIFICATION_SETUP_TIMEOUT_SECONDS", "120s"), 120*time.Second),
 	)
 
 	mux := http.NewServeMux()
@@ -71,6 +85,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /runs/{id}/verification", h.GetVerification)
 	mux.HandleFunc("POST /tasks", h.CreateTask)
 	mux.HandleFunc("GET /tasks/{id}", h.GetTask)
 	mux.HandleFunc("POST /tasks/{id}/runs", h.DispatchRun)
@@ -139,4 +154,13 @@ Rules:
 - Do not touch .git directly.
 - When finished, reply with a short summary.
 - If blocked, reply with a clear explanation.`
+}
+
+func parseInt(s string, fallback int) int {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		log.Printf("invalid int %q, using %d", s, fallback)
+		return fallback
+	}
+	return v
 }

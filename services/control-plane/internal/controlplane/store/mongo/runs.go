@@ -82,6 +82,36 @@ func (r *RunRepo) MarkStale(ctx context.Context, before time.Time) ([]*domain.Wo
 	}
 	return transitioned, nil
 }
+func (r *RunRepo) UpdateWorkspace(ctx context.Context, id, worktreePath, containerName string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"worktreePath":  worktreePath,
+		"containerName": containerName,
+		"updatedAt":     at,
+	}})
+	return err
+}
+
+func (r *RunRepo) UpdateVerification(
+	ctx context.Context,
+	id string,
+	attempt int,
+	passed bool,
+	status domain.RunStatus,
+	reason string,
+	at time.Time,
+) error {
+	set := bson.M{
+		"status":              status,
+		"verificationAttempt": attempt,
+		"verificationPassed":  passed,
+		"updatedAt":           at,
+	}
+	if reason != "" {
+		set["blockedReason"] = reason
+	}
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
+	return err
+}
 
 func uuidShort() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())

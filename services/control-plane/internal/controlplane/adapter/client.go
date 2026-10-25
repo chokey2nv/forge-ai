@@ -23,6 +23,7 @@ type StartRunRequest struct {
 	MaxRetries    int            `json:"maxRetries"`
 	WallClockMS   int            `json:"wallClockMs"`
 	Checkpoint    any            `json:"checkpoint,omitempty"`
+	Diagnostics string `json:"diagnostics,omitempty"`
 }
 
 type StartRunResponse struct{ Accepted bool `json:"accepted"` }
