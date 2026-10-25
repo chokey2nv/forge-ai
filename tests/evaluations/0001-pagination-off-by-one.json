@@ -1,0 +1,16 @@
+{
+    "id": "0001-pagination-off-by-one",
+    "createdAt": "2026-10-25T00:00:00Z",
+    "fixtureRepo": "tests/evaluations/fixtures/pagination-off-by-one",
+    "requirement": "paginate() returns one item too few on the last page. Fix the off-by-one in src/paginate.ts so that paginate(items, page, size) returns the correct slice.",
+    "acceptance": [
+        "paginate([1,2,3,4,5], 1, 2) returns [1,2]",
+        "paginate([1,2,3,4,5], 3, 2) returns [5]",
+        "paginate([1,2,3,4], 2, 2) returns [3,4]",
+        "all tests in tests/paginate.test.ts pass",
+        "no files other than src/paginate.ts are modified"
+    ],
+    "agentDefinition": "implementer@v1",
+    "model": null,
+    "result": null
+}
