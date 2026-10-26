@@ -31,6 +31,20 @@ type WorkflowRun struct {
 	FinalMessage        string      `bson:"finalMessage,omitempty" json:"finalMessage,omitempty"`
 	CreatedAt           time.Time   `bson:"createdAt" json:"createdAt"`
 	UpdatedAt           time.Time   `bson:"updatedAt" json:"updatedAt"`
+
+	Plan            *Plan  `bson:"plan,omitempty" json:"plan,omitempty"`
+	ReviewerVerdict string `bson:"reviewerVerdict,omitempty" json:"reviewerVerdict,omitempty"` // "pass" | "fail" | ""
+}
+
+type Plan struct {
+	Steps     []PlanStep `bson:"steps" json:"steps"`
+	Risks     []string   `bson:"risks,omitempty" json:"risks,omitempty"`
+	CreatedAt time.Time  `bson:"createdAt" json:"createdAt"`
+}
+
+type PlanStep struct {
+	Description string   `bson:"description" json:"description"`
+	Files       []string `bson:"files,omitempty" json:"files,omitempty"`
 }
 
 type Checkpoint struct {

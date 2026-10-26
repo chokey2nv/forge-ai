@@ -41,6 +41,8 @@ phase4-demo:
 phase4-blocked-demo:
 	bash scripts/phase4-blocked-demo.sh
 
+phase5-demo:
+	bash scripts/phase5-demo.sh
 
 # RUN IT
 # # 1. Build the worker image

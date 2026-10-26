@@ -31,6 +31,7 @@ interface StartBody {
   runId: string;
   containerName: string;
   worktreePath: string;
+  role?: "planner" | "implementer" | "reviewer";   // new, defaults to implementer
   task: string;
   systemPrompt?: string;
   callbackUrl: string;
@@ -76,65 +77,101 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
 
   // Fire and forget — the loop posts callbacks to the control plane.
   void (async () => {
-    let resumeFrom: any = undefined;
+    const role = body.role ?? "implementer";
+
+    const messages: ModelMessage[] = [];
     if (body.checkpoint) {
-      const msgs = [...body.checkpoint.messages];
+      messages.push(...body.checkpoint.messages);
       if (body.diagnostics) {
-        msgs.push({ role: "user", content: body.diagnostics });
+        messages.push({ role: "user", content: body.diagnostics });
       }
-      resumeFrom = {
-        messages: msgs,
-        stepCount: body.checkpoint.stepCount,
-        usage: body.checkpoint.usage,
-      };
     }
-    try {
-      await runAgent(
-        {
-          provider,
-          model: body.model ?? process.env.MODEL_NAME ?? "",
-          workspace: ws as any,
-          maxSteps: body.maxSteps ?? 20,
-          maxRetries: body.maxRetries ?? 2,
-          wallClockMs: body.wallClockMs ?? 1_800_000,
-          systemPrompt: body.systemPrompt ?? IMPLEMENTER_SYSTEM,
-          resumeFrom,
-          isCancelled: () => cancelled,
-          onCheckpoint: async (state) => {
-            const diff = await getWorkspaceDiff(body.containerName);
-            await postCallback(body.callbackUrl + `/runs/${body.runId}/checkpoint`, {
-              messages: state.messages,
-              stepCount: state.stepCount,
-              usage: state.usage,
-              status: state.status,
-              workspaceDiff: diff,
-            });
-          },
-        },
-        body.task,
-      ).then(async (result) => {
+
+    const resumeFrom = body.checkpoint
+      ? { messages, stepCount: body.checkpoint.stepCount, usage: body.checkpoint.usage }
+      : undefined;
+
+    const result = await runAgent({
+      provider,
+      model: body.model ?? process.env.MODEL_NAME ?? "",
+      workspace: ws as any,
+      role,
+      maxSteps: body.maxSteps ?? 20,
+      maxRetries: body.maxRetries ?? 2,
+      wallClockMs: body.wallClockMs ?? 1_800_000,
+      systemPrompt: body.systemPrompt,   // optional override
+      resumeFrom,
+      isCancelled: () => cancelled,
+      onCheckpoint: async (state) => {
         const diff = await getWorkspaceDiff(body.containerName);
-        await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
-          status: result.state.status,
-          finalMessage: result.finalMessage,
-          stepCount: result.state.stepCount,
-          usage: result.state.usage,
-          messages: result.state.messages,
+        await postCallback(body.callbackUrl + `/runs/${body.runId}/checkpoint`, {
+          messages: state.messages,
+          stepCount: state.stepCount,
+          usage: state.usage,
+          status: state.status,
           workspaceDiff: diff,
         });
-      });
-    } catch (e) {
-      await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
-        status: "error",
-        finalMessage: String(e),
-        stepCount: 0,
-        usage: [],
-        messages: [],
-        workspaceDiff: "",
-      }).catch(() => {});
-    } finally {
-      active.delete(body.runId);
-    }
+      },
+    }, body.task);
+
+    const diff = await getWorkspaceDiff(body.containerName);
+    await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
+      role,
+      status: result.state.status,
+      finalMessage: result.finalMessage,
+      submission: result.submission,
+      stepCount: result.state.stepCount,
+      usage: result.state.usage,
+      messages: result.state.messages,
+      workspaceDiff: diff,
+    });
+    // try {
+    //   await runAgent(
+    //     {
+    //       provider,
+    //       model: body.model ?? process.env.MODEL_NAME ?? "",
+    //       workspace: ws as any,
+    //       maxSteps: body.maxSteps ?? 20,
+    //       maxRetries: body.maxRetries ?? 2,
+    //       wallClockMs: body.wallClockMs ?? 1_800_000,
+    //       systemPrompt: body.systemPrompt ?? IMPLEMENTER_SYSTEM,
+    //       resumeFrom,
+    //       isCancelled: () => cancelled,
+    //       onCheckpoint: async (state) => {
+    //         const diff = await getWorkspaceDiff(body.containerName);
+    //         await postCallback(body.callbackUrl + `/runs/${body.runId}/checkpoint`, {
+    //           messages: state.messages,
+    //           stepCount: state.stepCount,
+    //           usage: state.usage,
+    //           status: state.status,
+    //           workspaceDiff: diff,
+    //         });
+    //       },
+    //     },
+    //     body.task,
+    //   ).then(async (result) => {
+    //     const diff = await getWorkspaceDiff(body.containerName);
+    //     await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
+    //       status: result.state.status,
+    //       finalMessage: result.finalMessage,
+    //       stepCount: result.state.stepCount,
+    //       usage: result.state.usage,
+    //       messages: result.state.messages,
+    //       workspaceDiff: diff,
+    //     });
+    //   });
+    // } catch (e) {
+    //   await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
+    //     status: "error",
+    //     finalMessage: String(e),
+    //     stepCount: 0,
+    //     usage: [],
+    //     messages: [],
+    //     workspaceDiff: "",
+    //   }).catch(() => {});
+    // } finally {
+    //   active.delete(body.runId);
+    // }
   })();
 });
 

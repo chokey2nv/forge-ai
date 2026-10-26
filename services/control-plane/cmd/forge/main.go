@@ -78,6 +78,13 @@ func main() {
 		parseDuration(envOr("VERIFICATION_SETUP_TIMEOUT_SECONDS", "120s"), 120*time.Second),
 	)
 
+	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
+	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
+	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
+	h.PlannerWallClockMS = int(parseDuration(envOr("PLANNER_TIMEOUT", "120s"), 120*time.Second) / time.Millisecond)
+	h.ReviewerMaxSteps = parseInt(envOr("REVIEWER_MAX_STEPS", "15"), 15)
+	h.ReviewerWallClockMS = int(parseDuration(envOr("REVIEWER_TIMEOUT", "180s"), 180*time.Second) / time.Millisecond)
+
 	mux := http.NewServeMux()
 
 	// tasks
@@ -161,6 +168,14 @@ func parseInt(s string, fallback int) int {
 	if err != nil {
 		log.Printf("invalid int %q, using %d", s, fallback)
 		return fallback
+	}
+	return v
+}
+
+func parseBool(s string) bool {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return false
 	}
 	return v
 }

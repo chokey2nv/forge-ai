@@ -24,6 +24,9 @@ type RunRepo interface {
 	// Phase 4 additions:
 	UpdateWorkspace(ctx context.Context, id, worktreePath, containerName string, at time.Time) error
 	UpdateVerification(ctx context.Context, id string, attempt int, passed bool, status domain.RunStatus, reason string, at time.Time) error
+
+	SavePlan(ctx context.Context, id string, plan *domain.Plan, at time.Time) error
+	SaveReviewVerdict(ctx context.Context, id, verdict string, at time.Time) error
 }
 
 type EventRepo interface {

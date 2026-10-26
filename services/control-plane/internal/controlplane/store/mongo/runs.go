@@ -113,6 +113,20 @@ func (r *RunRepo) UpdateVerification(
 	return err
 }
 
+func (r *RunRepo) SavePlan(ctx context.Context, id string, plan *domain.Plan, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"plan": plan, "updatedAt": at,
+	}})
+	return err
+}
+
+func (r *RunRepo) SaveReviewVerdict(ctx context.Context, id, verdict string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"reviewerVerdict": verdict, "updatedAt": at,
+	}})
+	return err
+}
+
 func uuidShort() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

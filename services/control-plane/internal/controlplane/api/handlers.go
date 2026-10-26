@@ -25,6 +25,13 @@ type Handlers struct {
 	AllowedProviders        []string
 	MaxVerificationAttempts int
 	SetupTimeout            time.Duration
+
+	PlannerEnabled      bool
+	ReviewerEnabled     bool
+	PlannerMaxSteps     int
+	PlannerWallClockMS  int
+	ReviewerMaxSteps    int
+	ReviewerWallClockMS int
 }
 
 func NewHandlers(

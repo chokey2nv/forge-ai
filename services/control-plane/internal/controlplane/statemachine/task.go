@@ -13,12 +13,23 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.StatusPlanned:       {domain.StatusDispatched, domain.StatusRejected},
 	domain.StatusDispatched:    {domain.StatusRunning, domain.StatusBlocked, domain.StatusRejected},
 	domain.StatusRunning:       {domain.StatusReviewPending, domain.StatusVerifying, domain.StatusBlocked, domain.StatusResumable, domain.StatusRejected},
-	domain.StatusVerifying:     {domain.StatusReviewPending, domain.StatusRunning, domain.StatusBlocked}, // Phase 4
 	domain.StatusReviewPending: {domain.StatusApproved, domain.StatusRejected},
 	domain.StatusApproved:      {domain.StatusMerged},
 	domain.StatusBlocked:       {domain.StatusRunning},
 	domain.StatusResumable:     {domain.StatusRunning},
+	// domain.StatusVerifying:     {domain.StatusReviewPending, domain.StatusRunning, domain.StatusBlocked}, // Phase 4
 	// Merged, Rejected terminal
+	domain.StatusVerifying: {
+		domain.StatusAgentReview,   // new: reviewer runs
+		domain.StatusReviewPending, // legacy: no reviewer configured
+		domain.StatusRunning,
+		domain.StatusBlocked,
+	},
+	domain.StatusAgentReview: {
+		domain.StatusReviewPending, // reviewer passed
+		domain.StatusRunning,       // reviewer rejected, retry
+		domain.StatusBlocked,       // retries exhausted
+	},
 }
 
 func CanTransition(from, to domain.TaskStatus) bool {

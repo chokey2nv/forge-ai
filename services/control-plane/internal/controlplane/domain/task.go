@@ -16,6 +16,7 @@ const (
 	StatusBlocked       TaskStatus = "BLOCKED"
 	StatusResumable     TaskStatus = "RESUMABLE"
 	StatusRejected      TaskStatus = "REJECTED"
+	StatusAgentReview   TaskStatus = "AGENT_REVIEW"
 )
 
 type Budget struct {
@@ -42,6 +43,5 @@ type Task struct {
 	Provenance  Provenance `bson:"provenance" json:"provenance"`
 	CreatedAt   time.Time  `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
-	DiffScope []string `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
+	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 }
-

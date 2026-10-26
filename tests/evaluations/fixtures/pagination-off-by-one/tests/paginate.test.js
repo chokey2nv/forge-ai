@@ -11,4 +11,6 @@ test("first page",         () => assert.deepStrictEqual(paginate([1,2,3,4,5], 1,
 test("last page (partial)",() => assert.deepStrictEqual(paginate([1,2,3,4,5], 3, 2), [5]));
 test("last page (full)",   () => assert.deepStrictEqual(paginate([1,2,3,4],   2, 2), [3,4]));
 
+// NOTE: no tests for empty input or page < 1 — the acceptance criteria
+// require those behaviors but the test suite does not.
 process.exit(failed ? 1 : 0);

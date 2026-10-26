@@ -1,4 +1,15 @@
-import type { ModelTool } from "./types.js";
+import type { ModelTool } from "./types";
+import { ROLE_TOOL_NAMES, ROLE_SUBMISSION_TOOL, SUBMIT_PLAN, SUBMIT_REVIEW, type AgentRole } from "./roles";
+
+export function toolsForRole(role: AgentRole): ModelTool[] {
+  const allowed = new Set(ROLE_TOOL_NAMES[role]);
+  const base = TOOLS.filter((t) => allowed.has(t.name));
+
+  const sub = ROLE_SUBMISSION_TOOL[role];
+  if (sub === "submit_plan")   return [...base, SUBMIT_PLAN];
+  if (sub === "submit_review") return [...base, SUBMIT_REVIEW];
+  return base;
+}
 
 export const TOOLS: ModelTool[] = [
   {

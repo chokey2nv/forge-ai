@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
@@ -55,7 +57,45 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	if h.PlannerEnabled {
+		if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+			RunID:         runID + "-plan",
+			ContainerName: ws.ContainerName,
+			WorktreePath:  ws.WorktreePath,
+			Role:          "planner",
+			Task:          buildPlannerTask(task),
+			CallbackURL:   h.SelfURL,
+			Provider:      body.Provider,
+			Model:         body.Model,
+			MaxSteps:      h.PlannerMaxSteps,
+			MaxRetries:    task.Budget.MaxRetries,
+			WallClockMS:   h.PlannerWallClockMS,
+		}); err != nil {
+			_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+			_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "planner invocation failed")
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+	} else {
+		if err := h.SM.Transition(ctx, task, domain.StatusRunning, "adapter accepted"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.invokeImplementer(run, task, task.Requirement)
+	}
+
 	writeJSON(w, http.StatusCreated, task)
+}
+func buildPlannerTask(task *domain.Task) string {
+	var b strings.Builder
+	b.WriteString(task.Requirement)
+	b.WriteString("\n\nAcceptance criteria (ALL must be satisfied):\n")
+	for i, a := range task.Acceptance {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, a)
+	}
+	b.WriteString("\nProduce an implementation plan: which files to change and in what order. Call submit_plan when done.")
+	return b.String()
 }
 
 func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
