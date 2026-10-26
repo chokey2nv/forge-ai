@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"log"
 	"net/http"
 	"strings"
@@ -148,16 +149,42 @@ func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domai
 
 	// Invoke reviewer via adapter.
 	latest, _ := h.Runs.Get(ctx, run.ID)
-	diff := latest.LastCheckpoint.WorkspaceDiff
+	// diff := latest.LastCheckpoint.WorkspaceDiff
 
-	taskPrompt := buildReviewerPrompt(task, diff)
+	// taskPrompt := buildReviewerPrompt(task, diff)
 
-	_, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+	// Look up the implementer's configured reviewer.
+	impl, ok := h.Registry.GetAgent(agentNameOf(run))
+	if !ok || len(impl.Reviewers) == 0 {
+		// No reviewer configured: proceed directly to REVIEW_PENDING (human reviews).
+		_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunComplete, "", time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; no agent reviewer configured")
+		return
+	}
+
+	reviewerName := impl.Reviewers[0]
+	reviewer, ok := h.Registry.GetAgent(reviewerName)
+	if !ok {
+		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; configured reviewer not registered")
+		return
+	}
+	systemPrompt, tools, err := agent.Compose(reviewer, h.Registry.GetSkill)
+	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; reviewer compose failed")
+		return
+	}
+
+	_ = h.SM.Transition(ctx, task, domain.StatusAgentReview, "verification passed, invoking "+reviewerName)
+
+
+	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         run.ID + "-rev" + fmt.Sprint(attempt),
 		ContainerName: run.ContainerName,
 		WorktreePath:  run.WorktreePath,
-		Role:          "reviewer",
-		Task:          taskPrompt,
+		Role:          reviewer.Name,
+		Task:          buildReviewerPrompt(task, latest.LastCheckpoint.WorkspaceDiff),
+		SystemPrompt:  systemPrompt,
+		Tools:         tools,
 		CallbackURL:   h.SelfURL,
 		Provider:      latest.Provenance.Provider,
 		Model:         latest.Provenance.Model,
@@ -165,11 +192,20 @@ func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domai
 		MaxRetries:    task.Budget.MaxRetries,
 		WallClockMS:   h.ReviewerWallClockMS,
 	})
+
 	if err != nil {
 		log.Printf("reviewer invocation failed: %v", err)
 		// Reviewer failure does not block — proceed to human review.
 		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "reviewer failed to start")
 	}
+}
+
+func agentNameOf(run *domain.WorkflowRun) string {
+	s := run.Provenance.AgentDefinition
+	if i := strings.Index(s, "@"); i > 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func buildReviewerPrompt(task *domain.Task, diff string) string {

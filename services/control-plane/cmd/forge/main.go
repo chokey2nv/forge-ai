@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"log"
 	"net/http"
 	"os"
@@ -29,6 +30,9 @@ func main() {
 	workerImage := envOr("WORKER_IMAGE", "forge-worker:dev")
 	mongoURI := envOr("MONGODB_URI", "mongodb://127.0.0.1:27017")
 	mongoDB := envOr("MONGODB_DATABASE", "forge_ai")
+	agentsDir := envOr("AGENTS_DIR", "agents")
+	skillsDir := envOr("SKILLS_DIR", "skills")
+
 	staleAfter := parseDuration(envOr("STALE_AFTER", "60s"), 60*time.Second)
 	allowed := strings.Split(envOr("FORGE_ALLOWED_PROVIDERS", "ollama"), ",")
 	for i := range allowed {
@@ -49,6 +53,16 @@ func main() {
 		log.Fatalf("mongo ping: %v", err)
 	}
 	db := mc.Database(mongoDB)
+
+	registryColl := db.Collection("agentRegistry")
+	registry := agent.NewRegistry(agentsDir, skillsDir, registryColl)
+	if err := registry.Load(ctx); err != nil {
+		log.Printf("agent registry load failed: %v — starting with empty registry", err)
+		// Don't fatal — a broken agent file shouldn't take down the whole control plane.
+		// Failures surface via /agents/health.
+	} else {
+		log.Printf("agent registry loaded: %d agents, %d skills", len(registry.ListAgents()), len(registry.ListSkills()))
+	}
 
 	// ---- store ----
 	taskRepo := mongo_store.NewTaskRepo(db)
@@ -75,6 +89,7 @@ func main() {
 		parseDuration(envOr("VERIFICATION_SETUP_TIMEOUT_SECONDS", "120s"), 120*time.Second),
 	)
 
+	h.Registry = registry
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
 	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
@@ -89,6 +104,14 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+
+	mux.HandleFunc("GET  /agents", h.ListAgents)
+	mux.HandleFunc("GET  /agents/health", h.AgentHealth)
+	mux.HandleFunc("GET  /agents/{name}", h.GetAgent)
+	mux.HandleFunc("POST /agents/reload", h.ReloadAgents)
+	mux.HandleFunc("GET  /skills", h.ListSkills)
+	mux.HandleFunc("GET  /skills/{name}", h.GetSkill)
+
 	mux.HandleFunc("POST /tasks", h.CreateTask)
 	mux.HandleFunc("GET /tasks/{id}", h.GetTask)
 	mux.HandleFunc("POST /tasks/{id}/runs", h.DispatchRun)

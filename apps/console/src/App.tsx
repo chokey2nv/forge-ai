@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval } from "./api";
+import { api, type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, AgentDefinition, Skill } from "./api";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" };
 
@@ -23,6 +23,97 @@ export default function App() {
   );
 }
 
+function Agents({ onOpen }: { onOpen: (name: string) => void }) {
+  const [agents, setAgents] = useState<AgentDefinition[]>([]);
+  const [err, setErr] = useState("");
+  const [reloading, setReloading] = useState(false);
+
+  const load = () => api.listAgents().then(setAgents).catch((e) => setErr(String(e)));
+  useEffect(() => { load(); }, []);
+
+  const reload = async () => {
+    setReloading(true);
+    try { await api.reloadAgents(); await load(); }
+    catch (e) { setErr(String(e)); }
+    finally { setReloading(false); }
+  };
+
+  return (
+    <div>
+      <div className="toolbar">
+        <button onClick={reload} disabled={reloading}>
+          {reloading ? "Reloading…" : "Reload from disk"}
+        </button>
+      </div>
+      {err && <p className="error">{err}</p>}
+      <table>
+        <thead><tr><th>Name</th><th>Description</th><th>Skills</th><th>Tools</th><th>Reviewers</th></tr></thead>
+        <tbody>
+          {agents.map((a) => (
+            <tr key={a.name} className="clickable" onClick={() => onOpen(a.name)}>
+              <td><strong>{a.name}</strong> <span className="version">v{a.version}</span></td>
+              <td>{a.description}</td>
+              <td>{a.skills.join(", ") || "—"}</td>
+              <td>{a.tools.length}</td>
+              <td>{a.reviewers.join(", ") || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AgentDetail({ name, onBack }: { name: string; onBack: () => void }) {
+  const [agent, setAgent] = useState<AgentDefinition | null>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  useEffect(() => {
+    Promise.all([api.getAgent(name), api.listSkills()])
+      .then(([a, s]) => { setAgent(a); setSkills(s.filter((x) => a.skills.includes(x.name))); })
+      .catch(() => {});
+  }, [name]);
+
+  if (!agent) return <p>Loading…</p>;
+
+  return (
+    <div className="detail">
+      <button className="link" onClick={onBack}>← Back</button>
+      <h2>{agent.name} <span className="version">v{agent.version}</span></h2>
+      <p>{agent.description}</p>
+
+      <section>
+        <h3>Tools</h3>
+        <ul>{agent.tools.map((t) => <li key={t}><code>{t}</code></li>)}</ul>
+      </section>
+
+      <section>
+        <h3>Skills</h3>
+        {skills.length === 0 ? <p>—</p> : skills.map((s) => (
+          <details key={s.name}>
+            <summary><strong>{s.name}</strong> — {s.description}</summary>
+            <pre className="skill-body">{s.content}</pre>
+          </details>
+        ))}
+      </section>
+
+      <section>
+        <h3>Reviewers</h3>
+        <p>{agent.reviewers.length ? agent.reviewers.join(", ") : "— (no agent review)"}</p>
+      </section>
+
+      <section>
+        <h3>System prompt</h3>
+        <pre className="system-prompt">{agent.systemPrompt}</pre>
+      </section>
+
+      <section>
+        <h3>Metadata</h3>
+        <p>hash: <code>{agent.contentHash}</code></p>
+        <p>loaded: {new Date(agent.loadedAt).toLocaleString()}</p>
+      </section>
+    </div>
+  );
+}
 function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [status, setStatus] = useState("");

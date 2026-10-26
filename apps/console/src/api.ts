@@ -5,6 +5,29 @@ export type TaskStatus =
   | "AGENT_REVIEW" | "REVIEW_PENDING" | "APPROVED" | "MERGED"
   | "BLOCKED" | "RESUMABLE" | "REJECTED";
 
+
+export interface AgentDefinition {
+  name: string;
+  description: string;
+  version: number;
+  modelPreference?: string;
+  skills: string[];
+  tools: string[];
+  reviewers: string[];
+  systemPrompt: string;
+  contentHash: string;
+  loadedAt: string;
+}
+
+export interface Skill {
+  name: string;
+  description: string;
+  appliesTo: string[];
+  content: string;
+  contentHash: string;
+  loadedAt: string;
+}
+
 export interface Task {
   id: string;
   requirement: string;
@@ -68,27 +91,34 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listTasks: (status?: string) =>
-    j<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
-  getTask: (id: string) => j<Task>(`/tasks/${id}`),
-  listRuns: (taskId: string) => j<Run[]>(`/tasks/${taskId}/runs`),
-  getRun: (id: string) => j<Run>(`/runs/${id}`),
-  getEvents: (runId: string) => j<Event[]>(`/runs/${runId}/events`),
-  getVerification: (runId: string) =>
-    fetch(`${BASE}/runs/${runId}/verification`).then((r) => (r.ok ? (r.json() as Promise<VerificationRun>) : null)),
-  listApprovals: (taskId: string) => j<Approval[]>(`/tasks/${taskId}/approvals`),
-  approve: (taskId: string, reviewer: string, rationale: string) =>
-    j<{ status: string }>(`/tasks/${taskId}/approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewer, rationale }),
-    }),
-  reject: (taskId: string, reviewer: string, rationale: string) =>
-    j<{ status: string }>(`/tasks/${taskId}/reject`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewer, rationale }),
-    }),
-  listEvals: (model?: string) =>
-    j<EvalResult[]>(`/evals/results${model ? `?model=${encodeURIComponent(model)}` : ""}`),
+    listAgents: () => j<AgentDefinition[]>("/agents"),
+    getAgent: (name: string) => j<AgentDefinition>(`/agents/${name}`),
+    reloadAgents: () => j<Record<string, unknown>>("/agents/reload", { method: "POST" }),
+    listSkills: () => j<Skill[]>("/skills"),
+    getSkill: (name: string) => j<Skill>(`/skills/${name}`),
+
+
+    listTasks: (status?: string) =>
+        j<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
+    getTask: (id: string) => j<Task>(`/tasks/${id}`),
+    listRuns: (taskId: string) => j<Run[]>(`/tasks/${taskId}/runs`),
+    getRun: (id: string) => j<Run>(`/runs/${id}`),
+    getEvents: (runId: string) => j<Event[]>(`/runs/${runId}/events`),
+    getVerification: (runId: string) =>
+        fetch(`${BASE}/runs/${runId}/verification`).then((r) => (r.ok ? (r.json() as Promise<VerificationRun>) : null)),
+    listApprovals: (taskId: string) => j<Approval[]>(`/tasks/${taskId}/approvals`),
+    approve: (taskId: string, reviewer: string, rationale: string) =>
+        j<{ status: string }>(`/tasks/${taskId}/approve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reviewer, rationale }),
+        }),
+    reject: (taskId: string, reviewer: string, rationale: string) =>
+        j<{ status: string }>(`/tasks/${taskId}/reject`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reviewer, rationale }),
+        }),
+    listEvals: (model?: string) =>
+        j<EvalResult[]>(`/evals/results${model ? `?model=${encodeURIComponent(model)}` : ""}`),
 };

@@ -27,13 +27,20 @@ interface ActiveRun {
 }
 const active = new Map<string, ActiveRun>();
 
+interface ToolSchema {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 interface StartBody {
   runId: string;
   containerName: string;
   worktreePath: string;
   role?: "planner" | "implementer" | "reviewer";   // new, defaults to implementer
   task: string;
-  systemPrompt?: string;
+  systemPrompt: string;
+  tools: ToolSchema[];
   callbackUrl: string;
   provider?: string;
   model?: string;
@@ -96,6 +103,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       model: body.model ?? process.env.MODEL_NAME ?? "",
       workspace: ws as any,
       role,
+      tools: body.tools,
       maxSteps: body.maxSteps ?? 20,
       maxRetries: body.maxRetries ?? 2,
       wallClockMs: body.wallClockMs ?? 1_800_000,

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"net/http"
 	"slices"
 	"strconv"
@@ -96,6 +97,23 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compose the implementer from the registry.
+	impl, ok := h.Registry.GetAgent("implementer")
+	if !ok {
+		http.Error(w, "implementer agent not registered", http.StatusInternalServerError)
+		return
+	}
+	systemPrompt, tools, err := agent.Compose(impl, h.Registry.GetSkill)
+	if err != nil {
+		http.Error(w, "compose implementer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Store the review policy on the run.
+	var reviewerAgent string
+	if len(impl.Reviewers) > 0 {
+		reviewerAgent = impl.Reviewers[0]
+	}
+
 	// Provider allow-list (Phase 2 pattern; becomes Project.allowed_providers in Phase 6)
 	if !slices.Contains(h.AllowedProviders, body.Provider) {
 		http.Error(w, "provider not allowed: "+body.Provider, http.StatusForbidden)
@@ -109,11 +127,6 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runID := "run-" + uuid.NewString()[:8]
-	// ws, err := workspace.Provision(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID)
-	// if err != nil {
-	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -138,6 +151,8 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	run.Provenance.AgentDefinition = fmt.Sprintf("%s@v%d", impl.Name, impl.Version)
+
 	_ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, time.Now().UTC())
 
 	if h.PlannerEnabled {
@@ -147,6 +162,8 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 			WorktreePath:  ws.WorktreePath,
 			Role:          "planner",
 			Task:          buildPlannerTask(task),
+			SystemPrompt:  systemPrompt,
+			Tools:         tools, 
 			CallbackURL:   h.SelfURL,
 			Provider:      body.Provider,
 			Model:         body.Model,

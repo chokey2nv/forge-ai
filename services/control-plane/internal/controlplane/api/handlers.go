@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"net/http"
 	"time"
 
@@ -34,6 +35,8 @@ type Handlers struct {
 	PlannerWallClockMS  int
 	ReviewerMaxSteps    int
 	ReviewerWallClockMS int
+
+	Registry *agent.Registry
 }
 
 func NewHandlers(
