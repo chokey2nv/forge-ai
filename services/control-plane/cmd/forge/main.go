@@ -54,24 +54,21 @@ func main() {
 	taskRepo := mongo_store.NewTaskRepo(db)
 	runRepo := mongo_store.NewRunRepo(db)
 	eventRepo := mongo_store.NewEventRepo(db)
+	verificationRepo := mongo_store.NewVerificationRepo(db)
+	approvalRepo := mongo_store.NewApprovalRepo(db)
+	evalResultRepo := mongo_store.NewEvalResultRepo(db)
 
 	// ---- services ----
 	sm := &statemachine.Service{Tasks: taskRepo, Events: eventRepo}
 	adapterClient := &adapter.Client{BaseURL: adapterURL}
 
-	/**
-		h := api.NewHandlers(
-		taskRepo, runRepo, eventRepo, sm, adapterClient,
-		workerImage, selfURL, defaultImplementerSystemPrompt(),
-		allowed,
-	)*/
-
 	// ---- handler & router ----
-	verificationRepo := mongo_store.NewVerificationRepo(db)
 	verifier := verification.NewRunner()
 
 	h := api.NewHandlers(
-		taskRepo, runRepo, eventRepo, verificationRepo, sm, adapterClient, verifier,
+		taskRepo, runRepo, eventRepo, verificationRepo,
+		approvalRepo, evalResultRepo,
+		sm, adapterClient, verifier,
 		workerImage, selfURL, defaultImplementerSystemPrompt(),
 		allowed,
 		parseInt(envOr("MAX_VERIFICATION_ATTEMPTS", "2"), 2),
@@ -92,12 +89,21 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("GET /runs/{id}/verification", h.GetVerification)
 	mux.HandleFunc("POST /tasks", h.CreateTask)
 	mux.HandleFunc("GET /tasks/{id}", h.GetTask)
 	mux.HandleFunc("POST /tasks/{id}/runs", h.DispatchRun)
+	mux.HandleFunc("GET  /tasks", h.ListTasks)
+	mux.HandleFunc("GET  /tasks/{id}/runs", h.ListTaskRuns)
+	mux.HandleFunc("GET  /tasks/{id}/approvals", h.ListApprovals)
+	mux.HandleFunc("POST /tasks/{id}/approve", h.ApproveTask)
+	mux.HandleFunc("POST /tasks/{id}/reject", h.RejectTask)
+
+	mux.HandleFunc("POST /evals/results", h.RecordEval)
+	mux.HandleFunc("GET  /evals/results", h.ListEvals)
+	mux.HandleFunc("GET  /evals/results/{id}", h.GetEval)
 
 	// runs
+	mux.HandleFunc("GET /runs/{id}/verification", h.GetVerification)
 	mux.HandleFunc("GET /runs/{id}", h.GetRun)
 	mux.HandleFunc("GET /runs/{id}/events", h.ListEvents)
 	mux.HandleFunc("GET /runs/{id}/diff", h.GetDiff)
@@ -112,7 +118,7 @@ func main() {
 	go watcher.Run(ctx)
 
 	// ---- server ----
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: withCors(mux)}
 	go func() {
 		log.Printf("control-plane listening on %s (adapter=%s, worker=%s, allowed=%v)", addr, adapterURL, workerImage, allowed)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -7,6 +7,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type TaskRepo struct{ coll *mongo.Collection }
@@ -33,4 +34,36 @@ func (r *TaskRepo) UpdateStatus(ctx context.Context, id string, status domain.Ta
 		bson.M{"_id": id},
 		bson.M{"$set": bson.M{"status": status, "updatedAt": at}})
 	return err
+}
+
+func (r *TaskRepo) UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"latestRunId": runID, "updatedAt": at,
+	}})
+	return err
+}
+
+func (r *TaskRepo) List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error) {
+	filter := bson.M{}
+	if status != "" {
+		filter["status"] = status
+	}
+	opts := options.Find().SetSort(bson.D{bson.E{
+		Key: "createdAt", Value: -1,
+	}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+	cur, err := r.coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.Task
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []*domain.Task{}
+	}
+	return out, nil
 }

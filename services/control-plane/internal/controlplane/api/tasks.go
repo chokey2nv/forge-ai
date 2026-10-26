@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,33 +57,6 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.Tasks.Create(ctx, task); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	if h.PlannerEnabled {
-		if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-			RunID:         runID + "-plan",
-			ContainerName: ws.ContainerName,
-			WorktreePath:  ws.WorktreePath,
-			Role:          "planner",
-			Task:          buildPlannerTask(task),
-			CallbackURL:   h.SelfURL,
-			Provider:      body.Provider,
-			Model:         body.Model,
-			MaxSteps:      h.PlannerMaxSteps,
-			MaxRetries:    task.Budget.MaxRetries,
-			WallClockMS:   h.PlannerWallClockMS,
-		}); err != nil {
-			_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
-			_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "planner invocation failed")
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-	} else {
-		if err := h.SM.Transition(ctx, task, domain.StatusRunning, "adapter accepted"); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		h.invokeImplementer(run, task, task.Requirement)
 	}
 
 	writeJSON(w, http.StatusCreated, task)
@@ -164,6 +138,35 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, time.Now().UTC())
+
+	if h.PlannerEnabled {
+		if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+			RunID:         runID + "-plan",
+			ContainerName: ws.ContainerName,
+			WorktreePath:  ws.WorktreePath,
+			Role:          "planner",
+			Task:          buildPlannerTask(task),
+			CallbackURL:   h.SelfURL,
+			Provider:      body.Provider,
+			Model:         body.Model,
+			MaxSteps:      h.PlannerMaxSteps,
+			MaxRetries:    task.Budget.MaxRetries,
+			WallClockMS:   h.PlannerWallClockMS,
+		}); err != nil {
+			_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+			_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "planner invocation failed")
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+	} else {
+		if err := h.SM.Transition(ctx, task, domain.StatusRunning, "adapter accepted"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.invokeImplementer(run, task, task.Requirement)
+	}
+
 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         runID,
 		ContainerName: ws.ContainerName,
@@ -190,4 +193,95 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDispatched)})
+}
+
+func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	status := domain.TaskStatus(q.Get("status"))
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	tasks, err := h.Tasks.List(r.Context(), status, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (h *Handlers) ListTaskRuns(w http.ResponseWriter, r *http.Request) {
+	// Simple: query all runs, filter by task in memory. Fine at Phase 6 scale.
+	runs, err := h.Runs.ListByTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+func (h *Handlers) ApproveTask(w http.ResponseWriter, r *http.Request) { h.decideTask(w, r, "approve") }
+func (h *Handlers) RejectTask(w http.ResponseWriter, r *http.Request)  { h.decideTask(w, r, "reject") }
+
+func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action string) {
+	ctx := r.Context()
+	taskID := r.PathValue("id")
+
+	var body struct {
+		Reviewer  string `json:"reviewer"`
+		Rationale string `json:"rationale,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Reviewer == "" {
+		http.Error(w, "reviewer is required", http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.Tasks.Get(ctx, taskID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if task.Status != domain.StatusReviewPending {
+		http.Error(w, "task is not in REVIEW_PENDING (current: "+string(task.Status)+")", http.StatusConflict)
+		return
+	}
+
+	var to domain.TaskStatus
+	if action == "approve" {
+		to = domain.StatusApproved
+	} else {
+		to = domain.StatusRejected
+	}
+	if err := h.SM.Transition(ctx, task, to, body.Reviewer+": "+body.Rationale); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	_ = h.Approvals.Create(ctx, &domain.Approval{
+		TaskID:    taskID,
+		RunID:     task.LatestRunID,
+		Action:    action,
+		Reviewer:  body.Reviewer,
+		Rationale: body.Rationale,
+		DecidedAt: time.Now().UTC(),
+	})
+	_ = h.Events.Append(ctx, &domain.Event{
+		RunID: task.LatestRunID, TaskID: taskID,
+		Type: "approval." + action, Reason: body.Rationale,
+		At: time.Now().UTC(),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"taskId": taskID, "status": string(to)})
+}
+
+func (h *Handlers) ListApprovals(w http.ResponseWriter, r *http.Request) {
+	as, err := h.Approvals.ListByTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, as)
 }

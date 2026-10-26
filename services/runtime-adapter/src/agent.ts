@@ -1,5 +1,5 @@
 import type { ModelMessage, ModelProvider, ModelRequest, ModelUsage } from "./types";
-import { TOOLS } from "./tools";
+import { TOOLS, toolsForRole } from "./tools";
 import { executeToolCall } from "./executor";
 import type { Workspace } from "./workspace";
 
@@ -44,6 +44,7 @@ export interface AgentState {
 export interface AgentResult {
   state: AgentState;
   finalMessage: string;
+  submission?: Record<string, unknown>;   // populated when submit_* tool is called
 }
 
 export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<AgentResult> {
@@ -75,7 +76,7 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
     }
 
 
-    // const tools = toolsForRole(cfg.role);
+    const tools = toolsForRole(cfg.role);
     const submissionToolName = cfg.role === "planner" ? "submit_plan"
                               : cfg.role === "reviewer" ? "submit_review"
                               : "";

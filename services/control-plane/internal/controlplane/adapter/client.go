@@ -11,22 +11,25 @@ import (
 type Client struct{ BaseURL string }
 
 type StartRunRequest struct {
-	RunID         string         `json:"runId"`
-	ContainerName string         `json:"containerName"`
-	WorktreePath  string         `json:"worktreePath"`
-	Task          string         `json:"task"`
-	SystemPrompt  string         `json:"systemPrompt"`
-	CallbackURL   string         `json:"callbackUrl"`
-	Provider      string         `json:"provider"`
-	Model         string         `json:"model"`
-	MaxSteps      int            `json:"maxSteps"`
-	MaxRetries    int            `json:"maxRetries"`
-	WallClockMS   int            `json:"wallClockMs"`
-	Checkpoint    any            `json:"checkpoint,omitempty"`
-	Diagnostics string `json:"diagnostics,omitempty"`
+	RunID         string `json:"runId"`
+	ContainerName string `json:"containerName"`
+	WorktreePath  string `json:"worktreePath"`
+	Role          string `json:"role,omitempty"` // "planner" | "implementer"
+	Task          string `json:"task"`
+	SystemPrompt  string `json:"systemPrompt"`
+	CallbackURL   string `json:"callbackUrl"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	MaxSteps      int    `json:"maxSteps"`
+	MaxRetries    int    `json:"maxRetries"`
+	WallClockMS   int    `json:"wallClockMs"`
+	Checkpoint    any    `json:"checkpoint,omitempty"`
+	Diagnostics   string `json:"diagnostics,omitempty"`
 }
 
-type StartRunResponse struct{ Accepted bool `json:"accepted"` }
+type StartRunResponse struct {
+	Accepted bool `json:"accepted"`
+}
 
 func (c *Client) StartRun(ctx context.Context, req *StartRunRequest) (*StartRunResponse, error) {
 	body, _ := json.Marshal(req)

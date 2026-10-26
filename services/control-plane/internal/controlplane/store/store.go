@@ -12,6 +12,8 @@ type TaskRepo interface {
 	Create(ctx context.Context, t *domain.Task) error
 	Get(ctx context.Context, id string) (*domain.Task, error)
 	UpdateStatus(ctx context.Context, id string, status domain.TaskStatus, at time.Time) error
+	UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error
+	List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
 }
 
 type RunRepo interface {
@@ -27,6 +29,8 @@ type RunRepo interface {
 
 	SavePlan(ctx context.Context, id string, plan *domain.Plan, at time.Time) error
 	SaveReviewVerdict(ctx context.Context, id, verdict string, at time.Time) error
+
+	ListByTask(ctx context.Context, taskID string) ([]*domain.WorkflowRun, error)
 }
 
 type EventRepo interface {
@@ -36,4 +40,15 @@ type EventRepo interface {
 type VerificationRepo interface {
 	Create(ctx context.Context, vr *domain.VerificationRun) error
 	LatestForRun(ctx context.Context, runID string) (*domain.VerificationRun, error)
+}
+
+type ApprovalRepo interface {
+	Create(ctx context.Context, a *domain.Approval) error
+	ListByTask(ctx context.Context, taskID string) ([]*domain.Approval, error)
+}
+
+type EvalResultRepo interface {
+	Create(ctx context.Context, e *domain.EvalResult) error
+	List(ctx context.Context, model string, limit int) ([]*domain.EvalResult, error)
+	Get(ctx context.Context, id string) (*domain.EvalResult, error)
 }

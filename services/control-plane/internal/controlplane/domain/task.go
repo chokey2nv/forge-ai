@@ -44,4 +44,5 @@ type Task struct {
 	CreatedAt   time.Time  `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
 	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
+	LatestRunID string     `bson:"latestRunId,omitempty" json:"latestRunId,omitempty"`
 }

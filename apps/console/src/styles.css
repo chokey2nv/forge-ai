@@ -1,0 +1,37 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111; background: #f6f7f9; }
+.app { max-width: 1200px; margin: 0 auto; padding: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+header h1 { margin: 0; font-size: 20px; }
+nav button { margin-left: 8px; padding: 6px 12px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 6px; }
+nav button.active { background: #111; color: #fff; border-color: #111; }
+main { background: #fff; padding: 16px; border-radius: 8px; border: 1px solid #e3e5e8; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px; text-align: left; border-bottom: 1px solid #e3e5e8; font-size: 14px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #f0f2f4; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #e3e5e8; color: #333; }
+.badge-running, .badge-verifying, .badge-agent_review { background: #fff4c2; }
+.badge-review_pending { background: #c6e9ff; }
+.badge-approved, .badge-merged { background: #c8f7c8; }
+.badge-blocked, .badge-rejected { background: #ffc8c8; }
+.detail section { margin: 20px 0; }
+.detail pre.diff { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 480px; }
+.detail ul.events { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.detail ul.events li { padding: 4px 0; border-bottom: 1px dashed #eee; }
+.detail ul.events code { background: #f0f2f4; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+.detail ul.events .reason { color: #666; }
+.detail ul.gates { list-style: none; padding: 0; }
+.detail ul.gates li { padding: 4px 8px; margin: 2px 0; border-radius: 4px; font-size: 14px; }
+.detail ul.gates li.passed  { background: #e8f9e8; }
+.detail ul.gates li.failed  { background: #ffe8e8; }
+.detail ul.gates li.skipped { background: #f0f2f4; color: #888; }
+.approval input, .approval textarea { display: block; width: 100%; padding: 6px 8px; margin: 4px 0; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+.approval textarea { min-height: 60px; }
+.approval button { margin-right: 8px; margin-top: 6px; padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.approval button.approve { background: #2e8b2e; color: #fff; }
+.approval button.reject  { background: #c53030; color: #fff; }
+.error { color: #c53030; }
+.files { color: #666; font-size: 12px; }
+button.link { background: none; border: none; color: #0066cc; cursor: pointer; padding: 0; font: inherit; }
+.toolbar { margin-bottom: 12px; }

@@ -8,6 +8,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type RunRepo struct{ coll *mongo.Collection }
@@ -125,6 +126,22 @@ func (r *RunRepo) SaveReviewVerdict(ctx context.Context, id, verdict string, at 
 		"reviewerVerdict": verdict, "updatedAt": at,
 	}})
 	return err
+}
+
+func (r *RunRepo) ListByTask(ctx context.Context, taskID string) ([]*domain.WorkflowRun, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	cur, err := r.coll.Find(ctx, bson.M{"taskId": taskID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.WorkflowRun
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []*domain.WorkflowRun{}
+	}
+	return out, nil
 }
 
 func uuidShort() string {

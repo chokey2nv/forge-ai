@@ -12,5 +12,6 @@
     ],
     "agentDefinition": "implementer@v1",
     "model": null,
-    "result": null
+    "result": null,
+    "diffScope": ["src/paginate.js"]
 }

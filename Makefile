@@ -44,6 +44,17 @@ phase4-blocked-demo:
 phase5-demo:
 	bash scripts/phase5-demo.sh
 
+.PHONY: eval console-install console-dev
+
+eval:
+	cd services/control-plane && go run ./cmd/eval
+
+console-install:
+	cd apps/console && pnpm install
+
+console-dev:
+	cd apps/console && pnpm dev
+
 # RUN IT
 # # 1. Build the worker image
 # make worker-build

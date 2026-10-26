@@ -16,6 +16,8 @@ type Handlers struct {
 	Runs                    store.RunRepo
 	Events                  store.EventRepo
 	Verifications           store.VerificationRepo
+	Approvals               store.ApprovalRepo
+	EvalResults             store.EvalResultRepo
 	SM                      *statemachine.Service
 	Adapter                 *adapter.Client
 	Verifier                *verification.Runner
@@ -39,6 +41,8 @@ func NewHandlers(
 	runs store.RunRepo,
 	events store.EventRepo,
 	verifications store.VerificationRepo,
+	approvals store.ApprovalRepo,
+	evalResults store.EvalResultRepo,
 	sm *statemachine.Service,
 	adapterClient *adapter.Client,
 	verifier *verification.Runner,
@@ -52,6 +56,8 @@ func NewHandlers(
 		Runs:                    runs,
 		Events:                  events,
 		Verifications:           verifications,
+		Approvals:               approvals,
+		EvalResults:             evalResults,
 		SM:                      sm,
 		Adapter:                 adapterClient,
 		Verifier:                verifier,

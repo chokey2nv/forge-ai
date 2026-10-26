@@ -1,9 +1,9 @@
 import "dotenv/config";
-import express from "express";
-import { providerFromEnv } from "./provider-factory.js";
-import { runAgent, type AgentState } from "./agent.js";
-import type { ModelMessage } from "./types.js";
-import process from "node:process";
+import express, { Request, Response } from "express";
+import { providerFromEnv } from "./provider-factory";
+import { runAgent, type AgentState } from "./agent";
+import type { ModelMessage } from "./types";
+import process from "process";
 
 const IMPLEMENTER_SYSTEM = `You are an autonomous implementer agent working inside a sandboxed workspace.
 
@@ -125,63 +125,16 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       messages: result.state.messages,
       workspaceDiff: diff,
     });
-    // try {
-    //   await runAgent(
-    //     {
-    //       provider,
-    //       model: body.model ?? process.env.MODEL_NAME ?? "",
-    //       workspace: ws as any,
-    //       maxSteps: body.maxSteps ?? 20,
-    //       maxRetries: body.maxRetries ?? 2,
-    //       wallClockMs: body.wallClockMs ?? 1_800_000,
-    //       systemPrompt: body.systemPrompt ?? IMPLEMENTER_SYSTEM,
-    //       resumeFrom,
-    //       isCancelled: () => cancelled,
-    //       onCheckpoint: async (state) => {
-    //         const diff = await getWorkspaceDiff(body.containerName);
-    //         await postCallback(body.callbackUrl + `/runs/${body.runId}/checkpoint`, {
-    //           messages: state.messages,
-    //           stepCount: state.stepCount,
-    //           usage: state.usage,
-    //           status: state.status,
-    //           workspaceDiff: diff,
-    //         });
-    //       },
-    //     },
-    //     body.task,
-    //   ).then(async (result) => {
-    //     const diff = await getWorkspaceDiff(body.containerName);
-    //     await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
-    //       status: result.state.status,
-    //       finalMessage: result.finalMessage,
-    //       stepCount: result.state.stepCount,
-    //       usage: result.state.usage,
-    //       messages: result.state.messages,
-    //       workspaceDiff: diff,
-    //     });
-    //   });
-    // } catch (e) {
-    //   await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
-    //     status: "error",
-    //     finalMessage: String(e),
-    //     stepCount: 0,
-    //     usage: [],
-    //     messages: [],
-    //     workspaceDiff: "",
-    //   }).catch(() => {});
-    // } finally {
-    //   active.delete(body.runId);
-    // }
   })();
 });
 
-app.post("/runs/:id/cancel", (req: express.Request, res: express.Response) => {
-  const a = active.get(req.params.id);
+app.post("/runs/:id/cancel", (req: Request, res: Response) => {
+  const a = active.get(req.params.id as string);
   if (a) { a.cancel(); return res.json({ ok: true }); }
   res.status(404).json({ ok: false, error: "not running" });
 });
 
-app.get("/health", (_req: express.Request, res: express.Response) => res.json({ ok: true }));
+app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
 
 // -- helpers --
 
