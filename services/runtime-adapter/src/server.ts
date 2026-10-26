@@ -55,6 +55,7 @@ interface StartBody {
     workspaceDiff: string;
   };
   diagnostics?: string;
+  submissionTool?: string;
 }
 
 app.post("/runs", async (req: express.Request, res: express.Response) => {
@@ -108,6 +109,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       maxRetries: body.maxRetries ?? 2,
       wallClockMs: body.wallClockMs ?? 1_800_000,
       systemPrompt: body.systemPrompt,   // optional override
+      submissionTool: body.submissionTool,
       resumeFrom,
       isCancelled: () => cancelled,
       onCheckpoint: async (state) => {

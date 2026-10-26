@@ -96,6 +96,7 @@ export const api = {
     reloadAgents: () => j<Record<string, unknown>>("/agents/reload", { method: "POST" }),
     listSkills: () => j<Skill[]>("/skills"),
     getSkill: (name: string) => j<Skill>(`/skills/${name}`),
+    listChildren: (parentId: string) => j<Task[]>(`/tasks/${parentId}/children`),
 
 
     listTasks: (status?: string) =>

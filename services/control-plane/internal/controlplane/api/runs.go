@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
@@ -99,7 +100,7 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 	case "reviewer":
 		h.handleReviewerDone(run, task, body)
 	default:
-		h.handleImplementerDone(run, task, body)
+		h.handleAgentDone(run, task, body)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -119,6 +120,28 @@ func (h *Handlers) handleImplementerDone(run *domain.WorkflowRun, task *domain.T
 		return
 	}
 	go h.runVerificationAndReview(run, task)
+}
+func (h *Handlers) handleAgentDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
+	// Determine which agent ran from the run's provenance tag or the body.
+	switch body.Role {
+	case "head-engineer":
+		if body.Status != "complete" || body.Submission == nil {
+			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "head-engineer failed: "+body.FinalMessage)
+			return
+		}
+		h.handleHeadEngineerDone(run, task, body.Submission)
+	case "planner", "implementer", "reviewer", "qa-engineer", "backend-engineer", "frontend-engineer":
+		// Route based on task.ParentID (child) vs root task.
+		// For now, root tasks that bypass decomposition still go through implementer.
+		h.handleImplementerDone(run, task, body)
+	default:
+		// Unknown agent: treat as implementer if the run looks like one.
+		if body.Status == "complete" {
+			h.handleImplementerDone(run, task, body)
+		} else {
+			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "agent failed: "+body.FinalMessage)
+		}
+	}
 }
 func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domain.Task) {
 	ctx := context.Background()
@@ -175,7 +198,6 @@ func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domai
 	}
 
 	_ = h.SM.Transition(ctx, task, domain.StatusAgentReview, "verification passed, invoking "+reviewerName)
-
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         run.ID + "-rev" + fmt.Sprint(attempt),
@@ -259,8 +281,31 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 	_ = h.Runs.SaveReviewVerdict(ctx, run.ID, verdict, time.Now().UTC())
 
 	if verdict == "pass" {
+		if task.ParentID != "" {
+			// Child: integrate into parent.
+			latest, _ := h.Runs.Get(ctx, run.ID)
+			diff := ""
+			if latest.LastCheckpoint != nil {
+				diff = latest.LastCheckpoint.WorkspaceDiff
+			}
+			if h.Integrator != nil {
+				if err := h.Integrator.Integrate(ctx, task, diff); err != nil {
+					log.Printf("integration failed for child %s: %v", task.ID, err)
+					// Integrator already transitioned child and parent to BLOCKED.
+				}
+			}
+			workspace.Cleanup(ctx, &workspace.Workspace{
+				WorktreePath:  run.WorktreePath,
+				ContainerName: run.ContainerName,
+			}, task.RepoPath)
+			return
+		}
+		// Root: proceed to human review.
 		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "reviewer passed: "+sub.Summary)
-		workspace.Cleanup(ctx, &workspace.Workspace{WorktreePath: run.WorktreePath, ContainerName: run.ContainerName}, task.RepoPath)
+		workspace.Cleanup(ctx, &workspace.Workspace{
+			WorktreePath:  run.WorktreePath,
+			ContainerName: run.ContainerName,
+		}, task.RepoPath)
 		return
 	}
 

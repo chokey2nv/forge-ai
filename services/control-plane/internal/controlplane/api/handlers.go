@@ -2,11 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"net/http"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/orchestration"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/verification"
@@ -22,21 +23,20 @@ type Handlers struct {
 	SM                      *statemachine.Service
 	Adapter                 *adapter.Client
 	Verifier                *verification.Runner
+	Registry                *agent.Registry
+	Integrator              *orchestration.Integrator // Phase 8
 	WorkerImage             string
 	SelfURL                 string
 	SystemPrompt            string
 	AllowedProviders        []string
 	MaxVerificationAttempts int
 	SetupTimeout            time.Duration
-
-	PlannerEnabled      bool
-	ReviewerEnabled     bool
-	PlannerMaxSteps     int
-	PlannerWallClockMS  int
-	ReviewerMaxSteps    int
-	ReviewerWallClockMS int
-
-	Registry *agent.Registry
+	PlannerEnabled          bool
+	ReviewerEnabled         bool
+	PlannerMaxSteps         int
+	PlannerWallClockMS      int
+	ReviewerMaxSteps        int
+	ReviewerWallClockMS     int
 }
 
 func NewHandlers(

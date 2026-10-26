@@ -29,6 +29,7 @@ export interface AgentConfig {
     usage: ModelUsage[];
   };
   isCancelled?: () => boolean;
+  submissionTool?: string;
 }
 
 export interface AgentState {
@@ -76,17 +77,12 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
       break;
     }
 
-
-    // const tools = toolsForRole(cfg.role);
-    const submissionToolName = cfg.role === "planner" ? "submit_plan"
-                              : cfg.role === "reviewer" ? "submit_review"
-                              : "";
-
     // Inside the while loop, replace the tool-execution block:
     let submission: Record<string, unknown> | undefined;
 
+    const submissionName = cfg.submissionTool;
     for (const call of resp.toolCalls) {
-      if (submissionToolName && call.name === submissionToolName) {
+      if (submissionName && call.name === submissionName) {
         submission = call.arguments;
         state.messages.push({
           role: "tool", toolCallId: call.id, toolName: call.name,
@@ -94,6 +90,7 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
         });
         break;   // stop processing further tool calls
       }
+      
       const result = await executeToolCall(cfg.workspace, call);
       state.messages.push({
         role: "tool",

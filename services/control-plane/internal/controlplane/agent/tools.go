@@ -10,6 +10,33 @@ type ToolSchema struct {
 // Adding a tool: add an entry here AND an executor in the adapter's executor.ts.
 // Both are needed — CP owns the schema, adapter owns the execution.
 var ToolCatalog = map[string]ToolSchema{
+	"submit_task_graph": {
+		Name:        "submit_task_graph",
+		Description: "Submit the decomposition. Call this once you have analyzed the requirement and identified the specialized subtasks.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"tasks": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":            map[string]any{"type": "string", "description": "Short ID unique within this graph"},
+							"title":         map[string]any{"type": "string"},
+							"assignedAgent": map[string]any{"type": "string", "description": "Name of the agent from the registry"},
+							"acceptance":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"dependsOn":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "IDs of tasks that must integrate before this one starts"},
+							"diffScope":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional file globs this task may modify"},
+							"rationale":     map[string]any{"type": "string", "description": "Why this decomposition (visible in review)"},
+						},
+						"required": []string{"id", "title", "assignedAgent", "acceptance", "dependsOn"},
+					},
+				},
+				"notes": map[string]any{"type": "string", "description": "Overall strategy in one or two sentences"},
+			},
+			"required": []string{"tasks"},
+		},
+	},
 	"read_file": {
 		Name:        "read_file",
 		Description: "Read a file from the workspace. Optional startLine/endLine for a range.",

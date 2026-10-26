@@ -35,3 +35,8 @@ tr.clickable:hover { background: #f0f2f4; }
 .files { color: #666; font-size: 12px; }
 button.link { background: none; border: none; color: #0066cc; cursor: pointer; padding: 0; font: inherit; }
 .toolbar { margin-bottom: 12px; }
+
+
+.task-tree { list-style: none; padding: 0; }
+.task-tree li { padding: 6px 0; border-bottom: 1px dashed #eee; }
+.task-tree .deps { color: #888; font-size: 12px; }

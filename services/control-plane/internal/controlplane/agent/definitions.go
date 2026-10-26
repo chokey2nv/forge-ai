@@ -3,7 +3,7 @@ package agent
 import "time"
 
 type AgentDefinition struct {
-	Name            string    `bson:"_id" json:"name"`         // must match filename
+	Name            string    `bson:"_id" json:"name"` // must match filename
 	Description     string    `bson:"description" json:"description"`
 	Version         int       `bson:"version" json:"version"`
 	ModelPreference string    `bson:"modelPreference,omitempty" json:"modelPreference,omitempty"`
@@ -13,6 +13,7 @@ type AgentDefinition struct {
 	SystemPrompt    string    `bson:"systemPrompt" json:"systemPrompt"`
 	ContentHash     string    `bson:"contentHash" json:"contentHash"`
 	LoadedAt        time.Time `bson:"loadedAt" json:"loadedAt"`
+	SubmissionTool  string    `bson:"submissionTool,omitempty" json:"submissionTool,omitempty"`
 }
 
 type Skill struct {

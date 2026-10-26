@@ -3,14 +3,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 	"github.com/google/uuid"
@@ -97,35 +96,25 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compose the implementer from the registry.
-	impl, ok := h.Registry.GetAgent("implementer")
-	if !ok {
-		http.Error(w, "implementer agent not registered", http.StatusInternalServerError)
-		return
-	}
-	systemPrompt, tools, err := agent.Compose(impl, h.Registry.GetSkill)
-	if err != nil {
-		http.Error(w, "compose implementer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Store the review policy on the run.
-	var reviewerAgent string
-	if len(impl.Reviewers) > 0 {
-		reviewerAgent = impl.Reviewers[0]
-	}
-
-	// Provider allow-list (Phase 2 pattern; becomes Project.allowed_providers in Phase 6)
-	if !slices.Contains(h.AllowedProviders, body.Provider) {
-		http.Error(w, "provider not allowed: "+body.Provider, http.StatusForbidden)
-		return
-	}
-
-	// Transition CREATED → PLANNED → DISPATCHED
-	if err := h.SM.Transition(ctx, task, domain.StatusPlanned, "run requested"); err != nil {
+	// Transition CREATED → DECOMPOSING
+	if err := h.SM.Transition(ctx, task, domain.StatusDecomposing, "head-engineer requested"); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
+	// Compose head-engineer from registry.
+	he, ok := h.Registry.GetAgent("head-engineer")
+	if !ok {
+		http.Error(w, "head-engineer agent not registered", http.StatusInternalServerError)
+		return
+	}
+	sysPrompt, tools, err := agent.Compose(he, h.Registry.GetSkill)
+	if err != nil {
+		http.Error(w, "compose head-engineer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Provision the decomposition workspace.
 	runID := "run-" + uuid.NewString()[:8]
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
 	if err != nil {
@@ -133,83 +122,189 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the task prompt including available agents.
+	taskPrompt := buildHeadEngineerTask(task, h.Registry.ListAgents())
+
+	// Create the run record.
 	run := &domain.WorkflowRun{
-		ID:            runID,
-		TaskID:        task.ID,
-		Status:        domain.RunDispatched,
-		WorktreePath:  ws.WorktreePath,
-		ContainerName: ws.ContainerName,
-		BaseCommit:    task.BaseCommit,
-		Provenance:    domain.Provenance{AgentDefinition: "implementer@v1", Model: body.Model, Provider: body.Provider},
+		ID: runID, TaskID: task.ID,
+		Status:       domain.RunRunning,
+		WorktreePath: ws.WorktreePath, ContainerName: ws.ContainerName,
+		BaseCommit: task.BaseCommit,
+		Provenance: domain.Provenance{
+			AgentDefinition: "head-engineer@v" + fmt.Sprint(he.Version),
+			Model:           body.Model, Provider: body.Provider,
+		},
 		LastHeartbeat: time.Now().UTC(),
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		CreatedAt:     time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	if err := h.Runs.Create(ctx, run); err != nil {
 		workspace.Cleanup(ctx, ws, task.RepoPath)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	run.Provenance.AgentDefinition = fmt.Sprintf("%s@v%d", impl.Name, impl.Version)
-
 	_ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, time.Now().UTC())
 
-	if h.PlannerEnabled {
-		if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-			RunID:         runID + "-plan",
-			ContainerName: ws.ContainerName,
-			WorktreePath:  ws.WorktreePath,
-			Role:          "planner",
-			Task:          buildPlannerTask(task),
-			SystemPrompt:  systemPrompt,
-			Tools:         tools, 
-			CallbackURL:   h.SelfURL,
-			Provider:      body.Provider,
-			Model:         body.Model,
-			MaxSteps:      h.PlannerMaxSteps,
-			MaxRetries:    task.Budget.MaxRetries,
-			WallClockMS:   h.PlannerWallClockMS,
-		}); err != nil {
-			_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
-			_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "planner invocation failed")
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-	} else {
-		if err := h.SM.Transition(ctx, task, domain.StatusRunning, "adapter accepted"); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		h.invokeImplementer(run, task, task.Requirement)
-	}
-
-	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:         runID,
-		ContainerName: ws.ContainerName,
-		WorktreePath:  ws.WorktreePath,
-		Task:          task.Requirement,
-		SystemPrompt:  h.SystemPrompt,
-		CallbackURL:   h.SelfURL,
-		Provider:      body.Provider,
-		Model:         body.Model,
-		MaxSteps:      task.Budget.MaxSteps,
-		MaxRetries:    task.Budget.MaxRetries,
-		WallClockMS:   task.Budget.WallClockMS,
-	}); err != nil {
+	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+		RunID:          runID + "-he",
+		ContainerName:  ws.ContainerName,
+		WorktreePath:   ws.WorktreePath,
+		Role:           "head-engineer",
+		Task:           taskPrompt,
+		SystemPrompt:   sysPrompt,
+		Tools:          tools,
+		SubmissionTool: "submit_task_graph",
+		CallbackURL:    h.SelfURL,
+		Provider:       body.Provider,
+		Model:          body.Model,
+		MaxSteps:       h.PlannerMaxSteps * 2, // head engineer gets more room
+		MaxRetries:     task.Budget.MaxRetries,
+		WallClockMS:    h.PlannerWallClockMS * 2,
+	})
+	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())
-		workspace.Cleanup(ctx, ws, task.RepoPath)
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "head-engineer dispatch failed")
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-
 	if err := h.SM.Transition(ctx, task, domain.StatusDispatched, "adapter accepted"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDispatched)})
+
+	// // Compose the implementer from the registry.
+	// impl, ok := h.Registry.GetAgent("implementer")
+	// if !ok {
+	// 	http.Error(w, "implementer agent not registered", http.StatusInternalServerError)
+	// 	return
+	// }
+	// systemPrompt, tools, err := agent.Compose(impl, h.Registry.GetSkill)
+	// if err != nil {
+	// 	http.Error(w, "compose implementer: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// // Store the review policy on the run.
+	// // var reviewerAgent string
+	// // if len(impl.Reviewers) > 0 {
+	// // 	reviewerAgent = impl.Reviewers[0]
+	// // }
+
+	// // Provider allow-list (Phase 2 pattern; becomes Project.allowed_providers in Phase 6)
+	// if !slices.Contains(h.AllowedProviders, body.Provider) {
+	// 	http.Error(w, "provider not allowed: "+body.Provider, http.StatusForbidden)
+	// 	return
+	// }
+
+	// // Transition CREATED → PLANNED → DISPATCHED
+	// if err := h.SM.Transition(ctx, task, domain.StatusPlanned, "run requested"); err != nil {
+	// 	http.Error(w, err.Error(), http.StatusConflict)
+	// 	return
+	// }
+
+	// runID := "run-" + uuid.NewString()[:8]
+	// ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+
+	// run := &domain.WorkflowRun{
+	// 	ID:            runID,
+	// 	TaskID:        task.ID,
+	// 	Status:        domain.RunDispatched,
+	// 	WorktreePath:  ws.WorktreePath,
+	// 	ContainerName: ws.ContainerName,
+	// 	BaseCommit:    task.BaseCommit,
+	// 	Provenance:    domain.Provenance{AgentDefinition: "implementer@v1", Model: body.Model, Provider: body.Provider},
+	// 	LastHeartbeat: time.Now().UTC(),
+	// 	CreatedAt:     time.Now().UTC(),
+	// 	UpdatedAt:     time.Now().UTC(),
+	// }
+	// if err := h.Runs.Create(ctx, run); err != nil {
+	// 	workspace.Cleanup(ctx, ws, task.RepoPath)
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+
+	// run.Provenance.AgentDefinition = fmt.Sprintf("%s@v%d", impl.Name, impl.Version)
+
+	// _ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, time.Now().UTC())
+
+	// if h.PlannerEnabled {
+	// 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+	// 		RunID:         runID + "-plan",
+	// 		ContainerName: ws.ContainerName,
+	// 		WorktreePath:  ws.WorktreePath,
+	// 		Role:          "planner",
+	// 		Task:          buildPlannerTask(task),
+	// 		SystemPrompt:  systemPrompt,
+	// 		Tools:         tools,
+	// 		CallbackURL:   h.SelfURL,
+	// 		Provider:      body.Provider,
+	// 		Model:         body.Model,
+	// 		MaxSteps:      h.PlannerMaxSteps,
+	// 		MaxRetries:    task.Budget.MaxRetries,
+	// 		WallClockMS:   h.PlannerWallClockMS,
+	// 	}); err != nil {
+	// 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+	// 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "planner invocation failed")
+	// 		http.Error(w, err.Error(), http.StatusBadGateway)
+	// 		return
+	// 	}
+	// } else {
+	// 	if err := h.SM.Transition(ctx, task, domain.StatusRunning, "adapter accepted"); err != nil {
+	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 		return
+	// 	}
+	// 	h.invokeImplementer(run, task, task.Requirement)
+	// }
+
+	// if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+	// 	RunID:         runID,
+	// 	ContainerName: ws.ContainerName,
+	// 	WorktreePath:  ws.WorktreePath,
+	// 	Task:          task.Requirement,
+	// 	SystemPrompt:  h.SystemPrompt,
+	// 	CallbackURL:   h.SelfURL,
+	// 	Provider:      body.Provider,
+	// 	Model:         body.Model,
+	// 	MaxSteps:      task.Budget.MaxSteps,
+	// 	MaxRetries:    task.Budget.MaxRetries,
+	// 	WallClockMS:   task.Budget.WallClockMS,
+	// }); err != nil {
+	// 	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+	// 	_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())
+	// 	workspace.Cleanup(ctx, ws, task.RepoPath)
+	// 	http.Error(w, err.Error(), http.StatusBadGateway)
+	// 	return
+	// }
+
+	// if err := h.SM.Transition(ctx, task, domain.StatusDispatched, "adapter accepted"); err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+
+	// writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDispatched)})
+}
+func buildHeadEngineerTask(task *domain.Task, agents []*agent.AgentDefinition) string {
+	var b strings.Builder
+	b.WriteString("# Requirement\n\n")
+	b.WriteString(task.Requirement)
+	b.WriteString("\n\n# Acceptance criteria\n\n")
+	for i, a := range task.Acceptance {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, a)
+	}
+	b.WriteString("\n\n# Available agents\n\n")
+	for _, a := range agents {
+		if a.Name == "head-engineer" {
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s** — %s\n", a.Name, a.Description)
+	}
+	b.WriteString("\nUse only the agents listed above. Call submit_task_graph when done.")
+	return b.String()
 }
 
 func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {

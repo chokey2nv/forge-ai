@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
+
 	"log"
 	"net/http"
 	"os"
@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/api"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/orchestration"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/runner"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	mongo_store "github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store/mongo"
@@ -97,6 +99,30 @@ func main() {
 	h.ReviewerMaxSteps = parseInt(envOr("REVIEWER_MAX_STEPS", "15"), 15)
 	h.ReviewerWallClockMS = int(parseDuration(envOr("REVIEWER_TIMEOUT", "180s"), 180*time.Second) / time.Millisecond)
 
+	integrator := &orchestration.Integrator{
+		Tasks:  taskRepo,
+		Events: eventRepo,
+		SM:     sm,
+	}
+	h.Integrator = integrator
+
+	orchestration.ParentVerificationHook = h.RunParentVerification
+
+	scheduler := &orchestration.Scheduler{
+		Tasks:               taskRepo,
+		Runs:                runRepo,
+		Events:              eventRepo,
+		SM:                  sm,
+		Registry:            registry,
+		Adapter:             adapterClient,
+		WorkerImage:         workerImage,
+		SelfURL:             selfURL,
+		SetupTimeoutSeconds: int(h.SetupTimeout.Seconds()),
+		DefaultProvider:     envOr("DEFAULT_PROVIDER", "ollama"),
+		DefaultModel:        envOr("DEFAULT_MODEL", os.Getenv("MODEL_NAME")),
+	}
+	go scheduler.Run(ctx)
+
 	mux := http.NewServeMux()
 
 	// tasks
@@ -141,7 +167,7 @@ func main() {
 	go watcher.Run(ctx)
 
 	// ---- server ----
-	srv := &http.Server{Addr: addr, Handler: withCors(mux)}
+	srv := &http.Server{Addr: addr, Handler: api.WithCORS(mux)}
 	go func() {
 		log.Printf("control-plane listening on %s (adapter=%s, worker=%s, allowed=%v)", addr, adapterURL, workerImage, allowed)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

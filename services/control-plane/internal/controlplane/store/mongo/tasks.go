@@ -67,3 +67,49 @@ func (r *TaskRepo) List(ctx context.Context, status domain.TaskStatus, limit int
 	}
 	return out, nil
 }
+
+func (r *TaskRepo) ListByStatus(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error) {
+	filter := bson.M{"status": status}
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+	cur, err := r.coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.Task
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []*domain.Task{}
+	}
+	return out, nil
+}
+
+func (r *TaskRepo) ListChildren(ctx context.Context, parentID string) ([]*domain.Task, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}})
+	cur, err := r.coll.Find(ctx, bson.M{"parentId": parentID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.Task
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []*domain.Task{}
+	}
+	return out, nil
+}
+
+func (r *TaskRepo) UpdateIntegration(ctx context.Context, id, worktree, branch, baseCommit string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"integrationWorktree":   worktree,
+		"integrationBranch":     branch,
+		"integrationBaseCommit": baseCommit,
+		"updatedAt":             at,
+	}})
+	return err
+}

@@ -14,6 +14,11 @@ type TaskRepo interface {
 	UpdateStatus(ctx context.Context, id string, status domain.TaskStatus, at time.Time) error
 	UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error
 	List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
+
+	// Phase 8 additions:
+	ListByStatus(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
+	ListChildren(ctx context.Context, parentID string) ([]*domain.Task, error)
+	UpdateIntegration(ctx context.Context, id, worktree, branch, baseCommit string, at time.Time) error
 }
 
 type RunRepo interface {

@@ -17,6 +17,11 @@ const (
 	StatusResumable     TaskStatus = "RESUMABLE"
 	StatusRejected      TaskStatus = "REJECTED"
 	StatusAgentReview   TaskStatus = "AGENT_REVIEW"
+
+	StatusDecomposing TaskStatus = "DECOMPOSING" // head-engineer is running
+	StatusIntegrating TaskStatus = "INTEGRATING" // applying child diffs to parent
+	StatusIntegrated  TaskStatus = "INTEGRATED"  // child terminal: merged into parent
+
 )
 
 type Budget struct {
@@ -45,4 +50,17 @@ type Task struct {
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
 	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 	LatestRunID string     `bson:"latestRunId,omitempty" json:"latestRunId,omitempty"`
+
+	ParentID      string   `bson:"parentId,omitempty" json:"parentId,omitempty"`
+	DependsOn     []string `bson:"dependsOn,omitempty" json:"dependsOn,omitempty"`
+	AssignedAgent string   `bson:"assignedAgent,omitempty" json:"assignedAgent,omitempty"`
+	Title         string   `bson:"title,omitempty" json:"title,omitempty"`
+
+	// Child task only: which branch it works on. Parent tasks have a branch too.
+	Branch string `bson:"branch,omitempty" json:"branch,omitempty"`
+
+	// Root task: the integration branch that children merge into.
+	IntegrationWorktree   string `bson:"integrationWorktree,omitempty" json:"integrationWorktree,omitempty"`
+	IntegrationBranch     string `bson:"integrationBranch,omitempty" json:"integrationBranch,omitempty"`
+	IntegrationBaseCommit string `bson:"integrationBaseCommit,omitempty" json:"integrationBaseCommit,omitempty"`
 }

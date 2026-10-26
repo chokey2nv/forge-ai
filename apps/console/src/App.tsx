@@ -189,6 +189,8 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
   if (!task) return <p>Loading…</p>;
 
+  
+
   return (
     <div className="detail">
       <button className="link" onClick={onBack}>← Back</button>

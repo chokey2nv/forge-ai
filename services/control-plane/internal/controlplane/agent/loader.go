@@ -16,8 +16,8 @@ import (
 type LoadResult struct {
 	Agents   map[string]*AgentDefinition
 	Skills   map[string]*Skill
-	Errors   []error   // files that failed validation
-	Warnings []string  // non-fatal (e.g. unknown reviewers)
+	Errors   []error  // files that failed validation
+	Warnings []string // non-fatal (e.g. unknown reviewers)
 }
 
 // LoadAgentsDir reads every *.md under dir, parses frontmatter + body,
@@ -110,6 +110,7 @@ func loadAgentFile(path string) (*AgentDefinition, error) {
 		Skills          []string `yaml:"skills"`
 		Tools           []string `yaml:"tools"`
 		Reviewers       []string `yaml:"reviewers"`
+		SubmissionTool  string   `yaml:"submission_tool"`
 	}
 	if err := yaml.Unmarshal(front, &meta); err != nil {
 		return nil, fmt.Errorf("frontmatter yaml: %w", err)
@@ -140,9 +141,10 @@ func loadAgentFile(path string) (*AgentDefinition, error) {
 		Skills:          meta.Skills,
 		Tools:           meta.Tools,
 		Reviewers:       meta.Reviewers,
-		SystemPrompt:    strings.TrimSpace(body),
+		SystemPrompt:    strings.TrimSpace(string(body)),
 		ContentHash:     hash(front, body),
 		LoadedAt:        time.Now().UTC(),
+		SubmissionTool:  meta.SubmissionTool,
 	}, nil
 }
 
@@ -173,7 +175,7 @@ func loadSkillFile(path string) (*Skill, error) {
 		Name:        meta.Name,
 		Description: meta.Description,
 		AppliesTo:   meta.AppliesTo,
-		Content:     strings.TrimSpace(body),
+		Content:     strings.TrimSpace(string(body)),
 		ContentHash: hash(front, body),
 		LoadedAt:    time.Now().UTC(),
 	}, nil
