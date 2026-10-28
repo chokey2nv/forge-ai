@@ -41,7 +41,7 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
     if (!res.ok) throw new Error(`listModels: HTTP ${res.status}`);
     const body = (await res.json()) as {
       models?: Array<{ id?: string; name?: string }>;
-      data?: Array<{ id?: string }>;
+      data?: Array<{ id?: string; name?: string }>;
     };
     // Ollama's /v1/models returns { models: [{ id }] }; OpenAI returns { data: [{ id }] }.
     const list = body.models ?? body.data ?? [];

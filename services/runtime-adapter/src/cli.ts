@@ -7,6 +7,8 @@ import { providerFromEnv } from "./provider-factory";
 import { provisionWorkspace, runHost } from "./workspace";
 import { runAgent } from "./agent";
 import { FileCheckpointer } from "./checkpoint";
+import { TOOLS } from "./tools";
+import { AgentRole } from "./roles";
 
 const IMPLEMENTER_SYSTEM = `You are an autonomous implementer agent working inside a sandboxed workspace.
 
@@ -69,19 +71,37 @@ async function main() {
   const checkpointer = new FileCheckpointer(join(process.cwd(), ".forge", "checkpoints"), runId);
 
   try {
+    // Role can be overridden for one-off tests of other agents.
+    const role = (process.env.FORGE_ROLE ?? "implementer") as AgentRole;
+
     const result = await runAgent(
       {
         provider,
         model,
         workspace: ws,
+        role,
+        tools: TOOLS,
+        systemPrompt: IMPLEMENTER_SYSTEM,
         maxSteps: Number(process.env.MAX_AGENT_STEPS ?? 20),
         maxRetries: Number(process.env.MAX_RETRIES ?? 2),
         wallClockMs: Number(process.env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000,
-        systemPrompt: IMPLEMENTER_SYSTEM,
         onCheckpoint: (s) => checkpointer.save(s),
       },
-      task!,
+      task,
     );
+    // const result = await runAgent(
+    //   {
+    //     provider,
+    //     model,
+    //     workspace: ws,
+    //     maxSteps: Number(process.env.MAX_AGENT_STEPS ?? 20),
+    //     maxRetries: Number(process.env.MAX_RETRIES ?? 2),
+    //     wallClockMs: Number(process.env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000,
+    //     systemPrompt: IMPLEMENTER_SYSTEM,
+    //     onCheckpoint: (s) => checkpointer.save(s),
+    //   },
+    //   task!,
+    // );
 
     console.log(`\nstatus: ${result.state.status}`);
     console.log(`steps:  ${result.state.stepCount}`);

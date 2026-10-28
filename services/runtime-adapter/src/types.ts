@@ -6,7 +6,7 @@ export interface ModelMessage {
   toolCallId?: string;
   toolName?: string;
 }
-
+export type ToolSchema = ModelTool;
 export interface ModelTool {
   name: string;
   description: string;
