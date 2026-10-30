@@ -4,6 +4,24 @@ import { providerFromEnv } from "./provider-factory";
 import { runAgent, type AgentState } from "./agent";
 import type { ModelMessage } from "./types";
 import process from "process";
+import dotenv from "dotenv";
+import path from "path";
+import fs from "fs";
+
+(function loadRootEnv() {
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = path.join(dir, ".env");
+    if (fs.existsSync(candidate)) {
+      dotenv.config({ path: candidate });
+      console.log(`[adapter] loaded env from ${candidate}`);
+      return;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return;
+    dir = parent;
+  }
+})();
 
 const IMPLEMENTER_SYSTEM = `You are an autonomous implementer agent working inside a sandboxed workspace.
 
@@ -35,6 +53,7 @@ interface ToolSchema {
 
 interface StartBody {
   runId: string;
+  callbackRunId: string;
   containerName: string;
   worktreePath: string;
   role?: "planner" | "implementer" | "reviewer";   // new, defaults to implementer
@@ -125,7 +144,8 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
     }, body.task);
 
     const diff = await getWorkspaceDiff(body.containerName);
-    await postCallback(body.callbackUrl + `/runs/${body.runId}/complete`, {
+    const callbackId = body.callbackRunId ?? body.runId;
+    await postCallback(body.callbackUrl + `/runs/${callbackId}/complete`, {
       role,
       status: result.state.status,
       finalMessage: result.finalMessage,

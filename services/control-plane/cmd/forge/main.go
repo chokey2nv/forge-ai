@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 
 	"log"
 	"net/http"
@@ -20,11 +21,13 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	mongo_store "github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store/mongo"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/verification"
+	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 func main() {
+	loadDotenv()
 	// ---- config ----
 	addr := envOr("CONTROL_PLANE_ADDR", ":8080")
 	selfURL := envOr("CONTROL_PLANE_SELF_URL", "http://localhost:8080")
@@ -37,6 +40,8 @@ func main() {
 
 	staleAfter := parseDuration(envOr("STALE_AFTER", "60s"), 60*time.Second)
 	allowed := strings.Split(envOr("FORGE_ALLOWED_PROVIDERS", "ollama"), ",")
+
+	log.Println("allowed - [%]", allowed)
 	for i := range allowed {
 		allowed[i] = strings.TrimSpace(allowed[i])
 	}
@@ -233,4 +238,26 @@ func parseBool(s string) bool {
 		return false
 	}
 	return v
+}
+
+func loadDotenv() {
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		envPath := filepath.Join(dir, ".env")
+		if _, err := os.Stat(envPath); err == nil {
+			if err := godotenv.Load(envPath); err != nil {
+				log.Printf("dotenv: %v", err)
+			}
+			log.Printf("loaded env from %s", envPath)
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
 }

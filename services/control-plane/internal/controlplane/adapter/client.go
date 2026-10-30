@@ -20,6 +20,7 @@ type ToolSchema struct {
 
 type StartRunRequest struct {
 	RunID          string             `json:"runId"`
+	CallbackRunID  string             `json:"callbackRunId,omitempty"`
 	ContainerName  string             `json:"containerName"`
 	WorktreePath   string             `json:"worktreePath"`
 	Role           string             `json:"role,omitempty"`

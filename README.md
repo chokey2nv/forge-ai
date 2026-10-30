@@ -776,3 +776,14 @@ mongosh forge_ai --eval 'db.tasks.find().sort({createdAt:-1}).limit(1).pretty()'
 *Runbook reflects Phase 3. Sections marked "Not yet implemented" will be updated as Phases 4–7 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
 
 <!-- ==================== FILE END ==================== -->
+
+
+
+
+Start the server 
+
+```sh 
+set -a; source .env; set +a
+cd services/control-plane
+go run ./cmd/forge
+```

@@ -147,6 +147,7 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:          runID + "-he",
+		CallbackRunID:  runID,
 		ContainerName:  ws.ContainerName,
 		WorktreePath:   ws.WorktreePath,
 		Role:           "head-engineer",
