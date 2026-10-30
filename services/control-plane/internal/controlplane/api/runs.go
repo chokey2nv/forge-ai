@@ -201,6 +201,7 @@ func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domai
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         run.ID + "-rev" + fmt.Sprint(attempt),
+		CallbackRunID: run.ID,
 		ContainerName: run.ContainerName,
 		WorktreePath:  run.WorktreePath,
 		Role:          reviewer.Name,
@@ -456,62 +457,6 @@ func buildImplementerTaskWithPlan(task *domain.Task, plan *domain.Plan) string {
 	}
 	return b.String()
 }
-
-// func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
-// 	ctx := r.Context()
-// 	runID := r.PathValue("id")
-
-// 	var body struct {
-// 		Status        string           `json:"status"`
-// 		FinalMessage  string           `json:"finalMessage"`
-// 		StepCount     int              `json:"stepCount"`
-// 		Usage         []domain.Usage   `json:"usage"`
-// 		WorkspaceDiff string           `json:"workspaceDiff"`
-// 		Messages      []domain.Message `json:"messages"`
-// 	}
-// 	_ = json.NewDecoder(r.Body).Decode(&body)
-
-// 	run, err := h.Runs.Get(ctx, runID)
-// 	if err != nil {
-// 		http.NotFound(w, r)
-// 		return
-// 	}
-// 	task, err := h.Tasks.Get(ctx, run.TaskID)
-// 	if err != nil {
-// 		http.NotFound(w, r)
-// 		return
-// 	}
-
-// 	// Persist final checkpoint
-// 	cp := &domain.Checkpoint{
-// 		Messages: body.Messages, StepCount: body.StepCount,
-// 		Usage: body.Usage, Status: body.Status,
-// 		WorkspaceDiff: body.WorkspaceDiff, SavedAt: time.Now().UTC(),
-// 	}
-// 	_ = h.Runs.SaveCheckpoint(ctx, runID, cp, time.Now().UTC())
-
-// 	// Agent-reported blocked/error: no verification, just block.
-// 	if body.Status != "complete" {
-// 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
-// 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, body.FinalMessage)
-// 		_ = h.Events.Append(ctx, &domain.Event{RunID: runID, Type: "complete", Reason: body.FinalMessage, At: time.Now().UTC()})
-// 		w.WriteHeader(http.StatusNoContent)
-// 		return
-// 	}
-
-// 	// Agent claims complete → verify.
-// 	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunVerifying, "", time.Now().UTC())
-// 	if err := h.SM.Transition(ctx, task, domain.StatusVerifying, "agent reported complete"); err != nil {
-// 		http.Error(w, err.Error(), http.StatusConflict)
-// 		return
-// 	}
-// 	_ = h.Events.Append(ctx, &domain.Event{RunID: runID, Type: "verification.start", At: time.Now().UTC()})
-
-// 	// Respond immediately; verification runs asynchronously.
-// 	w.WriteHeader(http.StatusNoContent)
-
-// 	go h.runVerification(run, task)
-// }
 
 func (h *Handlers) runVerification(run *domain.WorkflowRun, task *domain.Task) {
 	defer func() {

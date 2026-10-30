@@ -1,4 +1,16 @@
-HOW TO RUN 
+# Forge AI
+
+Autonomous AI software-engineering agent team.
+
+Forge AI takes a software requirement plus acceptance criteria, decomposes the work into a dependency-ordered task graph of specialized sub-tasks (head engineer → planner / implementer / reviewer / qa-engineer), executes each sub-task in an isolated Docker workspace, runs automated verification gates, reviews the diff, and surfaces it for human approval.
+
+**Stack:** Go control plane · TypeScript runtime adapter · React console · MongoDB · Ollama / OpenAI.
+
+## Status
+
+**Current build state: Phase 8** — head engineer, task graph, scheduler, integrator and combined parent verification are implemented. See `mile-stone-review.md` for the honest write-vs-verify status and the Phase 9–13 roadmap.
+
+## How to run
 
 make smoke          # uses ollama
 make phase2-demo
@@ -29,10 +41,10 @@ Copy everything between the markers into your repo.
 
 # Forge AI — Operations Runbook
 
-Setup, startup, and validation for the platform at its current build state (Phases 1–3). Phase 4+ sections are marked *Not yet implemented*.
+Setup, startup, and validation for the platform at its current build state (Phases 1–8). Phase 9+ sections are marked *Not yet implemented*.
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 25 Oct 2026 (Phase 3 complete).
+**Last updated:** 30 Oct 2026 (Phase 8 build state).
 
 ---
 
@@ -678,12 +690,13 @@ rm -rf .forge
 | 1. Skeleton + contracts + D0 | Built | Smoke test passes; D0 closed |
 | 2. Single-agent loop, containerized | Built | `make phase2-demo` produces a reviewable diff |
 | 3. Control plane + persistence | Built | `make phase3-demo` reaches `REVIEW_PENDING`; `make phase3-resume-demo` recovers after crash |
-| 4. Verification gates | Not yet implemented | Non-compliant change blocked by a gate |
-| 5. Planner + Reviewer roles | Not yet implemented | Reviewer catches seeded defect |
-| 6. Eval suite formalized + console | Not yet implemented | Eval runs on every change; UI for review/approve |
-| 7. Parallelism + delivery | Not yet implemented | Two independent runs don't interfere |
+| 4. Verification gates | Built | `make phase4-demo` passes; `make phase4-blocked-demo` blocks out-of-scope changes |
+| 5. Planner + Reviewer roles | Built | `make phase5-demo` exercises the planner/reviewer flow |
+| 6. Eval suite formalized + console | Built | Eval harness + console UI in place |
+| 7. Agent registry, skills, composer | Built | Agents/skills are markdown + hot reload |
+| 8. Head engineer + task graph + integrator | Built | Decomposition → children → integration → combined verification implemented |
 
-**Phase 3 caveat:** `RecordComplete` transitions to `REVIEW_PENDING` on the agent's `status: "complete"` without verifying the diff. Correctness gating is Phase 4's job — that is why the state machine reserves `VERIFYING`.
+**Current caveat:** only Phase 1 has confirmed end-to-end evidence. Phases 2–8 are implemented but largely unverified. See `mile-stone-review.md` for the full write-vs-verify status and the Phase 9–13 roadmap.
 
 ---
 
@@ -763,6 +776,7 @@ make smoke                              # Phase 1: model capable
 make phase2-demo                        # Phase 2: CLI loop
 make phase3-demo                        # Phase 3: lifecycle
 make phase3-resume-demo                 # Phase 3: crash recovery
+make phase8-vertical-slice-demo         # Phase 8: full decomposition slice
 
 # ---- inspect ----
 curl -s localhost:8080/runs/<runId> | jq
@@ -773,7 +787,7 @@ mongosh forge_ai --eval 'db.tasks.find().sort({createdAt:-1}).limit(1).pretty()'
 
 ---
 
-*Runbook reflects Phase 3. Sections marked "Not yet implemented" will be updated as Phases 4–7 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
+*Runbook reflects the Phase 8 build state. Sections marked "Not yet implemented" will be updated as Phases 9–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
 
 <!-- ==================== FILE END ==================== -->
 

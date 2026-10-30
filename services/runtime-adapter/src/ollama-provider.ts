@@ -32,7 +32,7 @@ export class OllamaProvider extends OpenAICompatibleProvider implements ModelPro
 
   async healthCheck(): Promise<{ ok: boolean; detail: string }> {
     try {
-      const res = await fetch(`${this.cfg.baseUrl}/api/tags`, {
+      const res = await fetch(`${this.cfg.baseUrl.replace(/\/v1\/?$/, "")}/api/tags`, {
         signal: AbortSignal.timeout(5_000),
       });
       if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` };
@@ -43,7 +43,7 @@ export class OllamaProvider extends OpenAICompatibleProvider implements ModelPro
   }
 
   async listModels(): Promise<string[]> {
-    const res = await fetch(`${this.cfg.baseUrl}/api/tags`, {
+    const res = await fetch(`${this.cfg.baseUrl.replace(/\/v1\/?$/, "")}/api/tags`, {
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) throw new Error(`listModels: HTTP ${res.status}`);
@@ -88,7 +88,7 @@ export class OllamaProvider extends OpenAICompatibleProvider implements ModelPro
       };
     }
 
-    const res = await fetch(`${this.cfg.baseUrl}/v1/chat/completions`, {
+    const res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -61,11 +61,6 @@ async function main() {
     const provider = providerFromEnv();
     console.log(`provider: ${provider.id}  model: ${process.env.MODEL_NAME}`);
 
-//   const provider = new OllamaProvider({
-//     baseUrl: process.env.MODEL_BASE_URL ?? "http://127.0.0.1:11434",
-//     defaultModel: model,
-//     timeoutMs: Number(process.env.MODEL_TIMEOUT_MS ?? 120_000),
-//   });
 
   const runId = `run-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const checkpointer = new FileCheckpointer(join(process.cwd(), ".forge", "checkpoints"), runId);
@@ -89,19 +84,6 @@ async function main() {
       },
       task,
     );
-    // const result = await runAgent(
-    //   {
-    //     provider,
-    //     model,
-    //     workspace: ws,
-    //     maxSteps: Number(process.env.MAX_AGENT_STEPS ?? 20),
-    //     maxRetries: Number(process.env.MAX_RETRIES ?? 2),
-    //     wallClockMs: Number(process.env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000,
-    //     systemPrompt: IMPLEMENTER_SYSTEM,
-    //     onCheckpoint: (s) => checkpointer.save(s),
-    //   },
-    //   task!,
-    // );
 
     console.log(`\nstatus: ${result.state.status}`);
     console.log(`steps:  ${result.state.stepCount}`);

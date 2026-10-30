@@ -44,6 +44,11 @@ phase4-blocked-demo:
 phase5-demo:
 	bash scripts/phase5-demo.sh
 
+.PHONY: phase8-vertical-slice-demo
+
+phase8-vertical-slice-demo:
+	bash scripts/phase8-vertical-slice-demo.sh
+
 .PHONY: eval console-install console-dev
 
 eval:

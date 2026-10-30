@@ -1,5 +1,4 @@
 import type { ModelMessage, ModelProvider, ModelRequest, ModelTool, ModelUsage } from "./types";
-import { TOOLS, toolsForRole } from "./tools";
 import { executeToolCall } from "./executor";
 import type { Workspace } from "./workspace";
 
@@ -43,20 +42,19 @@ export interface AgentState {
 
 }
 
-export interface AgentResult {
-  state: AgentState;
-  finalMessage: string;
-  submission?: Record<string, unknown>;   // populated when submit_* tool is called
-}
 
 export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<AgentResult> {
+  const messages: ModelMessage[] = cfg.resumeFrom && cfg.resumeFrom.messages.length > 0
+    ? cfg.resumeFrom.messages
+    : [
+        { role: "system", content: cfg.systemPrompt ?? "" },
+        { role: "user", content: taskPrompt },
+      ];
+
   const state: AgentState = {
-    messages: [
-      { role: "system", content: cfg.systemPrompt ?? "" },
-      { role: "user", content: taskPrompt },
-    ],
-    stepCount: 0,
-    usage: [],
+    messages,
+    stepCount: cfg.resumeFrom?.stepCount ?? 0,
+    usage: cfg.resumeFrom?.usage ?? [],
     startedAt: new Date().toISOString(),
     status: "running",
   };
@@ -77,26 +75,18 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
       break;
     }
 
-    // Inside the while loop, replace the tool-execution block:
     let submission: Record<string, unknown> | undefined;
 
     const submissionName = cfg.submissionTool;
-    for (const call of resp.toolCalls) {
-      if (submissionName && call.name === submissionName) {
-        submission = call.arguments;
-        state.messages.push({
-          role: "tool", toolCallId: call.id, toolName: call.name,
-          content: JSON.stringify({ accepted: true }),
-        });
-        break;   // stop processing further tool calls
-      }
-      
-      const result = await executeToolCall(cfg.workspace, call);
+    const submissionCall = submissionName
+      ? resp.toolCalls.find((c) => c.name === submissionName)
+      : undefined;
+
+    if (submissionCall) {
+      submission = submissionCall.arguments;
       state.messages.push({
-        role: "tool",
-        content: truncate(result.output, 8_000),
-        toolCallId: call.id,
-        toolName: call.name,
+        role: "tool", toolCallId: submissionCall.id, toolName: submissionCall.name,
+        content: JSON.stringify({ accepted: true }),
       });
     }
 
@@ -119,25 +109,19 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
 
 
 
-    state.stepCount++;
-    state.usage.push(resp.usage);
-    state.messages.push({ role: "assistant", content: resp.content });
-
-    if (resp.toolCalls.length === 0) {
-      state.status = "complete";
-      await cfg.onCheckpoint?.(state);
-      state.finishedAt = new Date().toISOString();
-      return { state, finalMessage: resp.content };
-    }
-
-    for (const call of resp.toolCalls) {
-      const result = await executeToolCall(cfg.workspace, call);
-      state.messages.push({
-        role: "tool",
-        content: truncate(result.output, 8_000),
-        toolCallId: call.id,
-        toolName: call.name,
-      });
+    if (resp.toolCalls.length > 0) {
+      state.stepCount++;
+      state.usage.push(resp.usage);
+      state.messages.push({ role: "assistant", content: resp.content });
+      for (const call of resp.toolCalls) {
+        const result = await executeToolCall(cfg.workspace, call);
+        state.messages.push({
+          role: "tool",
+          content: truncate(result.output, 8_000),
+          toolCallId: call.id,
+          toolName: call.name,
+        });
+      }
     }
 
     await cfg.onCheckpoint?.(state);
@@ -158,7 +142,7 @@ async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[]) {
       const req: ModelRequest = {
         model: cfg.model,
         messages,
-        tools: TOOLS,
+        tools: cfg.tools,
         temperature: 0.1,
         maxTokens: 4096,
       };
