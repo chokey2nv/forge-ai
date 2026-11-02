@@ -16,6 +16,9 @@
 #   escalate-accept   reviewers keep rejecting -> ESCALATED; a human accepts; parent finishes
 #   escalate-retry    a human sends it back with guidance; the next round passes
 #   final-review-escalates  the combined change is rejected -> parent ESCALATED; accept -> REVIEW_PENDING
+#   parallel-siblings  two independent subtasks run at the same time and both integrate (Phase 10)
+#   diamond            two run in parallel; a third starts only after both integrated
+#   concurrency-cap    MAX_CONCURRENT_RUNS=1: the same two subtasks never overlap
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -29,7 +32,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -60,11 +63,15 @@ trap cleanup EXIT
 mongosh --quiet "$DB" --eval 'db.dropDatabase()' >/dev/null
 
 (cd "$ROOT/services/control-plane" && go build -o "$WORK/forge" ./cmd/forge)
-(cd "$ROOT/services/control-plane" && exec "$WORK/forge") >"$WORK/cp.log" 2>&1 &
-CP_PID=$!
 
 wait_http() { for _ in $(seq 1 60); do curl -sf -m1 "$1" >/dev/null 2>&1 && return 0; sleep 1; done; echo "timeout waiting for $1"; return 1; }
-wait_http "$CP/tasks"
+start_cp() { # [VAR=value ...] extra environment for this control plane
+  (cd "$ROOT/services/control-plane" && exec env "$@" "$WORK/forge") >>"$WORK/cp.log" 2>&1 &
+  CP_PID=$!
+  wait_http "$CP/tasks"
+}
+stop_cp() { kill "$CP_PID" 2>/dev/null || true; wait "$CP_PID" 2>/dev/null || true; CP_PID=""; }
+start_cp
 
 start_adapter() { # script.json
   (cd "$ROOT/services/runtime-adapter" && SCRIPTED_PROVIDER_FILE="$1" exec npx tsx src/server.ts) >>"$WORK/adapter.log" 2>&1 &
@@ -78,9 +85,10 @@ stop_adapter() { # npx does not always pass the signal on to node, so stop whate
   AD_PID=""
 }
 
-new_repo() {
-  local repo; repo=$(mktemp -d "$WORK/repo.XXXXXX")
-  cp -R "$FIXTURE/." "$repo/"
+new_repo() { # [fixture name] (default cart-pricing)
+  local repo src="$FIXTURE"; repo=$(mktemp -d "$WORK/repo.XXXXXX")
+  [ -n "${1:-}" ] && src="$ROOT/tests/evaluations/fixtures/$1"
+  cp -R "$src/." "$repo/"
   git -C "$repo" init -q && git -C "$repo" add -A
   git -C "$repo" -c user.name=forge -c user.email=forge@localhost commit -q -m fixture
   echo "$repo"
@@ -319,6 +327,57 @@ run_final_review_escalates() {
     "$(jq -e -s '[.[] | select(.role == "reviewer")][2:] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
 }
 
+# Epoch ms of a task's first FROM -> TO transition, or empty.
+at() {
+  mongosh --quiet "$DB" --eval "const e = db.events.find({taskId:'$1', type:'state.transition', from:'$2', to:'$3'}).sort({at:1}).limit(1).toArray()[0]; print(e ? e.at.getTime() : '')"
+}
+child_titled() { curl -sf "$CP/tasks/$1/children" | jq -r --arg t "$2" '.[] | select(.title == $t) | .id'; }
+run_base() { curl -sf "$CP/runs/run-$1" | jq -r .baseCommit; }
+
+run_parallel() { # siblings | diamond | cap
+  local repo task final a b c n
+  repo=$(new_repo parallel-features)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED|ESCALATED" 300) || true
+  stop_adapter
+  a=$(child_titled "$task" "Add taxFor"); b=$(child_titled "$task" "Add formatPrice")
+  echo "  parent $task -> $final"
+  for x in $(curl -sf "$CP/tasks/$task/children" | jq -r '.[].id'); do
+    echo "      $(curl -sf "$CP/tasks/$x" | jq -r '"\(.title): \(.status)"')"
+  done
+  check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+
+  # Agent windows (RUNNING until the agent reports) and claim-to-integration windows.
+  local ra rb va vb ca cb ia ib
+  ra=$(at "$a" DISPATCHED RUNNING); va=$(at "$a" RUNNING VERIFYING)
+  rb=$(at "$b" DISPATCHED RUNNING); vb=$(at "$b" RUNNING VERIFYING)
+  ca=$(at "$a" CREATED DISPATCHED); ia=$(at "$a" AGENT_REVIEW INTEGRATED)
+  cb=$(at "$b" CREATED DISPATCHED); ib=$(at "$b" AGENT_REVIEW INTEGRATED)
+  echo "      agent windows: taxFor ${ra}-${va}, formatPrice ${rb}-${vb}"
+  if [ "$1" = cap ]; then
+    check "with MAX_CONCURRENT_RUNS=1 the subtasks never overlap" \
+      "$([ -n "$ia" ] && [ -n "$ib" ] && { [ "$cb" -ge "$ia" ] || [ "$ca" -ge "$ib" ]; }; echo $?)"
+  else
+    check "independent subtasks' agents ran at the same time" \
+      "$([ -n "$va" ] && [ -n "$vb" ] && [ "$ra" -lt "$vb" ] && [ "$rb" -lt "$va" ]; echo $?)"
+    check "both started from the same integration commit" \
+      "$([ "$(run_base "$a")" = "$(run_base "$b")" ] && [ "$(run_base "$a")" = "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)" ]; echo $?)"
+  fi
+  if [ "$1" = diamond ]; then
+    c=$(child_titled "$task" "Add priceLabel")
+    check "dependent starts only after both dependencies integrated" \
+      "$(cc=$(at "$c" CREATED DISPATCHED); [ -n "$cc" ] && [ "$cc" -ge "$ia" ] && [ "$cc" -ge "$ib" ]; echo $?)"
+    check "dependent started from a commit that includes both" \
+      "$(git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($b)" "forge/$task")" "$(run_base "$c")" && git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($a)" "forge/$task")" "$(run_base "$c")"; echo $?)"
+  fi
+  n=$(curl -sf "$CP/tasks/$task/children" | jq length)
+  check "one integration commit per subtask ($n)" \
+    "$([ "$(git -C "$repo" rev-list --count "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)..forge/$task")" -eq "$n" ]; echo $?)"
+  check "integrated branch passes its tests on the host" \
+    "$(cd "$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)" && node --test >/dev/null 2>&1; echo $?)"
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -327,6 +386,9 @@ for SC in "${SCENARIOS[@]}"; do
     escalate-accept) run_escalation accept ;;
     escalate-retry) run_escalation retry ;;
     final-review-escalates) run_final_review_escalates ;;
+    parallel-siblings) run_parallel siblings ;;
+    diamond) run_parallel diamond ;;
+    concurrency-cap) stop_cp; start_cp MAX_CONCURRENT_RUNS=1; run_parallel cap; stop_cp; start_cp ;;
     *) run_scenario ;;
   esac
 done

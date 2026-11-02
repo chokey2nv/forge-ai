@@ -6,13 +6,16 @@ type RunStatus string
 
 const (
 	RunDispatched RunStatus = "DISPATCHED"
-	RunRunning    RunStatus = "RUNNING"
-	RunVerifying  RunStatus = "VERIFYING"
-	RunResumable  RunStatus = "RESUMABLE"
-	RunBlocked    RunStatus = "BLOCKED"
-	RunComplete   RunStatus = "COMPLETE"
-	RunError      RunStatus = "ERROR"
-	RunEscalated  RunStatus = "ESCALATED" // reviewers kept rejecting; awaiting a human decision
+	// RunProvisioning: the workspace is being created (clone, dependency
+	// install). No agent is running yet, so the stale-run watcher ignores it.
+	RunProvisioning RunStatus = "PROVISIONING"
+	RunRunning      RunStatus = "RUNNING"
+	RunVerifying    RunStatus = "VERIFYING"
+	RunResumable    RunStatus = "RESUMABLE"
+	RunBlocked      RunStatus = "BLOCKED"
+	RunComplete     RunStatus = "COMPLETE"
+	RunError        RunStatus = "ERROR"
+	RunEscalated    RunStatus = "ESCALATED" // reviewers kept rejecting; awaiting a human decision
 )
 
 type WorkflowRun struct {

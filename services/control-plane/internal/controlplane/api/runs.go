@@ -377,6 +377,9 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 		WorktreePath: latest.WorktreePath, ContainerName: latest.ContainerName,
 	}, task.RepoPath)
 
+	// PROVISIONING until the new workspace exists: the stale-run watcher must
+	// not mistake a slow dependency install for a dead agent.
+	_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunProvisioning, "", time.Now().UTC())
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-ri", h.SetupTimeout)
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "provision: "+err.Error(), time.Now().UTC())
@@ -387,6 +390,7 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 		_ = workspace.ApplyDiff(ctx, ws.WorktreePath, latest.LastCheckpoint.WorkspaceDiff)
 	}
 	_ = h.Runs.UpdateWorkspace(ctx, run.ID, ws.WorktreePath, ws.ContainerName, time.Now().UTC())
+	_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunRunning, "", time.Now().UTC())
 
 	var cp any
 	if latest.LastCheckpoint != nil {

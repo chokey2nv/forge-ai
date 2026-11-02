@@ -132,6 +132,7 @@ func main() {
 		SetupTimeoutSeconds: int(h.SetupTimeout.Seconds()),
 		DefaultProvider:     envOr("DEFAULT_PROVIDER", "ollama"),
 		DefaultModel:        envOr("DEFAULT_MODEL", os.Getenv("MODEL_NAME")),
+		MaxConcurrentRuns:   parseInt(envOr("MAX_CONCURRENT_RUNS", "3"), 3),
 	}
 	go scheduler.Run(ctx)
 

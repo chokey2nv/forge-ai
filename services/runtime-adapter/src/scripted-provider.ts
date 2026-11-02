@@ -15,6 +15,11 @@
 // Turns are consumed in order per role across all runs in this process, so a
 // retry or a reviewer's second pass simply takes the next turn. The role is
 // inferred from the submission tool offered in the request.
+//
+// When runs of one role overlap (parallel subtasks), a role may instead map
+// task-prompt substrings to queues; a call takes the first queue whose key
+// its task prompt contains and that still has turns, else "*":
+//   "implementer": { "Fix applyDiscount": [...], "Add formatPrice": [...], "*": [...] }
 import fs from "node:fs";
 import process from "node:process";
 import type { ModelCapabilities, ModelProvider, ModelRequest, ModelResponse, ModelToolCall } from "./types";
@@ -25,7 +30,8 @@ interface ScriptTurn {
   delayMs?: number;
 }
 
-type Script = Record<string, ScriptTurn[]>;
+type Queue = ScriptTurn[];
+type Script = Record<string, Queue | Record<string, Queue>>;
 
 // Module-level: the adapter builds a provider per run, but a scenario spans runs.
 let loadedPath = "";
@@ -36,6 +42,20 @@ function load(path: string): void {
   if (path === loadedPath) return;
   queues = JSON.parse(fs.readFileSync(path, "utf8")) as Script;
   loadedPath = path;
+}
+
+function taskPrompt(req: ModelRequest): string {
+  return req.messages.find((m) => m.role === "user")?.content ?? "";
+}
+
+function pick(role: string, req: ModelRequest): Queue | undefined {
+  const entry = queues[role];
+  if (!entry || Array.isArray(entry)) return entry;
+  const task = taskPrompt(req);
+  for (const [key, queue] of Object.entries(entry)) {
+    if (key !== "*" && task.includes(key) && queue.length > 0) return queue;
+  }
+  return entry["*"];
 }
 
 function roleOf(req: ModelRequest): string {
@@ -72,10 +92,9 @@ export class ScriptedProvider implements ModelProvider {
     // so tests can assert on what each agent was actually told.
     const log = process.env.SCRIPTED_PROVIDER_LOG;
     if (log) {
-      const task = req.messages.find((m) => m.role === "user")?.content ?? "";
-      fs.appendFileSync(log, JSON.stringify({ role, task }) + "\n");
+      fs.appendFileSync(log, JSON.stringify({ role, task: taskPrompt(req) }) + "\n");
     }
-    const turn = queues[role]?.shift();
+    const turn = pick(role, req)?.shift();
     if (!turn) throw new Error(`scripted provider: no turns left for role "${role}"`);
     console.log(`[scripted] ${role} turn: ${turn.toolCalls?.map((c) => c.name).join(",") || "(text)"}`);
     if (turn.delayMs) await new Promise((r) => setTimeout(r, turn.delayMs));

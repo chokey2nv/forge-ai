@@ -197,6 +197,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `REVIEWER_TIMEOUT` | `180s` | Control plane | Wall clock given to each reviewer run |
 | `REVIEW_TIMEOUT_GRACE` | `60s` | Control plane | Extra wait after `REVIEWER_TIMEOUT` before the watcher records a silent reviewer as an `error` verdict |
 | `ORPHAN_CONTAINER_GRACE` | `10m` | Control plane | Age before the reaper removes an unowned container or workspace directory |
+| `MAX_CONCURRENT_RUNS` | `3` | Control plane | Live workspaces across the control plane (each a 2 GB / 2 CPU container); ready subtasks beyond it wait in `CREATED`. `0` = no cap |
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
 | `SCRIPTED_PROVIDER_LOG` | *(unset)* | Adapter | With `scripted`: file to append each agent's task prompt to |
 
@@ -552,7 +553,7 @@ make phase8-failure-paths                      # all scenarios
 bash scripts/phase8-failure-paths.sh exhaustion add-agent   # a subset
 ```
 
-With `SCRIPTED_PROVIDER_LOG` set (the harness sets it), the scripted provider appends each agent's task prompt to that file, so scenarios can assert on what an agent was told.
+With `SCRIPTED_PROVIDER_LOG` set (the harness sets it), the scripted provider appends each agent's task prompt to that file, so scenarios can assert on what an agent was told. When runs of one role overlap (parallel subtasks), a role's turns can be keyed by a substring of the task prompt instead of one shared queue; see `services/runtime-adapter/src/scripted-provider.ts`.
 
 The harness starts its own control plane and adapter on `:8090` / `:8091` against the `forge_ai_failpaths` database and a private copy of `agents/`, so it can run alongside your dev services. Ports must be free. Docker workspaces, gates, review and integration are all real.
 
@@ -567,6 +568,9 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `reviewer-timeout` | `test-reviewer` never reports | Watcher records it as `error` ("timed out"), the round is rejected, round 2 passes |
 | `escalate-accept` | Reviewers reject two rounds | Child `ESCALATED` while the parent waits; a decision on a non-escalated task is refused (409); `accept` integrates the child and the parent finishes |
 | `escalate-retry` | Same, then `retry` with guidance | The guidance reaches the implementer, round 3 passes, child integrates |
+| `parallel-siblings` | Two independent subtasks (fixture `parallel-features`) | Their agents run at the same time from the same integration commit; both integrate (one commit each); the integrated branch passes `node --test` on the host |
+| `diamond` | Two in parallel, a third depending on both | The third is claimed only after both integrated and starts from a commit containing both |
+| `concurrency-cap` | The same two with `MAX_CONCURRENT_RUNS=1` (the harness restarts its control plane) | They never overlap |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
@@ -717,7 +721,13 @@ If the CP log shows no `checkpoint` events during a run, the callback URL is wro
 
 ## 8. Reset and teardown
 
-### 8.0 Automatic cleanup
+### 8.0 Concurrency
+
+Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from.
+
+Run **one control plane per database**: the integration lock is in-process. The failure-path harness uses its own database, so it can run beside your dev control plane.
+
+### 8.0.1 Automatic cleanup
 
 The control plane's reaper runs at startup and every 30s. It removes a run's container and workspace once its task leaves the active states (`DECOMPOSING`, `DISPATCHED`, `RUNNING`, `VERIFYING`, `AGENT_REVIEW`, `INTEGRATING`), and removes this instance's unowned containers and `forge-wt-*` / `forge-child-*` temp directories older than `ORPHAN_CONTAINER_GRACE`. Each control plane only touches resources labeled with its own database (`forge.instance=<MONGODB_DATABASE>`). Parent integration worktrees (`forge-int-*`) are kept: they hold the branch awaiting review.
 

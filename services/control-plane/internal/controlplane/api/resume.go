@@ -39,6 +39,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
 	// 	return
 	// }
+	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunProvisioning, "", time.Now().UTC())
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r", h.SetupTimeout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

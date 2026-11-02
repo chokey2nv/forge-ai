@@ -1,0 +1,8 @@
+{
+    "name": "parallel-features",
+    "private": true,
+    "type": "commonjs",
+    "scripts": {
+        "test": "node --test"
+    }
+}

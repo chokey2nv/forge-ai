@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -121,4 +122,30 @@ func CommitAll(worktree, message string) error {
 		return fmt.Errorf("git commit: %s: %w", out, err)
 	}
 	return nil
+}
+
+// ApplyDiff3Way applies a child's diff to the integration worktree. The diff
+// was taken against the commit the child started from; siblings may have
+// moved HEAD since, so a hunk that no longer applies directly falls back to
+// a 3-way merge using the blobs the diff's index lines name (the worktree
+// shares the source repository's objects). On failure the worktree is reset
+// to HEAD so the next integration starts clean.
+func ApplyDiff3Way(worktree, diff string) error {
+	if strings.TrimSpace(diff) == "" {
+		return nil
+	}
+	cmd := exec.Command("git", "-C", worktree, "apply", "--3way", "--whitespace=nowarn")
+	cmd.Stdin = strings.NewReader(diff)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		ResetHard(worktree)
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// ResetHard discards staged and unstaged changes to tracked files, including
+// files a failed apply added to the index. Untracked files (e.g. installed
+// dependencies) are left alone.
+func ResetHard(worktree string) {
+	_ = exec.Command("git", "-C", worktree, "reset", "--hard", "-q", "HEAD").Run()
 }
