@@ -284,3 +284,13 @@ func (h *Handlers) ListApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, as)
 }
+
+// ListTaskChildren serves a decomposed parent's subtasks, oldest first.
+func (h *Handlers) ListTaskChildren(w http.ResponseWriter, r *http.Request) {
+	children, err := h.Tasks.ListChildren(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, children)
+}

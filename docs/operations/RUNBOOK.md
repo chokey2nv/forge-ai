@@ -248,7 +248,16 @@ adapter listening on :8081
 
 Verify: `curl -s localhost:8081/health` → `{"ok":true}`.
 
-### 4.4 Startup checklist
+### 4.4 Console (terminal 3, optional)
+
+```bash
+make console-install    # once
+cd apps/console && VITE_API_URL=http://localhost:8080 npx vite --port 5174
+```
+
+`VITE_API_URL` must point at the control plane (Vite reads `apps/console/.env*`, not the repo-root `.env`; without it the console assumes `http://localhost:8080`). The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and diff, and to approve, reject or decide an escalation.
+
+### 4.5 Startup checklist
 
 ```bash
 curl -sf localhost:8080/health     && echo " CP OK"
@@ -629,7 +638,7 @@ curl -s -X POST localhost:8080/tasks/<taskId>/escalation -H 'Content-Type: appli
   -d '{"decision":"retry","reviewer":"<you>","rationale":"why","guidance":"what to change"}'
 ```
 
-`retry` sends every rejecting reviewer's defects plus your guidance to the implementer; another rejection escalates again. A parent's combined change cannot be retried, only accepted or rejected. Decisions are recorded in `GET /tasks/<taskId>/approvals`.
+`retry` sends every rejecting reviewer's defects plus your guidance to the implementer; another rejection escalates again. A parent's combined change cannot be retried, only accepted or rejected. Decisions are recorded in `GET /tasks/<taskId>/approvals`. The console offers the same three decisions on the escalated task's page (§4.4).
 
 ### 6.7 Stale runs
 
@@ -762,11 +771,11 @@ rm -rf .forge
 | 3. Control plane + persistence | Verified | Lifecycle to `REVIEW_PENDING`; recovery after crash | §5.9 `crash-resume`; the older `phase3-*` demos are not re-checked |
 | 4. Verification gates | Verified | Gates run and block failing changes | §5.9 `verify-retry`, `exhaustion` |
 | 5. Planner + Reviewer roles | Reviewer verified; planner not | Reviewer gates integration and sends work back | §5.9 `review-retry`; the planner path is unexercised |
-| 6. Eval suite formalized + console | Not re-verified | Eval harness + console UI in place | — |
+| 6. Eval suite formalized + console | Console verified; eval harness not | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
 | 7. Agent registry, skills, composer | Verified | A new agent is a markdown file and a reload | §5.9 `add-agent` |
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
 
-Not covered yet: approving a task through the console (approval changes the state; nothing merges the integration branch — Phase 11), and the Phase 6 eval harness.
+Not covered yet: approval changes the state only; nothing merges the integration branch (Phase 11). The Phase 6 eval harness has not been re-run.
 
 ---
 

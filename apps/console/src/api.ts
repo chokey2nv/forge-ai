@@ -1,9 +1,14 @@
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 export type TaskStatus =
-  | "CREATED" | "PLANNED" | "DISPATCHED" | "RUNNING" | "VERIFYING"
-  | "AGENT_REVIEW" | "REVIEW_PENDING" | "APPROVED" | "MERGED"
-  | "BLOCKED" | "RESUMABLE" | "REJECTED";
+  | "CREATED" | "PLANNED" | "DECOMPOSING" | "DISPATCHED" | "RUNNING" | "VERIFYING"
+  | "AGENT_REVIEW" | "ESCALATED" | "REVIEW_PENDING" | "INTEGRATING" | "INTEGRATED"
+  | "APPROVED" | "MERGED" | "BLOCKED" | "RESUMABLE" | "REJECTED";
+
+export const TASK_STATUSES: TaskStatus[] = [
+  "CREATED", "DECOMPOSING", "DISPATCHED", "RUNNING", "VERIFYING", "AGENT_REVIEW", "ESCALATED",
+  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "BLOCKED", "RESUMABLE", "REJECTED",
+];
 
 
 export interface AgentDefinition {
@@ -36,7 +41,19 @@ export interface Task {
   latestRunId?: string;
   createdAt: string;
   updatedAt: string;
+  // Phase 8 task graph
+  parentId?: string;
+  title?: string;
+  assignedAgent?: string;
+  dependsOn?: string[];
+  integrationBranch?: string;
 }
+
+/** A decomposed parent: its own review covers the combined change. */
+export const isParent = (t: Task) => !t.parentId && !!t.integrationBranch;
+
+/** The run whose reviews decide the task: a parent's final review, otherwise its latest run. */
+export const reviewRunId = (t: Task) => (isParent(t) ? `run-${t.id}-final-review` : t.latestRunId);
 
 export interface Run {
   id: string;
@@ -45,14 +62,34 @@ export interface Run {
   stepCount: number;
   plan?: { steps: { description: string; files?: string[] }[]; risks?: string[] };
   reviewerVerdict?: string;
+  reviewRound?: number;
+  blockedReason?: string;
+  provenance?: { agentDefinition: string; model: string; provider: string };
   lastCheckpoint?: { workspaceDiff: string; status: string };
 }
+
+export type Verdict = "pass" | "fail" | "error";
+
+export interface Review {
+  id: string;
+  round: number;
+  index: number;
+  reviewer: string;
+  agentDefinition?: string;
+  verdict: Verdict;
+  summary?: string;
+  defects?: { severity: string; description: string; location?: string }[];
+  startedAt: string;
+  finishedAt: string;
+}
+
+export type EscalationDecision = "accept" | "retry" | "reject";
 
 export interface VerificationRun {
   id: string;
   passed: boolean;
   attempt: number;
-  gates: { name: string; passed: boolean; skipped: boolean; skipReason?: string; durationMs: number; output?: string }[];
+  gates: { name: string; passed: boolean; skipped: boolean; skipReason?: string; exitCode: number; durationMs: number; output?: string }[];
 }
 
 export interface Event {
@@ -119,6 +156,13 @@ export const api = {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ reviewer, rationale }),
+        }),
+    listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
+    decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
+        j<{ status: string }>(`/tasks/${taskId}/escalation`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decision, reviewer, rationale, guidance }),
         }),
     listEvals: (model?: string) =>
         j<EvalResult[]>(`/evals/results${model ? `?model=${encodeURIComponent(model)}` : ""}`),

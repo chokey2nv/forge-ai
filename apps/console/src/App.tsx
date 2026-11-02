@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, AgentDefinition, Skill } from "./api";
+import {
+  api, isParent, reviewRunId, TASK_STATUSES,
+  type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
+  type EscalationDecision, AgentDefinition, Skill,
+} from "./api";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" };
 
@@ -16,7 +20,9 @@ export default function App() {
       </header>
       <main>
         {view.kind === "tasks" && <Tasks onOpen={(id) => setView({ kind: "task", id })} />}
-        {view.kind === "task"  && <TaskDetail id={view.id} onBack={() => setView({ kind: "tasks" })} />}
+        {view.kind === "task"  && (
+          <TaskDetail key={view.id} id={view.id} onOpen={(id) => setView({ kind: "task", id })} onBack={() => setView({ kind: "tasks" })} />
+        )}
         {view.kind === "evals" && <Evals />}
       </main>
     </div>
@@ -117,6 +123,7 @@ function AgentDetail({ name, onBack }: { name: string; onBack: () => void }) {
 function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [status, setStatus] = useState("");
+  const [showSubtasks, setShowSubtasks] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -125,25 +132,32 @@ function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
       .catch((e) => setErr(String(e)));
   }, [status]);
 
+  // Subtasks are reached from their parent; listing them is opt-in. An
+  // escalated subtask needs a human, so it is always listed.
+  const shown = tasks.filter((t) => showSubtasks || !t.parentId || t.status === "ESCALATED");
+
   return (
     <div>
       <div className="toolbar">
         <label>Status:&nbsp;
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">all</option>
-            {["CREATED","RUNNING","VERIFYING","AGENT_REVIEW","REVIEW_PENDING","APPROVED","BLOCKED","REJECTED"].map(s =>
-              <option key={s} value={s}>{s}</option>)}
+            {TASK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+        </label>
+        <label className="inline">
+          <input type="checkbox" checked={showSubtasks} onChange={(e) => setShowSubtasks(e.target.checked)} /> Show subtasks
         </label>
       </div>
       {err && <p className="error">{err}</p>}
       <table>
-        <thead><tr><th>Status</th><th>Requirement</th><th>Created</th></tr></thead>
+        <thead><tr><th>Status</th><th>Task</th><th>Agent</th><th>Created</th></tr></thead>
         <tbody>
-          {tasks.map((t) => (
+          {shown.map((t) => (
             <tr key={t.id} onClick={() => onOpen(t.id)} className="clickable">
               <td><StatusBadge status={t.status} /></td>
-              <td>{t.requirement.slice(0, 120)}</td>
+              <td>{t.parentId ? <span className="subtask">↳ {t.title ?? t.requirement.slice(0, 120)}</span> : t.requirement.slice(0, 120)}</td>
+              <td>{t.assignedAgent ?? (isParent(t) ? "head-engineer" : "—")}</td>
               <td>{new Date(t.createdAt).toLocaleString()}</td>
             </tr>
           ))}
@@ -153,31 +167,58 @@ function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
+const TERMINAL = new Set(["APPROVED", "MERGED", "REJECTED", "INTEGRATED"]);
+
+const PRE_FINAL_REVIEW = new Set(["CREATED", "DECOMPOSING", "DISPATCHED", "INTEGRATING"]);
+
+const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : s.trim() + ".");
+
+function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (id: string) => void }) {
   const [task, setTask] = useState<Task | null>(null);
+  const [parent, setParent] = useState<Task | null>(null);
+  const [children, setChildren] = useState<Task[]>([]);
   const [run, setRun] = useState<Run | null>(null);
+  const [reviewRun, setReviewRun] = useState<Run | null>(null);
+  const [reviews, setReviews] = useState<Review[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [verification, setVerification] = useState<VerificationRun | null>(null);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [reviewer, setReviewer] = useState("human");
   const [rationale, setRationale] = useState("");
+  const [guidance, setGuidance] = useState("");
   const [err, setErr] = useState("");
 
   const reload = async () => {
     try {
       const t = await api.getTask(id);
       setTask(t);
+      setParent(t.parentId ? await api.getTask(t.parentId) : null);
+      setChildren(isParent(t) ? await api.listChildren(t.id) : []);
       if (t.latestRunId) {
-        const r = await api.getRun(t.latestRunId);
-        setRun(r);
+        setRun(await api.getRun(t.latestRunId));
         setEvents(await api.getEvents(t.latestRunId));
-        setVerification(await api.getVerification(t.latestRunId));
+      }
+      // Reviews and gates belong to the run under review: a parent's final
+      // review, otherwise the task's own run.
+      // A parent's final-review run only exists once its subtasks are integrated.
+      const rid = isParent(t) && PRE_FINAL_REVIEW.has(t.status) ? undefined : reviewRunId(t);
+      if (rid) {
+        setReviewRun(await api.getRun(rid).catch(() => null));
+        setReviews(await api.listReviews(rid).catch(() => []));
+        setVerification(await api.getVerification(rid));
       }
       setApprovals(await api.listApprovals(id));
+      setErr("");
     } catch (e) { setErr(String(e)); }
   };
 
   useEffect(() => { reload(); }, [id]);
+  // Follow a task while the pipeline is still moving it.
+  useEffect(() => {
+    if (!task || TERMINAL.has(task.status)) return;
+    const t = setInterval(reload, 3000);
+    return () => clearInterval(t);
+  }, [id, task?.status]);
 
   const decide = async (action: "approve" | "reject") => {
     try {
@@ -187,20 +228,79 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
     } catch (e) { setErr(String(e)); }
   };
 
+  const decideEscalation = async (decision: EscalationDecision) => {
+    try {
+      await api.decideEscalation(id, decision, reviewer, rationale, guidance);
+      setRationale(""); setGuidance("");
+      await reload();
+    } catch (e) { setErr(String(e)); }
+  };
+
   if (!task) return <p>Loading…</p>;
 
-  
+  const titleOf = (tid: string) => children.find((c) => c.id === tid)?.title ?? tid;
 
   return (
     <div className="detail">
       <button className="link" onClick={onBack}>← Back</button>
-      <h2><StatusBadge status={task.status} /> {task.requirement}</h2>
+      {parent && (
+        <p className="crumb">
+          Subtask of <button className="link" onClick={() => onOpen(parent.id)}>{parent.requirement.slice(0, 80)}</button>
+          {" "}<StatusBadge status={parent.status} />
+          {task.assignedAgent && <> · assigned to <code>{task.assignedAgent}</code></>}
+        </p>
+      )}
+      <h2><StatusBadge status={task.status} /> {task.title ?? task.requirement}</h2>
+      {task.title && task.requirement.replace(task.title, "").trim() && (
+        <p className="requirement">{task.requirement.replace(task.title, "").trim()}</p>
+      )}
       {err && <p className="error">{err}</p>}
 
       <section>
         <h3>Acceptance criteria</h3>
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
+
+      {task.status === "ESCALATED" && (
+        <section className="approval escalation">
+          <h3>Escalated — your decision</h3>
+          <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
+          <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="your name" />
+          <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (recorded with the decision)" />
+          {!isParent(task) && (
+            <textarea value={guidance} onChange={(e) => setGuidance(e.target.value)} placeholder="guidance for the implementer (used by Send back)" />
+          )}
+          <div>
+            <button className="approve" onClick={() => decideEscalation("accept")}>
+              {task.parentId ? "Accept and integrate" : "Accept"}
+            </button>
+            {!isParent(task) && <button className="neutral" onClick={() => decideEscalation("retry")}>Send back</button>}
+            <button className="reject" onClick={() => decideEscalation("reject")}>Reject</button>
+          </div>
+          {isParent(task) && <p className="hint">A combined change has no implementer to send back to: accept or reject it.</p>}
+        </section>
+      )}
+
+      {children.length > 0 && (
+        <section>
+          <h3>Subtasks</h3>
+          <table>
+            <thead><tr><th>Status</th><th>Subtask</th><th>Agent</th><th>Depends on</th></tr></thead>
+            <tbody>
+              {children.map((c) => (
+                <tr key={c.id} className="clickable" onClick={() => onOpen(c.id)}>
+                  <td><StatusBadge status={c.status} /></td>
+                  <td>{c.title ?? c.requirement.slice(0, 100)}</td>
+                  <td><code>{c.assignedAgent}</code></td>
+                  <td>{c.dependsOn?.length ? c.dependsOn.map(titleOf).join(", ") : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
 
       {task.status === "REVIEW_PENDING" && (
         <section className="approval">
@@ -224,20 +324,16 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
         </section>
       )}
 
-      {run?.reviewerVerdict && (
-        <section>
-          <h3>Reviewer verdict</h3>
-          <p><strong>{run.reviewerVerdict.toUpperCase()}</strong></p>
-        </section>
-      )}
-
       {verification && (
         <section>
-          <h3>Verification</h3>
+          <h3>Verification{isParent(task) ? " (combined change)" : ""}</h3>
           <ul className="gates">
             {verification.gates.map((g, i) => (
               <li key={i} className={g.skipped ? "skipped" : g.passed ? "passed" : "failed"}>
-                <strong>{g.name}</strong> {g.skipped ? "(skipped)" : g.passed ? "passed" : `FAILED (exit ${g.passed})`}
+                <strong>{g.name}</strong> {g.skipped ? `(skipped${g.skipReason ? `: ${g.skipReason}` : ""})` : g.passed ? "passed" : `FAILED (exit ${g.exitCode})`}
+                {g.output?.trim() && !g.skipped && (
+                  <details><summary>output</summary><pre className="gate-output">{g.output}</pre></details>
+                )}
               </li>
             ))}
           </ul>
@@ -320,6 +416,40 @@ function Evals() {
         );
       })}
     </div>
+  );
+}
+
+/** Every reviewer's verdict, grouped by review round, newest round first. */
+function Reviews({ reviews, title }: { reviews: Review[]; title: string }) {
+  const rounds = Array.from(new Set(reviews.map((r) => r.round))).sort((a, b) => b - a);
+  return (
+    <section>
+      <h3>{title}</h3>
+      {rounds.map((round) => {
+        const inRound = reviews.filter((r) => r.round === round).sort((a, b) => a.index - b.index);
+        const passed = inRound.every((r) => r.verdict === "pass");
+        return (
+          <div key={round} className="review-round">
+            <h4>Round {round} — {passed ? "passed" : "rejected"}</h4>
+            {inRound.map((r) => (
+              <div key={r.id} className={`review review-${r.verdict}`}>
+                <div><span className={`verdict verdict-${r.verdict}`}>{r.verdict.toUpperCase()}</span> <strong>{r.reviewer}</strong>
+                  {r.agentDefinition && <span className="version"> {r.agentDefinition.replace(/^.*@/, "")}</span>}</div>
+                {r.summary && <p>{r.summary}</p>}
+                {r.defects?.length ? (
+                  <ul className="defects">
+                    {r.defects.map((d, i) => (
+                      <li key={i}><span className={`severity severity-${d.severity}`}>{d.severity}</span> {d.description}
+                        {d.location && <code> {d.location}</code>}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

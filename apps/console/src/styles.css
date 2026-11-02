@@ -40,3 +40,29 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .task-tree { list-style: none; padding: 0; }
 .task-tree li { padding: 6px 0; border-bottom: 1px dashed #eee; }
 .task-tree .deps { color: #888; font-size: 12px; }
+/* Phase 9: task graph, reviews, escalation */
+.badge-decomposing, .badge-dispatched, .badge-integrating { background: #fff4c2; }
+.badge-integrated { background: #c8f7c8; }
+.badge-escalated { background: #ffd8a8; color: #7a3e00; }
+.toolbar label.inline { margin-left: 16px; }
+.subtask { color: #444; }
+.crumb { color: #555; font-size: 14px; }
+.requirement { color: #444; white-space: pre-wrap; }
+.review-round { margin: 8px 0 16px; }
+.review-round h4 { margin: 0 0 6px; font-size: 14px; }
+.review { border-left: 4px solid #ccc; padding: 6px 10px; margin: 6px 0; background: #fafbfc; }
+.review-pass { border-left-color: #2e8b2e; }
+.review-fail { border-left-color: #c53030; }
+.review-error { border-left-color: #b7791f; }
+.review p { margin: 4px 0; font-size: 14px; }
+.verdict { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; color: #fff; }
+.verdict-pass { background: #2e8b2e; }
+.verdict-fail { background: #c53030; }
+.verdict-error { background: #b7791f; }
+.defects { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.severity { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #666; }
+.severity-critical, .severity-major { color: #c53030; }
+.escalation { border: 1px solid #f0b46e; background: #fff8ef; padding: 12px; border-radius: 8px; }
+.approval button.neutral { background: #4a5568; color: #fff; }
+.hint { color: #666; font-size: 13px; }
+.gate-output { background: #f6f7f9; padding: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
