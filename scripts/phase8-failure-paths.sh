@@ -384,6 +384,10 @@ run_parallel() { # siblings | diamond | cap
   else
     check "independent subtasks' agents ran at the same time" \
       "$([ -n "$va" ] && [ -n "$vb" ] && [ "$ra" -lt "$vb" ] && [ "$rb" -lt "$va" ]; echo $?)"
+    check "the implementer was told its scope and its sibling" \
+      "$(jq -e -s 'any(.[]; .role == "implementer" and (.task | startswith("Add taxFor\n") and contains("may change only: src/tax.js, tests/tax.test.js") and contains("- Add formatPrice (src/format.js, tests/format.test.js;")))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+    check "reviewers were told not to fail it for a sibling's work" \
+      "$(jq -e -s 'any(.[]; .role == "reviewer" and (.task | contains("Task requirement:\nAdd taxFor\n") and contains("Do not fail it for work a sibling subtask owns")))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
     check "both started from the same integration commit" \
       "$([ "$(run_base "$a")" = "$(run_base "$b")" ] && [ "$(run_base "$a")" = "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)" ]; echo $?)"
   fi

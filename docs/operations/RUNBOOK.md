@@ -1,9 +1,9 @@
 # Forge AI — Operations Runbook
 
-Setup, startup, and validation for the platform at its current build state (Phases 1–9). Phase 10+ features are not covered.
+Setup, startup, and validation for the platform at its current build state (Phases 1–10). Phase 11+ features are not covered.
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 2 Nov 2026 (Phases 8 and 9 verified end to end; see §5.7–§5.9 and §9).
+**Last updated:** 2 Nov 2026 (Phases 8–10 verified end to end; see §5.7–§5.10 and §9).
 
 ---
 
@@ -580,6 +580,23 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 
 ---
 
+### 5.10 Phase 10 — Parallel subtasks with a real model
+
+**Validates:** independent subtasks running at the same time with a real model, a dependent one after them, and the time saved.
+
+```bash
+make phase10-parallel-slice
+# overrides: CP=… PROVIDER=claude MODEL=claude-haiku-5-5
+```
+
+Copies `tests/evaluations/fixtures/parallel-features` (suite green at the start) into a fresh repo and asks for three helpers: `taxFor` and `formatPrice` independent, `priceLabel` depending on both. The script prints each subtask's duration, scope and dependencies, then the subtask phase's wall time against the summed subtask time.
+
+**Pass criteria:** parent `REVIEW_PENDING`; at least 3 subtasks, all `INTEGRATED`; at least two ran at the same time (if not, the script prints the `child.serialized` reasons); wall time below the summed subtask time; one integration commit per subtask; `node --test` passes on the integrated branch. First run with Claude: 178s wall for 267s of subtask work (1.5x).
+
+The console's task page shows the same as a timeline: one bar per subtask from claim to integration.
+
+---
+
 ## 6. Observing state
 
 ### 6.1 Event trail
@@ -695,6 +712,7 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Task `ESCALATED`: "review rejected the change in N round(s)" or "final review rejected" | Reviewers kept rejecting. Read their verdicts and decide (§6.6); the parent waits meanwhile |
 | Review verdict `error`: "reviewer timed out after …" | The reviewer never reported (adapter died or the model call hung). Raise `REVIEWER_TIMEOUT` for slow models; the round already continued |
 | Parent `BLOCKED`: "decomposition: dependency cycle: …" | The head engineer's `dependsOn` edges form a loop; re-dispatch |
+| Subtask `BLOCKED` by `diff-scope` after a review asked for files outside its scope | Should not happen since 10.4 (agents are told the subtask's scope and siblings). If it does, check the subtask's prompt carries "## Scope of this subtask" |
 | Subtasks you expected in parallel run one after another | They declare overlapping or no `diffScope`. See the `child.serialized` event on the waiting subtask |
 | Reload fails: "lists reviewer …, which is not a review agent" | Every `reviewers` entry must be an agent with `submission_tool: submit_review`, and not the agent itself |
 | Log: `checkpoint … save failed (diff N bytes)` | Diff over Mongo's 16MB limit — usually untracked build output. `node_modules/` and lockfiles are excluded automatically; add others to the repo's `.gitignore` |
@@ -728,7 +746,7 @@ If the CP log shows no `checkpoint` events during a run, the callback URL is wro
 
 ### 8.0 Concurrency
 
-Only subtasks with declared, non-overlapping `diffScope`s run in parallel. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from. A change's reviewers all run at the same time in its container; they only read (no diff capture, `GIT_OPTIONAL_LOCKS=0`), and the round is decided when the last verdict is in.
+Only subtasks with declared, non-overlapping `diffScope`s run in parallel. Each subtask's implementer and reviewers are told its scope and what its sibling subtasks own, so a reviewer does not demand work a sibling is assigned. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from. A change's reviewers all run at the same time in its container; they only read (no diff capture, `GIT_OPTIONAL_LOCKS=0`), and the round is decided when the last verdict is in.
 
 Run **one control plane per database**: the integration lock is in-process. The failure-path harness uses its own database, so it can run beside your dev control plane.
 
@@ -792,6 +810,7 @@ rm -rf .forge
 | 6. Eval suite formalized + console | Console verified; eval harness not | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
 | 7. Agent registry, skills, composer | Verified | A new agent is a markdown file and a reload | §5.9 `add-agent` |
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
+| 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 
 Not covered yet: approval changes the state only; nothing merges the integration branch (Phase 11). The Phase 6 eval harness has not been re-run.
@@ -883,7 +902,8 @@ make phase3-demo                        # Phase 3: lifecycle
 make phase3-resume-demo                 # Phase 3: crash recovery
 make phase8-vertical-slice-demo         # Phase 8: single-child slice (real model)
 make phase8-two-child-slice             # Phase 8: two dependent children (real model)
-make phase8-failure-paths               # retries, crash/resume, add-an-agent, cross-review, escalation (no API)
+make phase8-failure-paths               # retries, crash/resume, add-an-agent, cross-review, escalation, parallelism (no API)
+make phase10-parallel-slice             # Phase 10: parallel subtasks + one dependent (real model)
 
 # ---- inspect ----
 curl -s localhost:8080/runs/<runId> | jq
@@ -891,9 +911,10 @@ curl -s localhost:8080/runs/<runId>/events | jq
 curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 curl -s localhost:8080/runs/<runId>/reviews | jq       # every reviewer's verdict per round
 curl -s localhost:8080/tasks/<taskId>/children | jq    # a parent's subtasks
+curl -s localhost:8080/tasks/<taskId>/events | jq      # a task's events, incl. state transitions
 mongosh forge_ai --eval 'db.tasks.find().sort({createdAt:-1}).limit(1).pretty()'
 ```
 
 ---
 
-*Runbook reflects the verified Phase 9 build state (2 Nov 2026). It will be updated as Phases 10–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
+*Runbook reflects the verified Phase 10 build state (2 Nov 2026). It will be updated as Phases 11–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*

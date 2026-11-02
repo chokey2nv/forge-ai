@@ -409,7 +409,7 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 		ContainerName:  ws.ContainerName,
 		WorktreePath:   ws.WorktreePath,
 		Role:           def.Name,
-		Task:           task.Requirement + "\n\nAcceptance:\n" + bulletList(task.Acceptance),
+		Task:           task.Requirement + "\n\nAcceptance:\n" + bulletList(task.Acceptance) + h.subtaskBrief(ctx, task, false),
 		SystemPrompt:   sysPrompt,
 		Tools:          tools,
 		SubmissionTool: def.SubmissionTool,

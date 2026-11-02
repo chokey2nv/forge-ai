@@ -5,6 +5,7 @@
 > - **Phase 8 is verified end to end** with a real model (`make phase8-vertical-slice-demo`, `make phase8-two-child-slice`) and a deterministic failure-path suite (`make phase8-failure-paths`). Getting there fixed the dispatch loop, git inside agent containers, checkpoint persistence, resume, review retries and container cleanup.
 > - **The §5 flags are closed:** completion routing is data (an agent's `submission_tool`, §5.B); `reviewers` is honoured in full (§5.C); the add-an-agent test passes (§5.D).
 > - **Phase 9 (cross-review and escalation) is built and verified.** See `docs/plans/phase-9-cross-review.md`.
+> - **Phase 10 (parallel execution) is built and verified**, including a Claude run where two independent subtasks ran side by side (1.5x faster than in sequence). See `docs/plans/phase-10-parallel-execution.md`.
 >
 > Per-phase evidence lives in `docs/operations/RUNBOOK.md` §9. The tables below are marked where they have changed; the rest of the review is kept as written.
 
@@ -227,7 +228,7 @@ You described a harness where you define a team of agents, and they organize, ex
 | Feature | Phase |
 |---|---|
 | ~~Multiple reviewers, cross-review, escalation~~ — done, 2 Nov 2026 | 9 |
-| Truly parallel child execution | 10 |
+| ~~Truly parallel child execution~~ — done, 2 Nov 2026 | 10 |
 | Delivery (PR creation, merge, rollback) | 11 |
 | Human feedback loop — inline comments, threaded responses | 12 |
 | Hardening — auth, sandbox, multi-tenant | 13 |

@@ -177,6 +177,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [task, setTask] = useState<Task | null>(null);
   const [parent, setParent] = useState<Task | null>(null);
   const [children, setChildren] = useState<Task[]>([]);
+  const [childEvents, setChildEvents] = useState<Record<string, Event[]>>({});
   const [run, setRun] = useState<Run | null>(null);
   const [reviewRun, setReviewRun] = useState<Run | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -193,7 +194,11 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       const t = await api.getTask(id);
       setTask(t);
       setParent(t.parentId ? await api.getTask(t.parentId) : null);
-      setChildren(isParent(t) ? await api.listChildren(t.id) : []);
+      const kids = isParent(t) ? await api.listChildren(t.id) : [];
+      setChildren(kids);
+      const evs: Record<string, Event[]> = {};
+      for (const k of kids) evs[k.id] = await api.getTaskEvents(k.id).catch(() => []);
+      setChildEvents(evs);
       if (t.latestRunId) {
         setRun(await api.getRun(t.latestRunId));
         setEvents(await api.getEvents(t.latestRunId));
@@ -302,6 +307,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           </table>
         </section>
       )}
+
+      {children.length > 1 && <Timeline children={children} events={childEvents} onOpen={onOpen} />}
 
       {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
 
@@ -419,6 +426,52 @@ function Evals() {
         );
       })}
     </div>
+  );
+}
+
+const SETTLED = new Set(["INTEGRATED", "BLOCKED", "REJECTED", "ESCALATED"]);
+
+/** Subtasks on one time axis, from claim to settling: overlapping bars ran at the same time. */
+function Timeline({ children, events, onOpen }: { children: Task[]; events: Record<string, Event[]>; onOpen: (id: string) => void }) {
+  const now = Date.now();
+  const spans = children.flatMap((c) => {
+    const tr = (events[c.id] ?? []).filter((e) => e.type === "state.transition");
+    const claim = tr.find((e) => e.to === "DISPATCHED");
+    if (!claim) return [];
+    const end = tr.find((e) => e.to && SETTLED.has(e.to));
+    return [{ task: c, start: Date.parse(claim.at), end: end ? Date.parse(end.at) : now, open: !end }];
+  });
+  if (spans.length === 0) return null;
+  const t0 = Math.min(...spans.map((s) => s.start));
+  const t1 = Math.max(...spans.map((s) => s.end));
+  const total = Math.max(t1 - t0, 1);
+  const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
+  const busy = spans.reduce((sum, s) => sum + (s.end - s.start), 0);
+  return (
+    <section>
+      <h3>Timeline</h3>
+      <p className="hint">
+        Wall time {secs(t1 - t0)} for {secs(busy)} of subtask work. Bars that overlap ran at the same time.
+      </p>
+      <div className="timeline">
+        {spans.map((s) => {
+          const alongside = spans.filter((o) => o !== s && o.start < s.end && s.start < o.end).map((o) => o.task.title ?? o.task.id);
+          return (
+            <div key={s.task.id} className="timeline-row clickable" onClick={() => onOpen(s.task.id)}>
+              <span className="timeline-label">{s.task.title ?? s.task.id}</span>
+              <span className="timeline-track">
+                <span
+                  className={`timeline-bar bar-${s.task.status.toLowerCase()}${s.open ? " bar-open" : ""}`}
+                  style={{ left: `${((s.start - t0) / total) * 100}%`, width: `${Math.max(((s.end - s.start) / total) * 100, 1)}%` }}
+                  title={alongside.length ? `ran alongside ${alongside.join(", ")}` : "ran alone"}
+                />
+              </span>
+              <span className="timeline-dur">{secs(s.end - s.start)}{alongside.length ? ` · with ${alongside.join(", ")}` : ""}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

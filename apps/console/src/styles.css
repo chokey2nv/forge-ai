@@ -66,3 +66,15 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .approval button.neutral { background: #4a5568; color: #fff; }
 .hint { color: #666; font-size: 13px; }
 .gate-output { background: #f6f7f9; padding: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+
+/* Phase 10: subtask timeline */
+.timeline { display: grid; gap: 6px; }
+.timeline-row { display: grid; grid-template-columns: 200px 1fr 220px; align-items: center; gap: 8px; font-size: 13px; }
+.timeline-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-track { position: relative; height: 14px; background: #f0f2f4; border-radius: 4px; }
+.timeline-bar { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: #9ab; }
+.timeline-bar.bar-integrated { background: #2e8b2e; }
+.timeline-bar.bar-blocked, .timeline-bar.bar-rejected { background: #c53030; }
+.timeline-bar.bar-escalated { background: #dd8a2a; }
+.timeline-bar.bar-open { opacity: 0.6; }
+.timeline-dur { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

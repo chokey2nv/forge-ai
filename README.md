@@ -8,7 +8,7 @@ Forge AI takes a software requirement plus acceptance criteria, decomposes the w
 
 ## Status
 
-**Current build state: Phase 9, verified end to end** — the head engineer decomposes work into dependent subtasks, every reviewer an agent lists must pass each change, and changes the reviewers keep rejecting are escalated to a human, who decides from the console. Real-model slices: `make phase8-vertical-slice-demo`, `make phase8-two-child-slice`; deterministic regression suite (retries, crash recovery, add-an-agent, cross-review, escalation): `make phase8-failure-paths`. See the [runbook](docs/operations/RUNBOOK.md#9-phase-status) for per-phase evidence, `docs/plans/phase-9-cross-review.md` for the Phase 9 design, and `mile-stone-review.md` for the Phase 10–13 roadmap.
+**Current build state: Phase 10, verified end to end** — the head engineer decomposes work into subtasks that run in parallel when their scopes are disjoint (dependent and overlapping ones wait), every reviewer an agent lists must pass each change (reviewers run side by side), and changes the reviewers keep rejecting are escalated to a human, who decides from the console. Real-model slices: `make phase8-vertical-slice-demo`, `make phase8-two-child-slice`, `make phase10-parallel-slice`; deterministic regression suite: `make phase8-failure-paths`. See the [runbook](docs/operations/RUNBOOK.md#9-phase-status) for per-phase evidence, `docs/plans/` for the Phase 9 and 10 designs, and `mile-stone-review.md` for the Phase 11–13 roadmap.
 
 ## How to run
 

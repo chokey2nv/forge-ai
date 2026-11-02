@@ -109,7 +109,7 @@ func (h *Handlers) startReviewer(ctx context.Context, run *domain.WorkflowRun, t
 		ContainerName:  latest.ContainerName,
 		WorktreePath:   worktree,
 		Role:           def.Name,
-		Task:           buildReviewerPrompt(task, diff, h.latestVerification(ctx, run.ID)),
+		Task:           buildReviewerPrompt(task, diff, h.latestVerification(ctx, run.ID)) + h.subtaskBrief(ctx, task, true),
 		SystemPrompt:   sysPrompt,
 		Tools:          tools,
 		SubmissionTool: def.SubmissionTool,
@@ -403,4 +403,13 @@ func (h *Handlers) latestVerification(ctx context.Context, runID string) *domain
 		return nil
 	}
 	return vr
+}
+
+// subtaskBrief is domain.SubtaskBrief with the task's siblings loaded.
+func (h *Handlers) subtaskBrief(ctx context.Context, task *domain.Task, forReviewer bool) string {
+	if task.ParentID == "" {
+		return ""
+	}
+	siblings, _ := h.Tasks.ListChildren(ctx, task.ParentID)
+	return domain.SubtaskBrief(task, siblings, forReviewer)
 }

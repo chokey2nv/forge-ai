@@ -161,6 +161,7 @@ func main() {
 	mux.HandleFunc("POST /tasks/{id}/reject", h.RejectTask)
 	mux.HandleFunc("POST /tasks/{id}/escalation", h.DecideEscalation)
 	mux.HandleFunc("GET /tasks/{id}/children", h.ListTaskChildren)
+	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
 
 	mux.HandleFunc("POST /evals/results", h.RecordEval)
 	mux.HandleFunc("GET  /evals/results", h.ListEvals)

@@ -62,7 +62,7 @@
     }
   ],
   "implementer": {
-    "Add taxFor": [
+    "Add taxFor\n": [
       {
         "delayMs": 4000,
         "toolCalls": [
@@ -86,7 +86,7 @@
         "content": "Added taxFor."
       }
     ],
-    "Add formatPrice": [
+    "Add formatPrice\n": [
       {
         "delayMs": 4000,
         "toolCalls": [
@@ -110,7 +110,7 @@
         "content": "Added formatPrice."
       }
     ],
-    "Add priceLabel": [
+    "Add priceLabel\n": [
       {
         "toolCalls": [
           {

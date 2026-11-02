@@ -160,6 +160,7 @@ export const api = {
             body: JSON.stringify({ reviewer, rationale }),
         }),
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
+    getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
     decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {
             method: "POST",

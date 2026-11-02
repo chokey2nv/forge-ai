@@ -57,6 +57,12 @@ phase8-two-child-slice:
 phase8-failure-paths:
 	bash scripts/phase8-failure-paths.sh
 
+.PHONY: phase10-parallel-slice
+
+# Two independent subtasks in parallel plus one depending on both (real model).
+phase10-parallel-slice:
+	bash scripts/phase10-parallel-slice.sh
+
 .PHONY: eval console-install console-dev
 
 eval:

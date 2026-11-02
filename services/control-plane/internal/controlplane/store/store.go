@@ -61,6 +61,9 @@ type RunRepo interface {
 type EventRepo interface {
 	Append(ctx context.Context, e *domain.Event) error
 	ListByRun(ctx context.Context, runID string) ([]*domain.Event, error)
+	// ListByTask returns a task's events, oldest first. State transitions are
+	// recorded per task, not per run.
+	ListByTask(ctx context.Context, taskID string) ([]*domain.Event, error)
 }
 type ReviewRepo interface {
 	Create(ctx context.Context, r *domain.Review) error

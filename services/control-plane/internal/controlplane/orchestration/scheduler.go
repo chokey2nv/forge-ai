@@ -277,12 +277,13 @@ func (s *Scheduler) provisionAndStart(ctx context.Context, parent, child *domain
 
 	toolSchemas := make([]agent.ToolSchema, len(tools))
 	copy(toolSchemas, tools)
+	siblings, _ := s.Tasks.ListChildren(ctx, parent.ID)
 	if _, err := s.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:          run.ID,
 		ContainerName:  ws.ContainerName,
 		WorktreePath:   ws.WorktreePath,
 		Role:           def.Name,
-		Task:           child.Requirement + "\n\nAcceptance:\n" + bullets(child.Acceptance),
+		Task:           child.Requirement + "\n\nAcceptance:\n" + bullets(child.Acceptance) + domain.SubtaskBrief(child, siblings, false),
 		SystemPrompt:   sysPrompt,
 		Tools:          toolSchemas,
 		SubmissionTool: def.SubmissionTool,

@@ -43,3 +43,16 @@ func (r *EventRepo) ListByRun(ctx context.Context, runID string) ([]*domain.Even
 	}
 	return out, nil
 }
+
+func (r *EventRepo) ListByTask(ctx context.Context, taskID string) ([]*domain.Event, error) {
+	cur, err := r.coll.Find(ctx, bson.M{"taskId": taskID}, options.Find().SetSort(bson.D{bson.E{Key: "at", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	out := []*domain.Event{}
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

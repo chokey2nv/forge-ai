@@ -20,7 +20,8 @@
 // role may instead map substrings to queues; a call takes the first queue
 // whose key appears in its system prompt or task prompt and that still has
 // turns, else "*". Reviewers are told apart by their agent prompt:
-//   "implementer": { "Add taxFor": [...], "Add formatPrice": [...] }
+//   "implementer": { "Add taxFor\n": [...], "Add formatPrice\n": [...] }
+// (a subtask's prompt also lists its siblings, so key on its own title line)
 //   "reviewer":    { "You review tests": [...], "You are a code reviewer": [...] }
 import fs from "node:fs";
 import process from "node:process";

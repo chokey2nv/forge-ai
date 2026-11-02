@@ -1,6 +1,6 @@
 # Phase 10 — Parallel execution
 
-**Status:** 10.1–10.3 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
+**Status:** done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -71,7 +71,7 @@ Each ends with its tests passing and a commit.
 | 10.1 ✅ | `PROVISIONING` status (dispatch, retry and resume); provisioning off the tick; `MAX_CONCURRENT_RUNS`; base commit as SHA; per-parent integration lock with `--3way`; scripted provider turn queues keyed by task | Unit tests (race detector): tick never waits on provisioning, runs are `PROVISIONING` meanwhile, cap honoured, base pinned, dependents wait; `--3way` on a real repo merges, conflicts cleanly. Scripted `parallel-siblings`, `diamond`, `concurrency-cap` pass on new fixture `parallel-features`; all 13 scenarios pass. Claude slices not re-run |
 | 10.2 ✅ | Scope-overlap serialization with `implicitDependsOn` and a `child.serialized` event per reason; dependency cycles rejected at decomposition; console shows implicit dependencies. **Changed from the plan:** an integration conflict blocks (with a clean reset, from 10.1) instead of triggering a rework; see below | Unit tests for pattern overlap, serialization, cycle detection, and the scheduler honouring implicit dependencies; scripted `overlap-serialized` and `cycle-rejected`; all 15 scenarios pass |
 | 10.3 ✅ | Parallel reviewers: all of a round's reviewers start together; each verdict settles its slot by claim → save → count, and the last to count decides the round; the watcher's timeout settles every outstanding slot; adapter skips diff capture and sets `GIT_OPTIONAL_LOCKS=0` for review runs; scripted provider can key turns by agent prompt | Unit tests for slot matching (incl. an agent listed twice); scripted `parallel-reviewers` (two 3s reviewers, round took 3s); every review scenario re-keyed by reviewer and passing. The full run found a real concurrency bug: document IDs were the time in nanoseconds and collided when parallel subtasks transitioned in the same clock tick, failing a transition that had already happened. IDs are now UUIDs (concurrency test), a transition no longer fails on its event write, and the parallel scenarios passed 3 extra times each. All 16 scenarios pass |
-| 10.4 | Three-child Claude slice (two independent + one dependent) with wall-time report; console concurrency view; docs | Slice passes with Claude and its wall time beats the sum of its children's; runbook §5/§9 updated |
+| 10.4 ✅ | `make phase10-parallel-slice` with a wall-time report; `GET /tasks/{id}/events`; console timeline of subtasks; subtask brief (scope and siblings) in implementer and reviewer prompts; docs | Claude: 3 subtasks, 2 in parallel, 178s wall for 267s of subtask work (1.5x), all integrated, branch green; console timeline checked on that run. Both Phase 8 Claude slices pass (pagination twice). All 16 scripted scenarios pass |
 
 ## Costs and risks
 
@@ -84,9 +84,15 @@ Each ends with its tests passing and a commit.
 
 Decision 3 planned one automatic rework when a child's diff conflicts at integration. With overlap serialization in place, two children run in parallel only when their declared scopes are disjoint, and the diff-scope gate rejects any change outside a child's scope. Siblings therefore never change the same file, and the 3-way apply cannot hit a genuine conflict from parallel work; nothing in the pipeline can produce the case the rework would handle, so it could not be tested end to end. A conflict, should one arise from something unforeseen, resets the integration worktree and blocks the child and parent with git's output, which is what 10.1 already does. Revisit if conflicts are ever observed.
 
+## Found in 10.4
+
+The first Claude re-run of the pagination demo split it into a fix (scope `src/paginate.js`) and a sibling tests subtask. The test-reviewer, not knowing tests were a sibling's job, rejected the fix for missing tests; the implementer, not knowing its scope, added them and failed the diff-scope gate twice. Neither agent was told the subtask's scope or what its siblings own. Implementer and reviewer prompts now carry a "Scope of this subtask" section listing its files and its siblings, and reviewers are told not to fail a subtask for a sibling's work. Two re-runs hit the same split and passed with the test-reviewer passing in round 1.
+
 ## Follow-ups
 
 - **A broken base fails every sibling.** Each child's test gate runs the whole suite, so if the base already has a failing test (as `cart-pricing` does: fixing it is one of the subtasks), an independent sibling fails verification for a bug that is not its own. Serial execution hid this because dependents start after the fix integrates. Options: scope the test gate to the child's `diffScope` plus a baseline comparison, or have the head engineer make fixes of a red suite a dependency of everything else.
+
+- **Final review has no git.** The parent's verification and final-review container mounts the host integration worktree, whose `.git` points outside the container (the problem children had before per-run clones). A Claude security-reviewer noted it could not search the combined change. Fix: provision the parent container from a clone of the integration branch.
 
 ## Out of scope
 

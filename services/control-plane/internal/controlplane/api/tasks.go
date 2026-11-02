@@ -294,3 +294,14 @@ func (h *Handlers) ListTaskChildren(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, children)
 }
+
+// ListTaskEvents serves a task's events, oldest first, including its state
+// transitions (which carry no run ID).
+func (h *Handlers) ListTaskEvents(w http.ResponseWriter, r *http.Request) {
+	events, err := h.Events.ListByTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
+}
