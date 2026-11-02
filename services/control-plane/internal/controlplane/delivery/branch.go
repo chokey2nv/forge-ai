@@ -101,6 +101,45 @@ func CreateBranch(ctx context.Context, repoPath, name, sha string) error {
 	return nil
 }
 
+// EnsureBranchAt creates name at sha, or accepts it if it already exists
+// there. A branch at another commit is an error: it is never moved.
+func EnsureBranchAt(ctx context.Context, repoPath, name, sha string) error {
+	if isBranch(ctx, repoPath, name) {
+		tip, err := git(ctx, repoPath, "rev-parse", "refs/heads/"+name)
+		if err != nil {
+			return err
+		}
+		if tip != sha {
+			return fmt.Errorf("branch %s already exists at %s, not %s", name, tip, sha)
+		}
+		return nil
+	}
+	return CreateBranch(ctx, repoPath, name, sha)
+}
+
+// EnsureBranchOrAhead accepts a branch at sha or ahead of it (holding
+// commits on top of sha), and creates it at sha when missing.
+func EnsureBranchOrAhead(ctx context.Context, repoPath, name, sha string) error {
+	if !isBranch(ctx, repoPath, name) {
+		return CreateBranch(ctx, repoPath, name, sha)
+	}
+	if _, err := git(ctx, repoPath, "merge-base", "--is-ancestor", sha, "refs/heads/"+name); err != nil {
+		return fmt.Errorf("branch %s does not contain its starting commit %s", name, sha)
+	}
+	return nil
+}
+
+// BranchTip is the commit a branch points at.
+func BranchTip(ctx context.Context, repoPath, name string) (string, error) {
+	return git(ctx, repoPath, "rev-parse", "--verify", "refs/heads/"+name)
+}
+
+// SubtaskBranchName is <parent branch>-<slug of the subtask's title>. git
+// cannot hold both forge/x and forge/x/y, hence the hyphen.
+func SubtaskBranchName(parentBranch, title string) string {
+	return parentBranch + "-" + Slug(title)
+}
+
 // DeleteBranch force-deletes a branch this package just created that holds
 // no work (its task could not be saved). Never use it on a branch with work.
 func DeleteBranch(ctx context.Context, repoPath, name string) error {

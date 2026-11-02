@@ -189,7 +189,7 @@ func (h *Handlers) integrateChild(ctx context.Context, run *domain.WorkflowRun, 
 		diff = latest.LastCheckpoint.WorkspaceDiff
 	}
 	if h.Integrator != nil {
-		if err := h.Integrator.Integrate(ctx, task, diff); err != nil {
+		if err := h.Integrator.Integrate(ctx, task, latest.BaseCommit, diff); err != nil {
 			log.Printf("integration failed for child %s: %v", task.ID, err)
 			// Integrator already transitioned child and parent to BLOCKED.
 		}

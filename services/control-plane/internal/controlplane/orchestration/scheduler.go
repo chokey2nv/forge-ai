@@ -10,6 +10,7 @@ import (
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store"
@@ -39,6 +40,9 @@ type Scheduler struct {
 	Provision func(ctx context.Context, repoPath, base, childBranch, image, runID string, setupTimeoutSeconds int) (*workspace.Workspace, error)
 	// ResolveCommit pins a ref to a SHA. Defaults to workspace.ResolveCommit.
 	ResolveCommit func(ctx context.Context, repoPath, ref string) (string, error)
+	// CreateBranch creates a subtask's branch at its starting commit.
+	// Defaults to delivery.EnsureBranchAt.
+	CreateBranch func(ctx context.Context, repoPath, name, sha string) error
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
@@ -211,6 +215,17 @@ func (s *Scheduler) dispatchChild(ctx context.Context, parent, child *domain.Tas
 	base, err := s.resolveCommit(ctx, parent.RepoPath, parent.IntegrationBranch)
 	if err != nil {
 		return fmt.Errorf("resolve integration HEAD: %w", err)
+	}
+	// The subtask's own branch starts there; its work is committed on it
+	// and merged into the parent branch at integration.
+	if child.Branch != "" {
+		create := s.CreateBranch
+		if create == nil {
+			create = delivery.EnsureBranchAt
+		}
+		if err := create(ctx, parent.RepoPath, child.Branch, base); err != nil {
+			return fmt.Errorf("create subtask branch: %w", err)
+		}
 	}
 
 	now := time.Now().UTC()

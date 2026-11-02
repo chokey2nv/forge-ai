@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 	"github.com/google/uuid"
@@ -99,7 +100,16 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		childID := "task-" + uuid.NewString()[:8]
 		subIDToTaskID[t.ID] = childID
 	}
+	usedBranch := map[string]bool{}
 	for i, t := range sub.Tasks {
+		// Each subtask works on its own branch off the parent branch, created
+		// when it is dispatched and merged back into the parent branch.
+		branch := delivery.SubtaskBranchName(integrationBranch, t.Title)
+		if usedBranch[branch] {
+			branch += "-" + delivery.Slug(t.ID)
+		}
+		usedBranch[branch] = true
+
 		depTaskIDs := make([]string, 0, len(t.DependsOn))
 		for _, subID := range t.DependsOn {
 			depTaskIDs = append(depTaskIDs, subIDToTaskID[subID])
@@ -127,7 +137,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			DependsOn:         depTaskIDs,
 			ImplicitDependsOn: implicitIDs,
 			Budget:            task.Budget,
-			Branch:            fmt.Sprintf("%s-%s", integrationBranch, t.ID),
+			Branch:            branch,
 			CreatedAt:         time.Now().UTC(),
 			UpdatedAt:         time.Now().UTC(),
 		}

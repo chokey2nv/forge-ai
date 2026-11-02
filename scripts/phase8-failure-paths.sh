@@ -174,6 +174,8 @@ run_scenario() {
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "child retried after failed verification" "$(has_reason "$child" "verification failed; retrying"; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
+      check "the subtask's work is on its own branch, merged into the parent branch" \
+        "$(cb=$(curl -sf "$CP/tasks/$child" | jq -r .branch); git -C "$repo" show "$cb:src/price.js" | grep -q Math.round && git -C "$repo" merge-base --is-ancestor "$cb" "$(branch_of "$task")"; echo $?)"
       check "integrated fix rounds to cents" "$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q Math.round; echo $?)"
       ;;
     parallel-reviewers)
@@ -422,8 +424,14 @@ run_parallel() { # siblings | diamond | cap
       "$(git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($b)" "$(branch_of "$task")")" "$(run_base "$c")" && git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($a)" "$(branch_of "$task")")" "$(run_base "$c")"; echo $?)"
   fi
   n=$(curl -sf "$CP/tasks/$task/children" | jq length)
-  check "one integration commit per subtask ($n)" \
-    "$([ "$(git -C "$repo" rev-list --count "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)..$(branch_of "$task")")" -eq "$n" ]; echo $?)"
+  check "one merge commit per subtask on the parent branch ($n)" \
+    "$([ "$(git -C "$repo" rev-list --count --merges "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)..$(branch_of "$task")")" -eq "$n" ]; echo $?)"
+  local bad=""
+  for x in $(curl -sf "$CP/tasks/$task/children" | jq -r '.[].id'); do
+    cb=$(curl -sf "$CP/tasks/$x" | jq -r .branch)
+    [[ "$cb" == "$(branch_of "$task")-"* ]] && [ "$(git -C "$repo" rev-list --count "$(run_base "$x")..$cb" 2>/dev/null)" = 1 ] || bad="$bad $cb"
+  done
+  check "each subtask has its own branch off the parent, holding its one commit" "$([ -z "$bad" ]; echo $?)"
   check "integrated branch passes its tests on the host" \
     "$(cd "$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)" && node --test >/dev/null 2>&1; echo $?)"
 }

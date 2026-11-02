@@ -542,7 +542,7 @@ Copies `tests/evaluations/fixtures/cart-pricing` into a fresh temp git repo on e
 
 - Parent reaches `REVIEW_PENDING`; at least two children, all `INTEGRATED`
 - At least one dependency edge, and every dependent started no earlier than its dependency integrated
-- One integration commit per child on `forge/<task>`
+- One merge commit per child on the parent branch
 - `node --test` passes on the integration worktree, run on the host
 
 ### 5.9 Phases 8–9 — Failure paths, cross-review and escalation (no model API)
@@ -569,7 +569,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `reviewer-timeout` | `test-reviewer` never reports | Watcher records it as `error` ("timed out"), the round is rejected, round 2 passes |
 | `escalate-accept` | Reviewers reject two rounds | Child `ESCALATED` while the parent waits; a decision on a non-escalated task is refused (409); `accept` integrates the child and the parent finishes |
 | `escalate-retry` | Same, then `retry` with guidance | The guidance reaches the implementer, round 3 passes, child integrates |
-| `parallel-siblings` | Two independent subtasks (fixture `parallel-features`) | Their agents run at the same time from the same integration commit; both integrate (one commit each); the integrated branch passes `node --test` on the host |
+| `parallel-siblings` | Two independent subtasks (fixture `parallel-features`) | Their agents run at the same time from the same integration commit; each is committed on its own branch and merged into the parent (one merge each); the integrated branch passes `node --test` on the host |
 | `diamond` | Two in parallel, a third depending on both | The third is claimed only after both integrated and starts from a commit containing both |
 | `concurrency-cap` | The same two with `MAX_CONCURRENT_RUNS=1` (the harness restarts its control plane) | They never overlap |
 | `overlap-serialized` | One of the two declares no `diffScope` | It gets an implicit dependency on its sibling (`implicitDependsOn`, `child.serialized` event "no diffScope declared"), and they never overlap |
@@ -592,7 +592,7 @@ make phase10-parallel-slice
 
 Copies `tests/evaluations/fixtures/parallel-features` (suite green at the start) into a fresh repo and asks for three helpers: `taxFor` and `formatPrice` independent, `priceLabel` depending on both. The script prints each subtask's duration, scope and dependencies, then the subtask phase's wall time against the summed subtask time.
 
-**Pass criteria:** parent `REVIEW_PENDING`; at least 3 subtasks, all `INTEGRATED`; at least two ran at the same time (if not, the script prints the `child.serialized` reasons); wall time below the summed subtask time; one integration commit per subtask; `node --test` passes on the integrated branch. First run with Claude: 178s wall for 267s of subtask work (1.5x).
+**Pass criteria:** parent `REVIEW_PENDING`; at least 3 subtasks, all `INTEGRATED`; at least two ran at the same time (if not, the script prints the `child.serialized` reasons); wall time below the summed subtask time; one merge commit per subtask; `node --test` passes on the integrated branch. First run with Claude: 178s wall for 267s of subtask work (1.5x).
 
 The console's task page shows the same as a timeline: one bar per subtask from claim to integration.
 
@@ -652,7 +652,7 @@ curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 
 ### 6.5.1 Branches and delivery preview
 
-Creating a task creates its parent branch right away, at the tip of its target branch: `forge/<first words of the requirement>-<task id>`. The target is `targetBranch` if given, else the branch `baseCommit` names, else the repository's checked-out branch; a detached HEAD or a SHA base needs `targetBranch` (the API answers 400).
+Creating a task creates its parent branch right away, at the tip of its target branch: `forge/<first words of the requirement>-<task id>`. Each subtask gets its own branch off it when dispatched, `<parent branch>-<first words of the subtask title>`; after review its work is committed there and merged into the parent branch (`integrate(<subtask id>): <title>`). `git log --graph <parent branch>` shows one merge per subtask. The target is `targetBranch` if given, else the branch `baseCommit` names, else the repository's checked-out branch; a detached HEAD or a SHA base needs `targetBranch` (the API answers 400).
 
 ```bash
 curl -s localhost:8080/tasks/<taskId>/delivery | jq   # what approval will do
@@ -758,7 +758,7 @@ If the CP log shows no `checkpoint` events during a run, the callback URL is wro
 
 ### 8.0 Concurrency
 
-Only subtasks with declared, non-overlapping `diffScope`s run in parallel. Each subtask's implementer and reviewers are told its scope and what its sibling subtasks own, so a reviewer does not demand work a sibling is assigned. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from. A change's reviewers all run at the same time in its container; they only read (no diff capture, `GIT_OPTIONAL_LOCKS=0`), and the round is decided when the last verdict is in.
+Only subtasks with declared, non-overlapping `diffScope`s run in parallel. Each subtask's implementer and reviewers are told its scope and what its sibling subtasks own, so a reviewer does not demand work a sibling is assigned. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time: each subtask's branch, which starts at the parent commit it was dispatched from, is merged into the parent branch. A change's reviewers all run at the same time in its container; they only read (no diff capture, `GIT_OPTIONAL_LOCKS=0`), and the round is decided when the last verdict is in.
 
 Run **one control plane per database**: the integration lock is in-process. The failure-path harness uses its own database, so it can run beside your dev control plane.
 

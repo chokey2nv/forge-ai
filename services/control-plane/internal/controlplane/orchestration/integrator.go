@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store"
@@ -30,27 +31,45 @@ func (i *Integrator) lock(parentID string) func() {
 	return mu.Unlock
 }
 
-func (i *Integrator) Integrate(ctx context.Context, child *domain.Task, childDiff string) error {
+// Integrate commits a reviewed subtask's work on its branch (based at base,
+// the commit it started from) and merges that branch into the parent branch.
+func (i *Integrator) Integrate(ctx context.Context, child *domain.Task, base, childDiff string) error {
 	defer i.lock(child.ParentID)()
 
 	parent, err := i.Tasks.Get(ctx, child.ParentID)
 	if err != nil {
 		return fmt.Errorf("get parent: %w", err)
 	}
-
-	if err := workspace.ApplyDiff3Way(parent.IntegrationWorktree, childDiff); err != nil {
-		_ = i.SM.Transition(ctx, child, domain.StatusBlocked, "integration conflict: "+err.Error())
+	fail := func(reason string) error {
+		_ = i.SM.Transition(ctx, child, domain.StatusBlocked, "integration failed: "+reason)
 		_ = i.SM.Transition(ctx, parent, domain.StatusBlocked, "child "+child.ID+" failed to integrate")
-		return err
+		return fmt.Errorf("%s", reason)
 	}
+
+	branch := child.Branch
+	if branch == "" {
+		branch = delivery.SubtaskBranchName(parent.IntegrationBranch, child.Title)
+	}
+	// Created at dispatch; also covers subtasks dispatched before branches.
+	if err := delivery.EnsureBranchOrAhead(ctx, parent.RepoPath, branch, base); err != nil {
+		return fail(err.Error())
+	}
+	tip, err := delivery.BranchTip(ctx, parent.RepoPath, branch)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if tip == base {
+		if _, err := workspace.CommitDiffOnBranch(ctx, parent.RepoPath, branch, childDiff, child.Title); err != nil {
+			return fail(err.Error())
+		}
+	} // else: committed by an earlier attempt; merge what is there
 
 	msg := fmt.Sprintf("integrate(%s): %s", child.ID, child.Title)
-	if err := workspace.CommitAll(parent.IntegrationWorktree, msg); err != nil {
-		workspace.ResetHard(parent.IntegrationWorktree)
-		return fmt.Errorf("commit: %w", err)
+	if err := workspace.MergeIntoWorktree(ctx, parent.IntegrationWorktree, branch, msg+"\n\nMerge branch '"+branch+"'"); err != nil {
+		return fail(err.Error())
 	}
 
-	if err := i.SM.Transition(ctx, child, domain.StatusIntegrated, "diff applied to parent branch"); err != nil {
+	if err := i.SM.Transition(ctx, child, domain.StatusIntegrated, "merged "+branch+" into "+parent.IntegrationBranch); err != nil {
 		return err
 	}
 	_ = i.Events.Append(ctx, &domain.Event{

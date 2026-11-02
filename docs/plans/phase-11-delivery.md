@@ -1,6 +1,6 @@
 # Phase 11 — Delivery
 
-**Status:** 11.1 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 10 (`docs/operations/RUNBOOK.md` §9)
+**Status:** 11.1–11.2 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 10 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -73,7 +73,7 @@ MERGED → ROLLED_BACK
 | # | Scope | Exit check |
 |---|---|---|
 | 11.1 ✅ | Parent branch at task creation (named from the description), target branch recorded, remote/`gh` detection, `GET /tasks/{id}/delivery`, console hint on the task page | Unit tests on real repos: slug naming, target resolution (HEAD, named branch, explicit, missing, SHA, detached), branch creation never moves an existing branch; remote URL parsing; preview with no remote, GitHub + `gh` logged in, origin preferred, `gh` not logged in, `gh` missing, local-path remote. Scripted `verify-retry` checks the branch exists after creation and the preview switches from local merge to pull request when a remote is added (stub `gh`). Console hint checked for both modes against a live control plane |
-| 11.2 | Subtask branches; integration by `merge --no-ff` into the parent branch (replacing diff-apply) | Unit tests on real repos: subtask commit from a diff, parallel siblings merge, conflicting siblings block. Scripted: one subtask branch and one merge commit per subtask; all scenarios pass |
+| 11.2 ✅ | Subtask branches `<parent>-<slug of title>` (unique among siblings) created at dispatch at the subtask's pinned start; integration commits the subtask's diff on its branch in a temporary worktree and merges it into the parent branch with `merge --no-ff` (`integrate(<id>): <title>`), replacing 3-way diff-apply; a conflicting merge is aborted and blocks | Real-repo unit tests: commit from a diff, siblings merge, conflict aborted cleanly, empty and non-applying diffs; integrator end-to-end (two siblings merge, branches created on demand, a conflicting third blocks child and parent). Scripted: one merge commit per subtask and one commit per subtask branch; all 16 scenarios pass; Claude parallel slice passes |
 | 11.3 | Delivery on approval: local merge (target-moved re-verification, dirty refusal, CAS) and remote PR via `gh` with a watcher; integration worktree cleanup | Real-repo unit tests for local delivery cases. Scripted `deliver-local`, `deliver-target-moved`, `deliver-pr` (bare repo as `origin`, a stub `gh` on `PATH` that records its arguments and serves PR state: open → merged → `MERGED`; closed → `REJECTED`) |
 | 11.4 | Rollback (both modes); console delivery panel and rollback button; Claude slice that approves and merges locally; docs | Scripted `rollback-local`, `rollback-pr`; Claude slice: approve → `MERGED`, `main` contains the change and passes its tests; console shows the hint, the merge, and rolls it back |
 

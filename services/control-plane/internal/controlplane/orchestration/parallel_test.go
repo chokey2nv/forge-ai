@@ -134,6 +134,7 @@ type parallelHarness struct {
 	mu       sync.Mutex
 	started  []string // run IDs the adapter was asked to start
 	provBase []string // base commits provisioning was given
+	branches []string // "name@sha" of subtask branches created
 }
 
 func newParallelHarness(t *testing.T, maxRuns int, children ...*domain.Task) *parallelHarness {
@@ -169,6 +170,12 @@ func newParallelHarness(t *testing.T, maxRuns int, children ...*domain.Task) *pa
 		ResolveCommit: func(context.Context, string, string) (string, error) {
 			return "0123abcd", nil
 		},
+		CreateBranch: func(_ context.Context, _, name, sha string) error {
+			h.mu.Lock()
+			h.branches = append(h.branches, name+"@"+sha)
+			h.mu.Unlock()
+			return nil
+		},
 		Provision: func(_ context.Context, _, base, _, _, runID string, _ int) (*workspace.Workspace, error) {
 			h.mu.Lock()
 			h.provBase = append(h.provBase, base)
@@ -181,7 +188,8 @@ func newParallelHarness(t *testing.T, maxRuns int, children ...*domain.Task) *pa
 }
 
 func child(id string, deps ...string) *domain.Task {
-	return &domain.Task{ID: id, ParentID: "p", Status: domain.StatusCreated, AssignedAgent: "implementer", DependsOn: deps}
+	return &domain.Task{ID: id, ParentID: "p", Status: domain.StatusCreated, AssignedAgent: "implementer", DependsOn: deps,
+		Branch: "forge/p-" + id}
 }
 
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -250,6 +258,11 @@ func TestBaseCommitIsPinnedAtDispatch(t *testing.T) {
 		defer h.mu.Unlock()
 		return len(h.provBase) == 1 && h.provBase[0] == "0123abcd"
 	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.branches) != 1 || h.branches[0] != "forge/p-a@0123abcd" {
+		t.Errorf("subtask branch created as %v, want forge/p-a at the pinned base", h.branches)
+	}
 }
 
 func TestCapacityLimitsLiveWorkspaces(t *testing.T) {

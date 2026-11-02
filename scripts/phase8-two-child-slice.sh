@@ -82,12 +82,12 @@ done
 BRANCH=$(echo "$PARENT" | jq -r .integrationBranch)
 BASE=$(echo "$PARENT" | jq -r .integrationBaseCommit)
 WT=$(echo "$PARENT" | jq -r .integrationWorktree)
-COMMITS=$(git -C "$REPO" rev-list --count "$BASE..$BRANCH" 2>/dev/null || echo 0)
-[ "$COMMITS" -eq "$N" ] || fail "integration branch has $COMMITS commit(s) for $N children"
+COMMITS=$(git -C "$REPO" rev-list --count --merges "$BASE..$BRANCH" 2>/dev/null || echo 0)
+[ "$COMMITS" -eq "$N" ] || fail "integration branch has $COMMITS merge commit(s) for $N children"
 
 echo
 echo "=== integration branch $BRANCH ==="
-git -C "$REPO" log --oneline "$BASE..$BRANCH" || true
+git -C "$REPO" log --oneline --graph "$BASE..$BRANCH" || true
 echo
 git -C "$REPO" diff "$BASE..$BRANCH" || true
 
