@@ -97,7 +97,7 @@ func (h *Handlers) startReviewer(ctx context.Context, run *domain.WorkflowRun, t
 		ContainerName:  latest.ContainerName,
 		WorktreePath:   worktree,
 		Role:           def.Name,
-		Task:           buildReviewerPrompt(task, diff),
+		Task:           buildReviewerPrompt(task, diff, h.latestVerification(ctx, run.ID)),
 		SystemPrompt:   sysPrompt,
 		Tools:          tools,
 		SubmissionTool: def.SubmissionTool,
@@ -334,11 +334,13 @@ func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRu
 	_ = h.Runs.SaveReviewVerdict(ctx, run.ID, domain.VerdictFail, now)
 	summary := roundSummary(round)
 
-	// A parent's combined change has no implementer to send back to.
+	// A parent's combined change has no implementer to send back to, so a
+	// rejected final review goes straight to a human (accept or reject).
 	if isParentReview(task) {
 		reason := "final review rejected: " + summary
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, now)
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunEscalated, reason, now)
+		_ = h.SM.Transition(ctx, task, domain.StatusEscalated, reason)
+		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, RunID: run.ID, Type: "review.escalated", Reason: reason, At: now})
 		workspace.Cleanup(ctx, reviewWS, task.RepoPath)
 		return
 	}
@@ -370,4 +372,14 @@ func (h *Handlers) ListRunReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reviews)
+}
+
+// latestVerification is the gate run the change under review passed; nil if
+// none is recorded (the prompt then omits it).
+func (h *Handlers) latestVerification(ctx context.Context, runID string) *domain.VerificationRun {
+	vr, err := h.Verifications.LatestForRun(ctx, runID)
+	if err != nil {
+		return nil
+	}
+	return vr
 }

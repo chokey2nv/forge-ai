@@ -28,6 +28,7 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 
 	vr := h.Verifier.Run(ctx, ws.ContainerName, ws.WorktreePath, nil)
 	vr.ID = fmt.Sprintf("vr-%s-combined", parent.ID)
+	vr.RunID = finalReviewRunID(parent) // so the final reviewers are shown these results
 	vr.TaskID = parent.ID
 	vr.Attempt = 1
 	_ = h.Verifications.Create(ctx, vr)
@@ -48,7 +49,7 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 	provider, model := parentProvenance(ctx, h, parent)
 	now := time.Now().UTC()
 	run := &domain.WorkflowRun{
-		ID: "run-" + parent.ID + "-final-review", TaskID: parent.ID,
+		ID: finalReviewRunID(parent), TaskID: parent.ID,
 		Status:        domain.RunVerifying,
 		ContainerName: ws.ContainerName,
 		BaseCommit:    parent.IntegrationBaseCommit,
@@ -73,3 +74,5 @@ func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (pr
 	}
 	return "", ""
 }
+
+func finalReviewRunID(parent *domain.Task) string { return "run-" + parent.ID + "-final-review" }

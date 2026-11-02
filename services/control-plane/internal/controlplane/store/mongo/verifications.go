@@ -26,8 +26,9 @@ func (r *VerificationRepo) Create(ctx context.Context, vr *domain.VerificationRu
 
 func (r *VerificationRepo) LatestForRun(ctx context.Context, runID string) (*domain.VerificationRun, error) {
 	var vr domain.VerificationRun
+	// Newest by start time: attempt numbers restart in every review round.
 	err := r.coll.FindOne(ctx, bson.M{"runId": runID},
-		options.FindOne().SetSort(bson.D{bson.E{Key: "attempt", Value: -1}}),
+		options.FindOne().SetSort(bson.D{bson.E{Key: "startedAt", Value: -1}}),
 	).Decode(&vr)
 	if err != nil {
 		return nil, err

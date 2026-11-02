@@ -198,6 +198,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `REVIEW_TIMEOUT_GRACE` | `60s` | Control plane | Extra wait after `REVIEWER_TIMEOUT` before the watcher records a silent reviewer as an `error` verdict |
 | `ORPHAN_CONTAINER_GRACE` | `10m` | Control plane | Age before the reaper removes an unowned container or workspace directory |
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
+| `SCRIPTED_PROVIDER_LOG` | *(unset)* | Adapter | With `scripted`: file to append each agent's task prompt to |
 
 ---
 
@@ -542,6 +543,8 @@ make phase8-failure-paths                      # all scenarios
 bash scripts/phase8-failure-paths.sh exhaustion add-agent   # a subset
 ```
 
+With `SCRIPTED_PROVIDER_LOG` set (the harness sets it), the scripted provider appends each agent's task prompt to that file, so scenarios can assert on what an agent was told.
+
 The harness starts its own control plane and adapter on `:8090` / `:8091` against the `forge_ai_failpaths` database and a private copy of `agents/`, so it can run alongside your dev services. Ports must be free. Docker workspaces, gates, review and integration are all real.
 
 | Scenario | What happens | Pass criteria |
@@ -555,6 +558,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `reviewer-timeout` | `test-reviewer` never reports | Watcher records it as `error` ("timed out"), the round is rejected, round 2 passes |
 | `escalate-accept` | Reviewers reject two rounds | Child `ESCALATED` while the parent waits; a decision on a non-escalated task is refused (409); `accept` integrates the child and the parent finishes |
 | `escalate-retry` | Same, then `retry` with guidance | The guidance reaches the implementer, round 3 passes, child integrates |
+| `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
 
@@ -614,7 +618,7 @@ curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 
 ### 6.6 Escalated tasks
 
-A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row. Its parent waits; nothing proceeds until a human decides.
+A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row; a parent goes `ESCALATED` as soon as its final review rejects the combined change. A parent waits on an escalated child; nothing proceeds until a human decides.
 
 ```bash
 # What the reviewers said, per round

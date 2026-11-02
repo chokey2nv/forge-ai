@@ -235,7 +235,7 @@ func agentNameOf(run *domain.WorkflowRun) string {
 	return s
 }
 
-func buildReviewerPrompt(task *domain.Task, diff string) string {
+func buildReviewerPrompt(task *domain.Task, diff string, vr *domain.VerificationRun) string {
 	var b strings.Builder
 	b.WriteString("Task requirement:\n")
 	b.WriteString(task.Requirement)
@@ -245,7 +245,41 @@ func buildReviewerPrompt(task *domain.Task, diff string) string {
 	}
 	b.WriteString("\nDiff to review:\n```\n")
 	b.WriteString(diff)
-	b.WriteString("\n```\n\nReview the diff against every acceptance criterion. Call submit_review when done.")
+	b.WriteString("\n```\n")
+	if vr != nil {
+		b.WriteString("\n")
+		b.WriteString(verificationForReview(vr))
+	}
+	b.WriteString("\nReview the diff against every acceptance criterion. Call submit_review when done.")
+	return b.String()
+}
+
+// reviewGateOutputTail bounds how much of each gate's output a reviewer sees.
+const reviewGateOutputTail = 2000
+
+// verificationForReview presents the platform's gate results to a reviewer.
+// Reviewers have read-only tools and cannot run the suite, so without this
+// they cannot tell whether a criterion like "npm test passes" was met, or
+// which tests actually ran.
+func verificationForReview(vr *domain.VerificationRun) string {
+	var b strings.Builder
+	b.WriteString("Verification (run by the platform on exactly this diff; you do not need to run it):\n")
+	for _, g := range vr.Gates {
+		switch {
+		case g.Skipped:
+			fmt.Fprintf(&b, "- %s: skipped (%s)\n", g.Name, g.SkipReason)
+		case g.Passed:
+			fmt.Fprintf(&b, "- %s: passed\n", g.Name)
+		default:
+			fmt.Fprintf(&b, "- %s: FAILED (exit %d)\n", g.Name, g.ExitCode)
+		}
+		if out := strings.TrimSpace(g.Output); out != "" && !g.Skipped {
+			if len(out) > reviewGateOutputTail {
+				out = "..." + out[len(out)-reviewGateOutputTail:]
+			}
+			fmt.Fprintf(&b, "  output:\n```\n%s\n```\n", out)
+		}
+	}
 	return b.String()
 }
 

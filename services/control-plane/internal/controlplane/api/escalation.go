@@ -48,7 +48,7 @@ func validateEscalation(task *domain.Task, req escalationRequest) (status int, m
 // escalatedRunID is the run whose review was escalated.
 func escalatedRunID(task *domain.Task) string {
 	if isParentReview(task) {
-		return "run-" + task.ID + "-final-review"
+		return finalReviewRunID(task)
 	}
 	return task.LatestRunID
 }

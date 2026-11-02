@@ -15,6 +15,7 @@
 #   reviewer-timeout  a reviewer never reports; the watcher records an error, round 2 runs
 #   escalate-accept   reviewers keep rejecting -> ESCALATED; a human accepts; parent finishes
 #   escalate-retry    a human sends it back with guidance; the next round passes
+#   final-review-escalates  the combined change is rejected -> parent ESCALATED; accept -> REVIEW_PENDING
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -28,7 +29,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -40,6 +41,7 @@ export MODEL_PROVIDER=scripted MODEL_NAME=scripted DEFAULT_PROVIDER=scripted DEF
 export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPTS=2 MAX_REVIEW_ROUNDS=2
 # Reviewers answer instantly here; a short timeout lets reviewer-timeout finish quickly.
 export REVIEWER_TIMEOUT=8s REVIEW_TIMEOUT_GRACE=2s
+export SCRIPTED_PROVIDER_LOG="$WORK/prompts.jsonl" # every agent's task prompt, for assertions
 
 # A private copy of the agent definitions: add-agent writes to it, never to agents/.
 cp -R "$ROOT/agents" "$WORK/agents"
@@ -294,6 +296,29 @@ run_escalation() { # accept|retry
   fi
 }
 
+run_final_review_escalates() {
+  local repo task code final
+  repo=$(new_repo)
+  : >"$WORK/prompts.jsonl"
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "ESCALATED|REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  check "parent escalates when the final review rejects ($final)" \
+    "$([ "$final" = ESCALATED ] && has_reason "$task" "final review rejected: reviewer: fail, security-reviewer: pass"; echo $?)"
+  code=$(decide "$task" retry "")
+  check "retry is refused for a parent's combined change (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+  code=$(decide "$task" accept "")
+  check "accept decision accepted (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 60) || true
+  stop_adapter
+  check "parent reaches REVIEW_PENDING after accept ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  # Reviewers cannot run tests; the platform's gate results must be in their prompt.
+  check "child reviewers were shown the gate results and test output" \
+    "$(jq -e -s '[.[] | select(.role == "reviewer" and (.task | contains("Task requirement:\nFix applyDiscount\n")))] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed") and contains("# pass 3"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+  check "final reviewers were shown the combined verification" \
+    "$(jq -e -s '[.[] | select(.role == "reviewer")][2:] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -301,6 +326,7 @@ for SC in "${SCENARIOS[@]}"; do
     add-agent) run_add_agent ;;
     escalate-accept) run_escalation accept ;;
     escalate-retry) run_escalation retry ;;
+    final-review-escalates) run_final_review_escalates ;;
     *) run_scenario ;;
   esac
 done

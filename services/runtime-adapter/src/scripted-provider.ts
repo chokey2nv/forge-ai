@@ -16,6 +16,7 @@
 // retry or a reviewer's second pass simply takes the next turn. The role is
 // inferred from the submission tool offered in the request.
 import fs from "node:fs";
+import process from "node:process";
 import type { ModelCapabilities, ModelProvider, ModelRequest, ModelResponse, ModelToolCall } from "./types";
 
 interface ScriptTurn {
@@ -67,6 +68,13 @@ export class ScriptedProvider implements ModelProvider {
 
   async complete(req: ModelRequest): Promise<ModelResponse> {
     const role = roleOf(req);
+    // SCRIPTED_PROVIDER_LOG: one JSON line per call with the run's task prompt,
+    // so tests can assert on what each agent was actually told.
+    const log = process.env.SCRIPTED_PROVIDER_LOG;
+    if (log) {
+      const task = req.messages.find((m) => m.role === "user")?.content ?? "";
+      fs.appendFileSync(log, JSON.stringify({ role, task }) + "\n");
+    }
     const turn = queues[role]?.shift();
     if (!turn) throw new Error(`scripted provider: no turns left for role "${role}"`);
     console.log(`[scripted] ${role} turn: ${turn.toolCalls?.map((c) => c.name).join(",") || "(text)"}`);

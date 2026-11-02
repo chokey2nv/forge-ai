@@ -86,3 +86,38 @@ func TestAcceptsOnlyThePendingReviewer(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewerPromptCarriesVerification(t *testing.T) {
+	task := &domain.Task{Requirement: "Fix it", Acceptance: []string{"npm test passes"}}
+	long := strings.Repeat("x", reviewGateOutputTail+500) + "# pass 3"
+	vr := &domain.VerificationRun{Gates: []domain.GateResult{
+		{Name: "secrets", Passed: true},
+		{Name: "build", Skipped: true, SkipReason: "no build script"},
+		{Name: "test", Passed: true, Output: long},
+	}}
+
+	got := buildReviewerPrompt(task, "diff --git a b", vr)
+	for _, want := range []string{
+		"Verification (run by the platform on exactly this diff",
+		"- secrets: passed",
+		"- build: skipped (no build script)",
+		"- test: passed",
+		"# pass 3", // the tail of the test output survives truncation
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	if strings.Count(got, "x") > reviewGateOutputTail+10 {
+		t.Error("gate output must be truncated to its tail")
+	}
+
+	failed := verificationForReview(&domain.VerificationRun{Gates: []domain.GateResult{{Name: "test", ExitCode: 1, Output: "not ok 1"}}})
+	if !strings.Contains(failed, "- test: FAILED (exit 1)") || !strings.Contains(failed, "not ok 1") {
+		t.Errorf("failed gate not shown with its output:\n%s", failed)
+	}
+
+	if strings.Contains(buildReviewerPrompt(task, "d", nil), "Verification") {
+		t.Error("no verification section when none is recorded")
+	}
+}
