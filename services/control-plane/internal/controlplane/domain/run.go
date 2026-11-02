@@ -61,6 +61,15 @@ type Message struct {
 	Content    string `bson:"content" json:"content"`
 	ToolCallID string `bson:"toolCallId,omitempty" json:"toolCallId,omitempty"`
 	ToolName   string `bson:"toolName,omitempty" json:"toolName,omitempty"`
+	// ToolCalls must round-trip: a resumed history with tool results but no
+	// matching assistant tool calls is rejected by the model API.
+	ToolCalls []ToolCall `bson:"toolCalls,omitempty" json:"toolCalls,omitempty"`
+}
+
+type ToolCall struct {
+	ID        string         `bson:"id" json:"id"`
+	Name      string         `bson:"name" json:"name"`
+	Arguments map[string]any `bson:"arguments" json:"arguments"`
 }
 
 type Usage struct {

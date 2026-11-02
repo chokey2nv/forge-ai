@@ -58,6 +58,11 @@ func LoadAgentsDir(dir string, skills map[string]*Skill) (*LoadResult, error) {
 				res.Errors = append(res.Errors, fmt.Errorf("agent %q references unknown tool %q", a.Name, t))
 			}
 		}
+		if a.SubmissionTool != "" {
+			if _, ok := ToolCatalog[a.SubmissionTool]; !ok {
+				res.Errors = append(res.Errors, fmt.Errorf("agent %q references unknown submission_tool %q", a.Name, a.SubmissionTool))
+			}
+		}
 		for _, r := range a.Reviewers {
 			if _, ok := res.Agents[r]; !ok {
 				res.Warnings = append(res.Warnings,

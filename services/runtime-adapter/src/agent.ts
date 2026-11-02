@@ -62,6 +62,11 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
   const deadline = Date.now() + cfg.wallClockMs;
 
   while (state.stepCount < cfg.maxSteps) {
+    if (cfg.isCancelled?.()) {
+      state.status = "blocked";
+      state.blockedReason = "cancelled";
+      break;
+    }
     if (Date.now() > deadline) {
       state.status = "blocked";
       state.blockedReason = `wall clock exceeded (${cfg.wallClockMs}ms)`;
@@ -147,6 +152,7 @@ async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[]) {
       return await cfg.provider.complete(req);
     } catch (e) {
       attempt++;
+      console.error(`[adapter] model call failed (attempt ${attempt}/${cfg.maxRetries + 1}):`, e instanceof Error ? e.message : e);
       if (attempt > cfg.maxRetries) return null;
       await new Promise((r) => setTimeout(r, 1000 * attempt));
     }

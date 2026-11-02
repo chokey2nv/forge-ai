@@ -15,6 +15,11 @@ func CreateIntegrationWorktree(repoPath, baseCommit, branch string) (string, err
 		return "", err
 	}
 
+	// Drop stale worktree metadata before creating a new one.
+	if out, err := exec.Command("git", "-C", repoPath, "worktree", "prune").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git worktree prune: %s: %w", out, err)
+	}
+
 	// Create or checkout the branch in a new worktree.
 	out, err := exec.Command(
 		"git", "-C", repoPath,
@@ -26,26 +31,24 @@ func CreateIntegrationWorktree(repoPath, baseCommit, branch string) (string, err
 	return worktree, nil
 }
 
-// ProvisionChild creates a worktree for a child task, starting from the
-// parent's integration branch HEAD, installs dependencies, and starts a
-// network-isolated container.
+// ProvisionChild creates a workspace for a child task from the parent's
+// integration branch HEAD, installs dependencies, and starts a
+// network-isolated container. childBranch is unused: a child's work reaches
+// the parent as a diff, committed once on the integration branch.
 func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, childBranch, image, runID string, setupTimeoutSeconds int) (*Workspace, error) {
 	worktree, err := mktempDir("forge-child-")
 	if err != nil {
 		return nil, err
 	}
 
-	// Child worktree branches off the *current* integration branch HEAD.
-	out, err := exec.Command(
-		"git", "-C", parentRepoPath,
-		"worktree", "add", "-B", childBranch, worktree, integrationBranch,
-	).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("child worktree add: %s: %w", out, err)
+	// Starts from the *current* integration branch HEAD.
+	if err := cloneAt(ctx, parentRepoPath, worktree, integrationBranch); err != nil {
+		removeWorkspaceDir(ctx, parentRepoPath, worktree)
+		return nil, fmt.Errorf("child workspace: %w", err)
 	}
 
 	if err := installDeps(ctx, worktree, image, setupDuration(setupTimeoutSeconds)); err != nil {
-		_ = exec.Command("git", "-C", parentRepoPath, "worktree", "remove", "--force", worktree).Run()
+		removeWorkspaceDir(ctx, parentRepoPath, worktree)
 		return nil, err
 	}
 
@@ -61,7 +64,7 @@ func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, chil
 		image, "sleep", "infinity",
 	}
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
-		_ = exec.Command("git", "-C", parentRepoPath, "worktree", "remove", "--force", worktree).Run()
+		removeWorkspaceDir(ctx, parentRepoPath, worktree)
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
 	}
 
@@ -86,6 +89,7 @@ func ProvisionParentContainer(ctx context.Context, repoPath, integrationWorktree
 		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
 		image, "sleep", "infinity",
 	}
+	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
 	}

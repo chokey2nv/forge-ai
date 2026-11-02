@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -52,6 +53,9 @@ func (s *Scheduler) tick(ctx context.Context) {
 		if parent.ParentID != "" {
 			continue // only roots orchestrate
 		}
+		if s.blockParentIfChildBlocked(ctx, parent) {
+			continue
+		}
 		s.dispatchReadyChildren(ctx, parent)
 		s.checkParentIntegrationReady(ctx, parent)
 	}
@@ -77,6 +81,9 @@ func (s *Scheduler) dispatchReadyChildren(ctx context.Context, parent *domain.Ta
 		}
 		if err := s.dispatchChild(ctx, parent, child); err != nil {
 			log.Printf("scheduler: dispatch child %s: %v", child.ID, err)
+			if errors.Is(err, statemachine.ErrStaleTransition) {
+				continue // someone else moved it; not ours to block
+			}
 			_ = s.SM.Transition(ctx, child, domain.StatusBlocked, "dispatch failed: "+err.Error())
 		}
 	}
@@ -91,7 +98,56 @@ func depsSatisfied(child *domain.Task, statuses map[string]domain.TaskStatus) bo
 	return true
 }
 
+// blockParentIfChildBlocked moves the parent to BLOCKED once any child is
+// BLOCKED or REJECTED; otherwise the parent would wait on it forever.
+func (s *Scheduler) blockParentIfChildBlocked(ctx context.Context, parent *domain.Task) bool {
+	children, err := s.Tasks.ListChildren(ctx, parent.ID)
+	if err != nil {
+		return false
+	}
+	for _, c := range children {
+		if c.Status != domain.StatusBlocked && c.Status != domain.StatusRejected {
+			continue
+		}
+		reason := fmt.Sprintf("child %s is %s", c.ID, c.Status)
+		if err := s.SM.Transition(ctx, parent, domain.StatusBlocked, reason); err != nil {
+			log.Printf("scheduler: parent %s → BLOCKED: %v", parent.ID, err)
+			return false
+		}
+		_ = s.Events.Append(ctx, &domain.Event{
+			TaskID: parent.ID, Type: "parent.blocked", Reason: reason, At: time.Now().UTC(),
+		})
+		return true
+	}
+	return false
+}
+
 func (s *Scheduler) dispatchChild(ctx context.Context, parent, child *domain.Task) error {
+	if parent.IntegrationBranch == "" {
+		return fmt.Errorf("parent %s has no integration branch", parent.ID)
+	}
+
+	// Claim the child before any slow work. Provisioning can outlast a tick,
+	// and an unclaimed child would be provisioned again, destroying the
+	// running agent's worktree and container.
+	if err := s.SM.Transition(ctx, child, domain.StatusDispatched, "claimed by scheduler"); err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	runID := "run-" + child.ID
+	if _, err := s.Runs.Get(ctx, runID); err == nil {
+		return fmt.Errorf("run %s already exists for child %s", runID, child.ID)
+	}
+
+	def, ok := s.Registry.GetAgent(child.AssignedAgent)
+	if !ok {
+		return fmt.Errorf("agent %q not registered", child.AssignedAgent)
+	}
+	sysPrompt, tools, err := agent.Compose(def, s.Registry.GetSkill)
+	if err != nil {
+		return fmt.Errorf("compose: %w", err)
+	}
+
 	ws, err := workspace.ProvisionChild(
 		ctx, parent.RepoPath, parent.IntegrationBranch, child.Branch,
 		s.WorkerImage, child.ID, s.SetupTimeoutSeconds,
@@ -100,18 +156,6 @@ func (s *Scheduler) dispatchChild(ctx context.Context, parent, child *domain.Tas
 		return fmt.Errorf("provision: %w", err)
 	}
 
-	def, ok := s.Registry.GetAgent(child.AssignedAgent)
-	if !ok {
-		workspace.Cleanup(ctx, ws, parent.RepoPath)
-		return fmt.Errorf("agent %q not registered", child.AssignedAgent)
-	}
-	sysPrompt, tools, err := agent.Compose(def, s.Registry.GetSkill)
-	if err != nil {
-		workspace.Cleanup(ctx, ws, parent.RepoPath)
-		return fmt.Errorf("compose: %w", err)
-	}
-
-	runID := "run-" + child.ID
 	run := &domain.WorkflowRun{
 		ID:            runID,
 		TaskID:        child.ID,
@@ -133,6 +177,14 @@ func (s *Scheduler) dispatchChild(ctx context.Context, parent, child *domain.Tas
 		return err
 	}
 	_ = s.Tasks.UpdateLatestRun(ctx, child.ID, runID, time.Now().UTC())
+
+	// RUNNING before the adapter starts, so a fast completion callback never
+	// finds the child still DISPATCHED.
+	if err := s.SM.Transition(ctx, child, domain.StatusRunning, "dispatched to "+def.Name); err != nil {
+		_ = s.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+		workspace.Cleanup(ctx, ws, parent.RepoPath)
+		return err
+	}
 
 	toolSchemas := make([]agent.ToolSchema, len(tools))
 	for i, t := range tools {
@@ -165,10 +217,6 @@ func (s *Scheduler) dispatchChild(ctx context.Context, parent, child *domain.Tas
 		return err
 	}
 
-	if err := s.SM.Transition(ctx, child, domain.StatusDispatched, "dispatched to "+def.Name); err != nil {
-		return err
-	}
-	_ = s.SM.Transition(ctx, child, domain.StatusRunning, "agent started")
 	_ = s.Events.Append(ctx, &domain.Event{
 		TaskID: child.ID, RunID: runID,
 		Type: "child.dispatched", Reason: def.Name,

@@ -6,12 +6,19 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 )
 
-var ErrInvalidTransition = errors.New("invalid state transition")
+var (
+	ErrInvalidTransition = errors.New("invalid state transition")
+	// ErrStaleTransition means the task's stored status no longer matched the
+	// caller's view, so another writer already moved it.
+	ErrStaleTransition = errors.New("task status changed concurrently")
+)
 
 var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.StatusCreated: {
 		domain.StatusDecomposing, // head engineer dispatch (Phase 8)
 		domain.StatusPlanned,     // direct dispatch (backward compat)
+		domain.StatusDispatched,  // child claimed by the scheduler (Phase 8)
+		domain.StatusBlocked,     // dispatch failed before the child was claimed
 		domain.StatusRejected,
 	},
 	domain.StatusDecomposing: {

@@ -18,17 +18,22 @@ func (s *Service) Transition(ctx context.Context, task *domain.Task, to domain.T
 		return ErrInvalidTransition
 	}
 	from := task.Status
-	task.Status = to
-	task.UpdatedAt = time.Now().UTC()
-	if err := s.Tasks.UpdateStatus(ctx, task.ID, to, task.UpdatedAt); err != nil {
+	at := time.Now().UTC()
+	ok, err := s.Tasks.CompareAndSetStatus(ctx, task.ID, from, to, at)
+	if err != nil {
 		return err
 	}
+	if !ok {
+		return ErrStaleTransition
+	}
+	task.Status = to
+	task.UpdatedAt = at
 	return s.Events.Append(ctx, &domain.Event{
 		TaskID: task.ID,
 		Type:   "state.transition",
 		From:   string(from),
 		To:     string(to),
 		Reason: reason,
-		At:     task.UpdatedAt,
+		At:     at,
 	})
 }

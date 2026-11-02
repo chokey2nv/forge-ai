@@ -12,6 +12,9 @@ type TaskRepo interface {
 	Create(ctx context.Context, t *domain.Task) error
 	Get(ctx context.Context, id string) (*domain.Task, error)
 	UpdateStatus(ctx context.Context, id string, status domain.TaskStatus, at time.Time) error
+	// CompareAndSetStatus moves a task from `from` to `to` only if it is still
+	// in `from`. It reports false when another writer got there first.
+	CompareAndSetStatus(ctx context.Context, id string, from, to domain.TaskStatus, at time.Time) (bool, error)
 	UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error
 	List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
 
@@ -26,6 +29,7 @@ type RunRepo interface {
 	Get(ctx context.Context, id string) (*domain.WorkflowRun, error)
 	UpdateStatus(ctx context.Context, id string, status domain.RunStatus, reason string, at time.Time) error
 	SaveCheckpoint(ctx context.Context, id string, cp *domain.Checkpoint, at time.Time) error
+	Heartbeat(ctx context.Context, id string, at time.Time) error
 	MarkStale(ctx context.Context, before time.Time) ([]*domain.WorkflowRun, error)
 
 	// Phase 4 additions:

@@ -14,7 +14,7 @@ tools:
   - git_status
   - git_diff
 reviewers:
-  - planner
+  - reviewer
 ---
 
 You are the head engineer. You do NOT write code. Your output is a task graph.

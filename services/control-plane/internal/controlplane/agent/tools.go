@@ -37,6 +37,52 @@ var ToolCatalog = map[string]ToolSchema{
 			"required": []string{"tasks"},
 		},
 	},
+	"submit_plan": {
+		Name:        "submit_plan",
+		Description: "Submit the implementation plan. Call this when you have enough information about the codebase to describe the fix.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"steps": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"description": map[string]any{"type": "string"},
+							"files":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						},
+						"required": []string{"description"},
+					},
+				},
+				"risks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			},
+			"required": []string{"steps"},
+		},
+	},
+	"submit_review": {
+		Name:        "submit_review",
+		Description: "Submit the review verdict. Call this when you have completed the review.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"verdict": map[string]any{"type": "string", "enum": []string{"pass", "fail"}},
+				"defects": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"severity":    map[string]any{"type": "string", "enum": []string{"critical", "major", "minor"}},
+							"description": map[string]any{"type": "string"},
+							"location":    map[string]any{"type": "string"},
+						},
+						"required": []string{"severity", "description"},
+					},
+				},
+				"summary": map[string]any{"type": "string"},
+			},
+			"required": []string{"verdict", "summary"},
+		},
+	},
 	"read_file": {
 		Name:        "read_file",
 		Description: "Read a file from the workspace. Optional startLine/endLine for a range.",

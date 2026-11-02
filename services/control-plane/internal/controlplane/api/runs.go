@@ -88,11 +88,19 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cp := &domain.Checkpoint{
-		Messages: body.Messages, StepCount: body.StepCount, Usage: body.Usage,
-		Status: body.Status, WorkspaceDiff: body.WorkspaceDiff, SavedAt: time.Now().UTC(),
+	// The reviewer reports against the implementer's run ID; its conversation
+	// must not replace the implementer's checkpoint, which retries resume from.
+	if body.Role == "reviewer" {
+		_ = h.Runs.Heartbeat(ctx, runID, time.Now().UTC())
+	} else {
+		cp := &domain.Checkpoint{
+			Messages: body.Messages, StepCount: body.StepCount, Usage: body.Usage,
+			Status: body.Status, WorkspaceDiff: body.WorkspaceDiff, SavedAt: time.Now().UTC(),
+		}
+		if err := h.Runs.SaveCheckpoint(ctx, runID, cp, time.Now().UTC()); err != nil {
+			log.Printf("complete %s: save checkpoint failed (diff %d bytes): %v", runID, len(cp.WorkspaceDiff), err)
+		}
 	}
-	_ = h.Runs.SaveCheckpoint(ctx, runID, cp, time.Now().UTC())
 
 	switch body.Role {
 	case "planner":
@@ -111,22 +119,37 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, body.FinalMessage)
 		return
 	}
+	// Implementers have no submission tool, so a text-only "I'm blocked" reply
+	// arrives as status=complete. An unchanged workspace is never a success.
+	if strings.TrimSpace(body.WorkspaceDiff) == "" {
+		reason := "agent finished without changing the workspace: " + body.FinalMessage
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		return
+	}
 
 	_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunVerifying, "", time.Now().UTC())
 	if err := h.SM.Transition(ctx, task, domain.StatusVerifying, "agent reported complete"); err != nil {
 		log.Printf("transition to VERIFYING failed: %v", err)
 		return
 	}
-	go h.runVerificationAndReview(ctx, run, task)
+	// Detach from the callback request: its context ends when we return 204.
+	go h.runVerificationAndReview(context.WithoutCancel(ctx), run, task)
 }
 func (h *Handlers) handleAgentDone(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
 	// Determine which agent ran from the run's provenance tag or the body.
 	switch body.Role {
 	case "head-engineer":
+		// The decomposition workspace is read-only scratch; children get their own.
+		defer workspace.Cleanup(context.Background(), &workspace.Workspace{
+			WorktreePath: run.WorktreePath, ContainerName: run.ContainerName,
+		}, task.RepoPath)
 		if body.Status != "complete" || body.Submission == nil {
+			_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
 			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "head-engineer failed: "+body.FinalMessage)
 			return
 		}
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunComplete, "", time.Now().UTC())
 		h.handleHeadEngineerDone(run, task, body.Submission)
 	case "planner", "implementer", "reviewer", "qa-engineer", "backend-engineer", "frontend-engineer":
 		// Route based on task.ParentID (child) vs root task.
@@ -164,8 +187,7 @@ func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.Wor
 
 	// Verification passed → hand to reviewer (or straight to REVIEW_PENDING).
 	if !h.ReviewerEnabled {
-		_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunComplete, "", time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed")
+		h.passWithoutReviewer(ctx, run, task, attempt, "verification passed")
 		return
 	}
 
@@ -188,48 +210,118 @@ func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.Wor
 	// Look up the implementer's configured reviewer.
 	impl, ok := h.Registry.GetAgent(agentNameOf(run))
 	if !ok || len(impl.Reviewers) == 0 {
-		// No reviewer configured: proceed directly to REVIEW_PENDING (human reviews).
-		_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunComplete, "", time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; no agent reviewer configured")
+		h.passWithoutReviewer(ctx, run, task, attempt, "verification passed; no agent reviewer configured")
 		return
 	}
 
 	reviewerName := impl.Reviewers[0]
 	reviewer, ok := h.Registry.GetAgent(reviewerName)
 	if !ok {
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; configured reviewer not registered")
+		h.reviewerUnavailable(ctx, run, task, "configured reviewer "+reviewerName+" not registered")
 		return
 	}
 	systemPrompt, tools, err := agent.Compose(reviewer, h.Registry.GetSkill)
 	if err != nil {
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; reviewer compose failed")
+		h.reviewerUnavailable(ctx, run, task, "reviewer compose failed: "+err.Error())
 		return
 	}
 
-	_ = h.SM.Transition(ctx, task, domain.StatusAgentReview, "verification passed, invoking "+reviewerName)
-
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:         run.ID + "-rev" + fmt.Sprint(attempt),
-		CallbackRunID: run.ID,
-		ContainerName: run.ContainerName,
-		WorktreePath:  run.WorktreePath,
-		Role:          reviewer.Name,
-		Task:          buildReviewerPrompt(task, latest.LastCheckpoint.WorkspaceDiff),
-		SystemPrompt:  systemPrompt,
-		Tools:         tools,
-		CallbackURL:   h.SelfURL,
-		Provider:      latest.Provenance.Provider,
-		Model:         latest.Provenance.Model,
-		MaxSteps:      h.ReviewerMaxSteps,
-		MaxRetries:    task.Budget.MaxRetries,
-		WallClockMS:   h.ReviewerWallClockMS,
+		RunID:          run.ID + "-rev" + fmt.Sprint(attempt),
+		CallbackRunID:  run.ID,
+		ContainerName:  run.ContainerName,
+		WorktreePath:   run.WorktreePath,
+		Role:           reviewer.Name,
+		Task:           buildReviewerPrompt(task, latest.LastCheckpoint.WorkspaceDiff),
+		SystemPrompt:   systemPrompt,
+		Tools:          tools,
+		SubmissionTool: reviewer.SubmissionTool,
+		CallbackURL:    h.SelfURL,
+		Provider:       latest.Provenance.Provider,
+		Model:          latest.Provenance.Model,
+		MaxSteps:       h.ReviewerMaxSteps,
+		MaxRetries:     task.Budget.MaxRetries,
+		WallClockMS:    h.ReviewerWallClockMS,
 	})
 
 	if err != nil {
 		log.Printf("reviewer invocation failed: %v", err)
-		// Reviewer failure does not block — proceed to human review.
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "reviewer failed to start")
+		h.reviewerUnavailable(ctx, run, task, "reviewer failed to start: "+err.Error())
 	}
+}
+
+// passWithoutReviewer finishes a verified run that has no agent reviewer: a
+// child integrates into its parent, a root goes to human review.
+func (h *Handlers) passWithoutReviewer(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, attempt int, reason string) {
+	_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunComplete, "", time.Now().UTC())
+	if task.ParentID != "" {
+		h.integrateChild(ctx, run, task)
+		return
+	}
+	_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, reason)
+}
+
+// reviewerUnavailable handles a reviewer that is configured but cannot run.
+// A root still has a human reviewer, so it proceeds. A child is blocked: in
+// REVIEW_PENDING it would never reach INTEGRATED and its parent would wait forever.
+func (h *Handlers) reviewerUnavailable(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, reason string) {
+	if task.ParentID != "" {
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		return
+	}
+	_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; "+reason)
+}
+
+// integrateChild applies a finished child's diff to its parent's integration
+// branch and retires the child's workspace.
+func (h *Handlers) integrateChild(ctx context.Context, run *domain.WorkflowRun, task *domain.Task) {
+	latest, err := h.Runs.Get(ctx, run.ID)
+	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "get run for integration: "+err.Error())
+		return
+	}
+	diff := ""
+	if latest.LastCheckpoint != nil {
+		diff = latest.LastCheckpoint.WorkspaceDiff
+	}
+	if h.Integrator != nil {
+		if err := h.Integrator.Integrate(ctx, task, diff); err != nil {
+			log.Printf("integration failed for child %s: %v", task.ID, err)
+			// Integrator already transitioned child and parent to BLOCKED.
+		}
+	}
+	workspace.Cleanup(ctx, &workspace.Workspace{
+		WorktreePath:  latest.WorktreePath,
+		ContainerName: latest.ContainerName,
+	}, task.RepoPath)
+}
+
+// composeImplementer resolves the agent that produced run (e.g. a child's
+// assigned agent), falling back to the stock implementer.
+func (h *Handlers) composeImplementer(run *domain.WorkflowRun) (*agent.AgentDefinition, string, []agent.ToolSchema, error) {
+	def, ok := h.Registry.GetAgent(agentNameOf(run))
+	if !ok {
+		def, ok = h.Registry.GetAgent("implementer")
+	}
+	if !ok {
+		return nil, "", nil, fmt.Errorf("implementer agent not registered")
+	}
+	sysPrompt, tools, err := agent.Compose(def, h.Registry.GetSkill)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("compose %s: %w", def.Name, err)
+	}
+	return def, sysPrompt, tools, nil
+}
+
+func bulletList(ss []string) string {
+	var b strings.Builder
+	for _, s := range ss {
+		b.WriteString("- ")
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func agentNameOf(run *domain.WorkflowRun) string {
@@ -292,34 +384,25 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 
 	if verdict == "pass" {
 		if task.ParentID != "" {
-			// Child: integrate into parent.
-			latest, err := h.Runs.Get(ctx, run.ID)
-			if err != nil {
-				_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "get run for integration: "+err.Error())
-				return
-			}
-			diff := ""
-			if latest.LastCheckpoint != nil {
-				diff = latest.LastCheckpoint.WorkspaceDiff
-			}
-			if h.Integrator != nil {
-				if err := h.Integrator.Integrate(ctx, task, diff); err != nil {
-					log.Printf("integration failed for child %s: %v", task.ID, err)
-					// Integrator already transitioned child and parent to BLOCKED.
-				}
-			}
-			workspace.Cleanup(ctx, &workspace.Workspace{
-				WorktreePath:  run.WorktreePath,
-				ContainerName: run.ContainerName,
-			}, task.RepoPath)
+			h.integrateChild(ctx, run, task)
 			return
 		}
 		// Root: proceed to human review.
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunComplete, "", time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "reviewer passed: "+sub.Summary)
 		workspace.Cleanup(ctx, &workspace.Workspace{
 			WorktreePath:  run.WorktreePath,
 			ContainerName: run.ContainerName,
 		}, task.RepoPath)
+		return
+	}
+
+	// A parent's final review has no implementer to send back to.
+	if task.ParentID == "" && task.IntegrationBranch != "" {
+		reason := "final review failed: " + sub.Summary
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		workspace.Cleanup(ctx, &workspace.Workspace{ContainerName: run.ContainerName}, task.RepoPath)
 		return
 	}
 
@@ -378,18 +461,28 @@ func (h *Handlers) handlePlannerDone(run *domain.WorkflowRun, task *domain.Task,
 
 func (h *Handlers) invokeImplementer(run *domain.WorkflowRun, task *domain.Task, taskPrompt string) {
 	ctx := context.Background()
-	_, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:         run.ID + "-impl",
-		ContainerName: run.ContainerName,
-		WorktreePath:  run.WorktreePath,
-		Role:          "implementer",
-		Task:          taskPrompt,
-		CallbackURL:   h.SelfURL,
-		Provider:      run.Provenance.Provider,
-		Model:         run.Provenance.Model,
-		MaxSteps:      task.Budget.MaxSteps,
-		MaxRetries:    task.Budget.MaxRetries,
-		WallClockMS:   task.Budget.WallClockMS,
+	def, sysPrompt, tools, err := h.composeImplementer(run)
+	if err != nil {
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())
+		return
+	}
+	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
+		RunID:          run.ID + "-impl",
+		CallbackRunID:  run.ID,
+		ContainerName:  run.ContainerName,
+		WorktreePath:   run.WorktreePath,
+		Role:           def.Name,
+		Task:           taskPrompt,
+		SystemPrompt:   sysPrompt,
+		Tools:          tools,
+		SubmissionTool: def.SubmissionTool,
+		CallbackURL:    h.SelfURL,
+		Provider:       run.Provenance.Provider,
+		Model:          run.Provenance.Model,
+		MaxSteps:       task.Budget.MaxSteps,
+		MaxRetries:     task.Budget.MaxRetries,
+		WallClockMS:    task.Budget.WallClockMS,
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
@@ -406,7 +499,18 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 		return
 	}
 
-	// Fresh workspace (container running the previous attempt is retired on transition)
+	def, sysPrompt, tools, err := h.composeImplementer(latest)
+	if err != nil {
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())
+		return
+	}
+
+	// Retire the previous attempt's workspace; the checkpoint diff carries its work.
+	workspace.Cleanup(ctx, &workspace.Workspace{
+		WorktreePath: latest.WorktreePath, ContainerName: latest.ContainerName,
+	}, task.RepoPath)
+
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-ri", h.SetupTimeout)
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "provision: "+err.Error(), time.Now().UTC())
@@ -430,19 +534,23 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 	}
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:         run.ID + "-impl-r" + fmt.Sprint(time.Now().UnixNano()),
-		ContainerName: ws.ContainerName,
-		WorktreePath:  ws.WorktreePath,
-		Role:          "implementer",
-		Task:          task.Requirement,
-		CallbackURL:   h.SelfURL,
-		Provider:      latest.Provenance.Provider,
-		Model:         latest.Provenance.Model,
-		MaxSteps:      task.Budget.MaxSteps,
-		MaxRetries:    task.Budget.MaxRetries,
-		WallClockMS:   task.Budget.WallClockMS,
-		Checkpoint:    cp,
-		Diagnostics:   diagnostics,
+		RunID:          run.ID + "-impl-r" + fmt.Sprint(time.Now().UnixNano()),
+		CallbackRunID:  run.ID,
+		ContainerName:  ws.ContainerName,
+		WorktreePath:   ws.WorktreePath,
+		Role:           def.Name,
+		Task:           task.Requirement + "\n\nAcceptance:\n" + bulletList(task.Acceptance),
+		SystemPrompt:   sysPrompt,
+		Tools:          tools,
+		SubmissionTool: def.SubmissionTool,
+		CallbackURL:    h.SelfURL,
+		Provider:       latest.Provenance.Provider,
+		Model:          latest.Provenance.Model,
+		MaxSteps:       task.Budget.MaxSteps,
+		MaxRetries:     task.Budget.MaxRetries,
+		WallClockMS:    task.Budget.WallClockMS,
+		Checkpoint:     cp,
+		Diagnostics:    diagnostics,
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "adapter retry: "+err.Error(), time.Now().UTC())
@@ -558,6 +666,7 @@ func (h *Handlers) runVerification(run *domain.WorkflowRun, task *domain.Task) {
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         run.ID + "-r" + fmt.Sprint(attempt),
+		CallbackRunID: run.ID,
 		ContainerName: ws.ContainerName,
 		WorktreePath:  ws.WorktreePath,
 		Task:          task.Requirement,

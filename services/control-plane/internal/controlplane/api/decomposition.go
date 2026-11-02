@@ -69,7 +69,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		h.failDecomposition(task, "prepare integration branch: "+err.Error())
 		return
 	}
-	_ = h.Tasks.UpdateIntegration(ctx, task.ID, task.IntegrationWorktree, integrationBranch, task.BaseCommit, time.Now().UTC())
+	_ = h.Tasks.UpdateIntegration(ctx, task.ID, task.IntegrationWorktree, integrationBranch, task.IntegrationBaseCommit, time.Now().UTC())
 
 	// Materialize child tasks. Store a stable ID per submission ID for dependency resolution.
 	subIDToTaskID := make(map[string]string, len(sub.Tasks))
@@ -96,7 +96,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			DiffScope:     t.DiffScope,
 			DependsOn:     depTaskIDs,
 			Budget:        task.Budget,
-			Branch:        fmt.Sprintf("%s/%s", integrationBranch, t.ID),
+			Branch:        fmt.Sprintf("%s-%s", integrationBranch, t.ID),
 			CreatedAt:     time.Now().UTC(),
 			UpdatedAt:     time.Now().UTC(),
 		}
@@ -126,13 +126,19 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 
 // prepareIntegrationBranch creates the parent's integration worktree and branch.
 func (h *Handlers) prepareIntegrationBranch(task *domain.Task, branch string) error {
-	worktree, err := workspace.CreateIntegrationWorktree(task.RepoPath, task.BaseCommit, branch)
+	// Pin the base to a SHA: a symbolic base like "HEAD" would move with the
+	// integration branch, and the final review would diff HEAD..HEAD (empty).
+	base, err := workspace.ResolveCommit(context.Background(), task.RepoPath, task.BaseCommit)
+	if err != nil {
+		return err
+	}
+	worktree, err := workspace.CreateIntegrationWorktree(task.RepoPath, base, branch)
 	if err != nil {
 		return err
 	}
 	task.IntegrationWorktree = worktree
 	task.IntegrationBranch = branch
-	task.IntegrationBaseCommit = task.BaseCommit
+	task.IntegrationBaseCommit = base
 	return nil
 }
 

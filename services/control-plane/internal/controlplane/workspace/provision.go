@@ -54,13 +54,14 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	if err != nil {
 		return nil, err
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", worktreeDir, baseCommit).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("worktree: %s: %w", out, err)
+	if err := cloneAt(ctx, repoPath, worktreeDir, baseCommit); err != nil {
+		removeWorkspaceDir(ctx, repoPath, worktreeDir)
+		return nil, fmt.Errorf("workspace: %w", err)
 	}
 
 	// Setup container: has network, installs deps, then disappears.
 	if err := installDeps(ctx, worktreeDir, image, setupTimeout); err != nil {
-		_ = exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", worktreeDir).Run()
+		removeWorkspaceDir(ctx, repoPath, worktreeDir)
 		return nil, err
 	}
 
@@ -75,8 +76,9 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
 		image, "sleep", "infinity",
 	}
+	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
-		_ = exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", worktreeDir).Run()
+		removeWorkspaceDir(ctx, repoPath, worktreeDir)
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
 	}
 
@@ -116,10 +118,9 @@ func Provision(ctx context.Context, repoPath, baseCommit, image, runID string) (
 		return nil, err
 	}
 
-	// git worktree add
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", worktreeDir, baseCommit)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("worktree: %s: %w", out, err)
+	if err := cloneAt(ctx, repoPath, worktreeDir, baseCommit); err != nil {
+		removeWorkspaceDir(ctx, repoPath, worktreeDir)
+		return nil, fmt.Errorf("workspace: %w", err)
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
@@ -134,6 +135,7 @@ func Provision(ctx context.Context, repoPath, baseCommit, image, runID string) (
 		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
 		image, "sleep", "infinity",
 	}
+	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
 	}
@@ -155,5 +157,5 @@ func ApplyDiff(ctx context.Context, worktreePath, diff string) error {
 
 func Cleanup(ctx context.Context, ws *Workspace, repoPath string) {
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", ws.ContainerName).Run()
-	_ = exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", ws.WorktreePath).Run()
+	removeWorkspaceDir(ctx, repoPath, ws.WorktreePath)
 }

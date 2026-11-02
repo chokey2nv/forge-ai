@@ -36,6 +36,16 @@ func (r *TaskRepo) UpdateStatus(ctx context.Context, id string, status domain.Ta
 	return err
 }
 
+func (r *TaskRepo) CompareAndSetStatus(ctx context.Context, id string, from, to domain.TaskStatus, at time.Time) (bool, error) {
+	res, err := r.coll.UpdateOne(ctx,
+		bson.M{"_id": id, "status": from},
+		bson.M{"$set": bson.M{"status": to, "updatedAt": at}})
+	if err != nil {
+		return false, err
+	}
+	return res.MatchedCount == 1, nil
+}
+
 func (r *TaskRepo) UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error {
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
 		"latestRunId": runID, "updatedAt": at,

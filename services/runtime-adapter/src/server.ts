@@ -136,6 +136,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
         const diff = await getWorkspaceDiff(body.containerName);
         const callbackId = body.callbackRunId ?? body.runId;
         await postCallback(body.callbackUrl + `/runs/${callbackId}/checkpoint`, {
+          role,
           messages: state.messages,
           stepCount: state.stepCount,
           usage: state.usage,
@@ -159,6 +160,8 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
     });
   })().catch((err) => {
     console.error(`[adapter] run ${body.runId} failed during completion:`, err);
+  }).finally(() => {
+    active.delete(body.runId);
   });
 });
 

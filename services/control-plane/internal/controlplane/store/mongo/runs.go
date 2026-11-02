@@ -53,6 +53,15 @@ func (r *RunRepo) SaveCheckpoint(ctx context.Context, id string, cp *domain.Chec
 	return err
 }
 
+// Heartbeat refreshes liveness without touching the stored checkpoint.
+func (r *RunRepo) Heartbeat(ctx context.Context, id string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"lastHeartbeat": at,
+		"updatedAt":     at,
+	}})
+	return err
+}
+
 func (r *RunRepo) MarkStale(ctx context.Context, before time.Time) ([]*domain.WorkflowRun, error) {
 	// Find runs that are RUNNING with heartbeat older than cutoff.
 	cur, err := r.coll.Find(ctx, bson.M{

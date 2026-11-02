@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -12,11 +13,15 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	runID := r.PathValue("id")
 
-	var cp domain.Checkpoint
-	if err := json.NewDecoder(r.Body).Decode(&cp); err != nil {
+	var body struct {
+		domain.Checkpoint
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	cp := body.Checkpoint
 	cp.SavedAt = time.Now().UTC()
 
 	run, err := h.Runs.Get(ctx, runID)
@@ -32,7 +37,14 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunRunning, "", time.Now().UTC())
 	}
 
-	_ = h.Runs.SaveCheckpoint(ctx, runID, &cp, time.Now().UTC())
+	// Reviewers report against the implementer's run; keep its checkpoint.
+	if body.Role == "reviewer" {
+		_ = h.Runs.Heartbeat(ctx, runID, time.Now().UTC())
+	} else {
+		if err := h.Runs.SaveCheckpoint(ctx, runID, &cp, time.Now().UTC()); err != nil {
+			log.Printf("checkpoint %s: save failed (diff %d bytes): %v", runID, len(cp.WorkspaceDiff), err)
+		}
+	}
 	_ = h.Events.Append(ctx, &domain.Event{
 		RunID: runID, Type: "checkpoint",
 		Payload: map[string]any{"stepCount": cp.StepCount},

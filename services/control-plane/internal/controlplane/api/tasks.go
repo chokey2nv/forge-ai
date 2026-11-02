@@ -110,6 +110,7 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	sysPrompt, tools, err := agent.Compose(he, h.Registry.GetSkill)
 	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "compose head-engineer: "+err.Error())
 		http.Error(w, "compose head-engineer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -118,6 +119,7 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	runID := "run-" + uuid.NewString()[:8]
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
 	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "provision head-engineer: "+err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -140,6 +142,7 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.Runs.Create(ctx, run); err != nil {
 		workspace.Cleanup(ctx, ws, task.RepoPath)
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "create head-engineer run: "+err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -164,16 +167,15 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
+		workspace.Cleanup(ctx, ws, task.RepoPath)
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "head-engineer dispatch failed")
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if err := h.SM.Transition(ctx, task, domain.StatusDispatched, "adapter accepted"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDispatched)})
+	// The task stays DECOMPOSING until handleHeadEngineerDone has created the
+	// children and the integration branch; only then may the scheduler see it.
+	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDecomposing)})
 }
 
 func buildHeadEngineerTask(task *domain.Task, agents []*agent.AgentDefinition) string {

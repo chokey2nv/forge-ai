@@ -61,6 +61,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:         run.ID + "-r",
+		CallbackRunID: run.ID,
 		ContainerName: ws.ContainerName,
 		WorktreePath:  ws.WorktreePath,
 		Task:          task.Requirement,

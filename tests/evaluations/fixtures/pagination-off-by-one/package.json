@@ -1,9 +1,9 @@
 {
     "name": "pagination-off-by-one",
     "private": true,
-    "type": "module",
+    "type": "commonjs",
     "scripts": {
-        "test": "vitest run"
+        "test": "node tests/paginate.test.js"
     },
     "devDependencies": {
         "vitest": "^2.1.0",
