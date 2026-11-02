@@ -46,6 +46,8 @@ export interface Task {
   title?: string;
   assignedAgent?: string;
   dependsOn?: string[];
+  /** Added by the platform: overlapping or undeclared diffScope, so these never run in parallel. */
+  implicitDependsOn?: string[];
   integrationBranch?: string;
 }
 

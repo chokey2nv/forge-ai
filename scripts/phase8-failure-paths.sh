@@ -19,6 +19,8 @@
 #   parallel-siblings  two independent subtasks run at the same time and both integrate (Phase 10)
 #   diamond            two run in parallel; a third starts only after both integrated
 #   concurrency-cap    MAX_CONCURRENT_RUNS=1: the same two subtasks never overlap
+#   overlap-serialized one subtask declares no diffScope, so it waits for its sibling
+#   cycle-rejected     a cyclic task graph blocks the parent at decomposition
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -32,7 +34,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -331,6 +333,11 @@ run_final_review_escalates() {
 at() {
   mongosh --quiet "$DB" --eval "const e = db.events.find({taskId:'$1', type:'state.transition', from:'$2', to:'$3'}).sort({at:1}).limit(1).toArray()[0]; print(e ? e.at.getTime() : '')"
 }
+event_count() { # task type reason-substring -> number of matching events
+  local q
+  q=$(printf 'print(db.events.countDocuments({taskId: "%s", type: "%s", reason: {$regex: "%s"}}))' "$1" "$2" "$3")
+  mongosh --quiet "$DB" --eval "$q"
+}
 child_titled() { curl -sf "$CP/tasks/$1/children" | jq -r --arg t "$2" '.[] | select(.title == $t) | .id'; }
 run_base() { curl -sf "$CP/runs/run-$1" | jq -r .baseCommit; }
 
@@ -355,7 +362,13 @@ run_parallel() { # siblings | diamond | cap
   ca=$(at "$a" CREATED DISPATCHED); ia=$(at "$a" AGENT_REVIEW INTEGRATED)
   cb=$(at "$b" CREATED DISPATCHED); ib=$(at "$b" AGENT_REVIEW INTEGRATED)
   echo "      agent windows: taxFor ${ra}-${va}, formatPrice ${rb}-${vb}"
-  if [ "$1" = cap ]; then
+  if [ "$1" = serialized ]; then
+    check "the subtask without a scope waits for its sibling (implicit dependency)" \
+      "$(curl -sf "$CP/tasks/$b" | jq -e --arg a "$a" '.implicitDependsOn == [$a] and ((.dependsOn // []) | length == 0)' >/dev/null; echo $?)"
+    check "the reason is recorded" "$(event_count "$b" child.serialized "no diffScope" | grep -qx 1; echo $?)"
+    check "they never overlap" \
+      "$([ -n "$ia" ] && [ -n "$cb" ] && [ "$cb" -ge "$ia" ]; echo $?)"
+  elif [ "$1" = cap ]; then
     check "with MAX_CONCURRENT_RUNS=1 the subtasks never overlap" \
       "$([ -n "$ia" ] && [ -n "$ib" ] && { [ "$cb" -ge "$ia" ] || [ "$ca" -ge "$ib" ]; }; echo $?)"
   else
@@ -389,6 +402,14 @@ for SC in "${SCENARIOS[@]}"; do
     parallel-siblings) run_parallel siblings ;;
     diamond) run_parallel diamond ;;
     concurrency-cap) stop_cp; start_cp MAX_CONCURRENT_RUNS=1; run_parallel cap; stop_cp; start_cp ;;
+    overlap-serialized) run_parallel serialized ;;
+    cycle-rejected)
+      repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
+      final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter
+      check "cyclic graph blocks the parent at decomposition ($final)" \
+        "$([ "$final" = BLOCKED ] && has_reason "$task" "dependency cycle: t1 -> t2 -> t1"; echo $?)"
+      check "no subtasks were created" "$([ "$(curl -sf "$CP/tasks/$task/children" | jq length)" = 0 ]; echo $?)"
+      ;;
     *) run_scenario ;;
   esac
 done

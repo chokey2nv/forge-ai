@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
@@ -68,6 +69,17 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			}
 		}
 	}
+	graph := make([]graphTask, len(sub.Tasks))
+	for i, t := range sub.Tasks {
+		graph[i] = graphTask{ID: t.ID, DependsOn: t.DependsOn, Scope: t.DiffScope}
+	}
+	if cycle := findCycle(graph); cycle != nil {
+		h.failDecomposition(task, "dependency cycle: "+strings.Join(cycle, " -> "))
+		return
+	}
+	// Independent tasks whose scopes overlap (or are undeclared) run one after
+	// another; only provably disjoint work runs in parallel.
+	implicit := serializeOverlaps(graph)
 
 	// Prepare parent's integration branch.
 	integrationBranch := fmt.Sprintf("forge/%s", task.ID)
@@ -83,28 +95,37 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		childID := "task-" + uuid.NewString()[:8]
 		subIDToTaskID[t.ID] = childID
 	}
-	for _, t := range sub.Tasks {
+	for i, t := range sub.Tasks {
 		depTaskIDs := make([]string, 0, len(t.DependsOn))
 		for _, subID := range t.DependsOn {
 			depTaskIDs = append(depTaskIDs, subIDToTaskID[subID])
 		}
+		var implicitIDs, implicitWhy []string
+		for _, d := range implicit {
+			if d.Of == i {
+				on := sub.Tasks[d.On]
+				implicitIDs = append(implicitIDs, subIDToTaskID[on.ID])
+				implicitWhy = append(implicitWhy, fmt.Sprintf("waits for %q: %s", on.Title, d.Reason))
+			}
+		}
 
 		child := &domain.Task{
-			ID:            subIDToTaskID[t.ID],
-			ParentID:      task.ID,
-			Title:         t.Title,
-			AssignedAgent: t.AssignedAgent,
-			Requirement:   t.Title + "\n\n" + t.Rationale,
-			Acceptance:    t.Acceptance,
-			RepoPath:      task.RepoPath,
-			BaseCommit:    integrationBranch, // children work off the integration branch
-			Status:        domain.StatusCreated,
-			DiffScope:     t.DiffScope,
-			DependsOn:     depTaskIDs,
-			Budget:        task.Budget,
-			Branch:        fmt.Sprintf("%s-%s", integrationBranch, t.ID),
-			CreatedAt:     time.Now().UTC(),
-			UpdatedAt:     time.Now().UTC(),
+			ID:                subIDToTaskID[t.ID],
+			ParentID:          task.ID,
+			Title:             t.Title,
+			AssignedAgent:     t.AssignedAgent,
+			Requirement:       t.Title + "\n\n" + t.Rationale,
+			Acceptance:        t.Acceptance,
+			RepoPath:          task.RepoPath,
+			BaseCommit:        integrationBranch, // children work off the integration branch
+			Status:            domain.StatusCreated,
+			DiffScope:         t.DiffScope,
+			DependsOn:         depTaskIDs,
+			ImplicitDependsOn: implicitIDs,
+			Budget:            task.Budget,
+			Branch:            fmt.Sprintf("%s-%s", integrationBranch, t.ID),
+			CreatedAt:         time.Now().UTC(),
+			UpdatedAt:         time.Now().UTC(),
 		}
 		if err := h.Tasks.Create(ctx, child); err != nil {
 			h.failDecomposition(task, "create child: "+err.Error())
@@ -116,6 +137,11 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			Reason: t.Title,
 			At:     time.Now().UTC(),
 		})
+		for _, why := range implicitWhy {
+			_ = h.Events.Append(ctx, &domain.Event{
+				TaskID: child.ID, RunID: run.ID, Type: "child.serialized", Reason: why, At: time.Now().UTC(),
+			})
+		}
 	}
 
 	// Parent is now DISPATCHED; children will be picked up by the scheduler.

@@ -571,6 +571,8 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `parallel-siblings` | Two independent subtasks (fixture `parallel-features`) | Their agents run at the same time from the same integration commit; both integrate (one commit each); the integrated branch passes `node --test` on the host |
 | `diamond` | Two in parallel, a third depending on both | The third is claimed only after both integrated and starts from a commit containing both |
 | `concurrency-cap` | The same two with `MAX_CONCURRENT_RUNS=1` (the harness restarts its control plane) | They never overlap |
+| `overlap-serialized` | One of the two declares no `diffScope` | It gets an implicit dependency on its sibling (`implicitDependsOn`, `child.serialized` event "no diffScope declared"), and they never overlap |
+| `cycle-rejected` | The head engineer submits a dependency cycle | Parent `BLOCKED` at decomposition ("dependency cycle: t1 -> t2 -> t1"); no subtasks created |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
@@ -691,6 +693,8 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Parent `BLOCKED`: "child … is BLOCKED" | Look at that child's transitions (§6.1); the parent blocks as soon as any child does |
 | Task `ESCALATED`: "review rejected the change in N round(s)" or "final review rejected" | Reviewers kept rejecting. Read their verdicts and decide (§6.6); the parent waits meanwhile |
 | Review verdict `error`: "reviewer timed out after …" | The reviewer never reported (adapter died or the model call hung). Raise `REVIEWER_TIMEOUT` for slow models; the round already continued |
+| Parent `BLOCKED`: "decomposition: dependency cycle: …" | The head engineer's `dependsOn` edges form a loop; re-dispatch |
+| Subtasks you expected in parallel run one after another | They declare overlapping or no `diffScope`. See the `child.serialized` event on the waiting subtask |
 | Reload fails: "lists reviewer …, which is not a review agent" | Every `reviewers` entry must be an agent with `submission_tool: submit_review`, and not the agent itself |
 | Log: `checkpoint … save failed (diff N bytes)` | Diff over Mongo's 16MB limit — usually untracked build output. `node_modules/` and lockfiles are excluded automatically; add others to the repo's `.gitignore` |
 | `fatal: not a git repository` inside a container | Workspace created by an old build as a `git worktree`. Current builds use standalone clones; restart the CP |
@@ -723,7 +727,7 @@ If the CP log shows no `checkpoint` events during a run, the callback URL is wro
 
 ### 8.0 Concurrency
 
-Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from.
+Only subtasks with declared, non-overlapping `diffScope`s run in parallel. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from.
 
 Run **one control plane per database**: the integration lock is in-process. The failure-path harness uses its own database, so it can run beside your dev control plane.
 

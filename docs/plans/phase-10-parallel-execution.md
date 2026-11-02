@@ -1,6 +1,6 @@
 # Phase 10 — Parallel execution
 
-**Status:** 10.1 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
+**Status:** 10.1–10.2 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -69,7 +69,7 @@ Each ends with its tests passing and a commit.
 | # | Scope | Exit check |
 |---|---|---|
 | 10.1 ✅ | `PROVISIONING` status (dispatch, retry and resume); provisioning off the tick; `MAX_CONCURRENT_RUNS`; base commit as SHA; per-parent integration lock with `--3way`; scripted provider turn queues keyed by task | Unit tests (race detector): tick never waits on provisioning, runs are `PROVISIONING` meanwhile, cap honoured, base pinned, dependents wait; `--3way` on a real repo merges, conflicts cleanly. Scripted `parallel-siblings`, `diamond`, `concurrency-cap` pass on new fixture `parallel-features`; all 13 scenarios pass. Claude slices not re-run |
-| 10.2 | Scope-overlap serialization with `implicitDependsOn`; integration conflict → one rework → block | Unit tests for overlap rules; scripted `overlap-serialized`; integration unit test on a real repo for `--3way` success and conflict |
+| 10.2 ✅ | Scope-overlap serialization with `implicitDependsOn` and a `child.serialized` event per reason; dependency cycles rejected at decomposition; console shows implicit dependencies. **Changed from the plan:** an integration conflict blocks (with a clean reset, from 10.1) instead of triggering a rework; see below | Unit tests for pattern overlap, serialization, cycle detection, and the scheduler honouring implicit dependencies; scripted `overlap-serialized` and `cycle-rejected`; all 15 scenarios pass |
 | 10.3 | Parallel reviewers | Scripted: reviewers start before the first verdict arrives; `split-verdict`, `reviewer-timeout`, escalation scenarios still pass |
 | 10.4 | Three-child Claude slice (two independent + one dependent) with wall-time report; console concurrency view; docs | Slice passes with Claude and its wall time beats the sum of its children's; runbook §5/§9 updated |
 
@@ -79,6 +79,10 @@ Each ends with its tests passing and a commit.
 - **Model rate limits:** parallel agents and reviewers multiply concurrent API calls. The adapter's retry/backoff applies; a provider 429 surfaces as a model-call error.
 - **Determinism in tests:** scripted turns keyed by task keep scenarios reproducible; timing assertions use run timestamps with generous margins.
 - **3-way merges that apply but are wrong:** a clean textual merge can still break behaviour. Combined verification and the final review already run on the integrated branch, which is the backstop.
+
+## Decision change in 10.2: no automatic conflict rework
+
+Decision 3 planned one automatic rework when a child's diff conflicts at integration. With overlap serialization in place, two children run in parallel only when their declared scopes are disjoint, and the diff-scope gate rejects any change outside a child's scope. Siblings therefore never change the same file, and the 3-way apply cannot hit a genuine conflict from parallel work; nothing in the pipeline can produce the case the rework would handle, so it could not be tested end to end. A conflict, should one arise from something unforeseen, resets the integration worktree and blocks the child and parent with git's output, which is what 10.1 already does. Revisit if conflicts are ever observed.
 
 ## Follow-ups
 

@@ -147,7 +147,7 @@ func (s *Scheduler) dispatchReadyChildren(ctx context.Context, parent *domain.Ta
 }
 
 func depsSatisfied(child *domain.Task, statuses map[string]domain.TaskStatus) bool {
-	for _, dep := range child.DependsOn {
+	for _, dep := range append(append([]string{}, child.DependsOn...), child.ImplicitDependsOn...) {
 		if statuses[dep] != domain.StatusIntegrated {
 			return false
 		}

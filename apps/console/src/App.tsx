@@ -292,7 +292,10 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
                   <td><StatusBadge status={c.status} /></td>
                   <td>{c.title ?? c.requirement.slice(0, 100)}</td>
                   <td><code>{c.assignedAgent}</code></td>
-                  <td>{c.dependsOn?.length ? c.dependsOn.map(titleOf).join(", ") : "—"}</td>
+                  <td>
+                    {[...(c.dependsOn ?? []).map(titleOf), ...(c.implicitDependsOn ?? []).map((d) => `${titleOf(d)} (overlapping scope)`)]
+                      .join(", ") || "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>

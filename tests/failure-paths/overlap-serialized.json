@@ -1,0 +1,161 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "Add taxFor",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "Add taxFor is implemented and tested",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/tax.js",
+                  "tests/tax.test.js"
+                ],
+                "rationale": "Separate module."
+              },
+              {
+                "id": "t2",
+                "title": "Add formatPrice",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "Add formatPrice is implemented and tested",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [],
+                "rationale": "Separate module."
+              }
+            ],
+            "notes": "Independent modules in parallel."
+          }
+        }
+      ]
+    }
+  ],
+  "implementer": {
+    "Add taxFor": [
+      {
+        "delayMs": 4000,
+        "toolCalls": [
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "src/tax.js",
+              "content": "function taxFor(amount, rate) {\n  return Math.round(amount * rate) / 100;\n}\n\nmodule.exports = { taxFor };\n"
+            }
+          },
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "tests/tax.test.js",
+              "content": "const test = require(\"node:test\");\nconst assert = require(\"node:assert\");\nconst { taxFor } = require(\"../src/tax.js\");\n\ntest(\"8% of 50 is 4\", () => assert.strictEqual(taxFor(50, 8), 4));\n"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Added taxFor."
+      }
+    ],
+    "Add formatPrice": [
+      {
+        "delayMs": 4000,
+        "toolCalls": [
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "src/format.js",
+              "content": "function formatPrice(n) {\n  return \"$\" + n.toFixed(2);\n}\n\nmodule.exports = { formatPrice };\n"
+            }
+          },
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "tests/format.test.js",
+              "content": "const test = require(\"node:test\");\nconst assert = require(\"node:assert\");\nconst { formatPrice } = require(\"../src/format.js\");\n\ntest(\"formats cents\", () => assert.strictEqual(formatPrice(4), \"$4.00\"));\n"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Added formatPrice."
+      }
+    ]
+  },
+  "reviewer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    }
+  ]
+}

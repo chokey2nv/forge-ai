@@ -297,3 +297,18 @@ func TestDependentWaitsForItsDependencies(t *testing.T) {
 		}
 	}
 }
+
+func TestImplicitDependencyIsHonoured(t *testing.T) {
+	b := child("b")
+	b.ImplicitDependsOn = []string{"a"}
+	h := newParallelHarness(t, 0, child("a"), b)
+	close(h.release)
+	h.s.tick(context.Background())
+
+	if got := h.tasks.status("b"); got != domain.StatusCreated {
+		t.Errorf("b overlaps a and must wait for it; b = %s", got)
+	}
+	if got := h.tasks.status("a"); got == domain.StatusCreated {
+		t.Error("a was not dispatched")
+	}
+}

@@ -52,10 +52,15 @@ type Task struct {
 	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 	LatestRunID string     `bson:"latestRunId,omitempty" json:"latestRunId,omitempty"`
 
-	ParentID      string   `bson:"parentId,omitempty" json:"parentId,omitempty"`
-	DependsOn     []string `bson:"dependsOn,omitempty" json:"dependsOn,omitempty"`
-	AssignedAgent string   `bson:"assignedAgent,omitempty" json:"assignedAgent,omitempty"`
-	Title         string   `bson:"title,omitempty" json:"title,omitempty"`
+	ParentID  string   `bson:"parentId,omitempty" json:"parentId,omitempty"`
+	DependsOn []string `bson:"dependsOn,omitempty" json:"dependsOn,omitempty"`
+	// ImplicitDependsOn: added by the platform when this task's diffScope
+	// overlaps an earlier independent task's (or either is undeclared), so
+	// the two never run in parallel. Kept apart from the head engineer's
+	// DependsOn so its intent stays visible.
+	ImplicitDependsOn []string `bson:"implicitDependsOn,omitempty" json:"implicitDependsOn,omitempty"`
+	AssignedAgent     string   `bson:"assignedAgent,omitempty" json:"assignedAgent,omitempty"`
+	Title             string   `bson:"title,omitempty" json:"title,omitempty"`
 
 	// Child task only: which branch it works on. Parent tasks have a branch too.
 	Branch string `bson:"branch,omitempty" json:"branch,omitempty"`
