@@ -156,3 +156,26 @@ func (r *RunRepo) ListByTask(ctx context.Context, taskID string) ([]*domain.Work
 func uuidShort() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
+
+func (r *RunRepo) ListUnreleasedWorkspaces(ctx context.Context) ([]*domain.WorkflowRun, error) {
+	cur, err := r.coll.Find(ctx, bson.M{
+		"containerName":       bson.M{"$nin": bson.A{"", nil}},
+		"workspaceReleasedAt": bson.M{"$exists": false},
+	}, options.Find().SetProjection(bson.M{"lastCheckpoint": 0}))
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.WorkflowRun
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *RunRepo) MarkWorkspaceReleased(ctx context.Context, id string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"workspaceReleasedAt": at,
+		"updatedAt":           at,
+	}})
+	return err
+}

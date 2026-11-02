@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Prefixes of the per-run directories this package creates and may delete.
@@ -86,6 +87,38 @@ func removeWorkspaceDir(ctx context.Context, repoPath, dir string) {
 		return
 	}
 	_ = os.RemoveAll(dir)
+}
+
+// WorkspaceDir is a per-run workspace directory found on disk.
+type WorkspaceDir struct {
+	Path    string
+	ModTime time.Time
+}
+
+// ListWorkspaceDirs returns the per-run workspace directories in the temp dir.
+func ListWorkspaceDirs() ([]WorkspaceDir, error) {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return nil, err
+	}
+	var out []WorkspaceDir
+	for _, e := range entries {
+		path := filepath.Join(os.TempDir(), e.Name())
+		if !e.IsDir() || !isRemovableWorkspace(path) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, WorkspaceDir{Path: path, ModTime: info.ModTime()})
+	}
+	return out, nil
+}
+
+// RemoveOrphanDir deletes a workspace directory no run refers to any more.
+func RemoveOrphanDir(ctx context.Context, dir string) {
+	removeWorkspaceDir(ctx, "", dir)
 }
 
 func isRemovableWorkspace(dir string) bool {

@@ -40,6 +40,10 @@ type RunRepo interface {
 	SaveReviewVerdict(ctx context.Context, id, verdict string, at time.Time) error
 
 	ListByTask(ctx context.Context, taskID string) ([]*domain.WorkflowRun, error)
+
+	// Workspace lifecycle: runs whose container/workspace have not been removed yet.
+	ListUnreleasedWorkspaces(ctx context.Context) ([]*domain.WorkflowRun, error)
+	MarkWorkspaceReleased(ctx context.Context, id string, at time.Time) error
 }
 
 type EventRepo interface {

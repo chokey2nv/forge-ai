@@ -171,6 +171,11 @@ func main() {
 	watcher := runner.NewWatcher(runRepo, taskRepo, sm, staleAfter)
 	go watcher.Run(ctx)
 
+	// ---- reaper: removes containers/workspaces nothing can use any more ----
+	reaper := runner.NewReaper(runRepo, taskRepo,
+		parseDuration(envOr("ORPHAN_CONTAINER_GRACE", "10m"), 10*time.Minute))
+	go reaper.Run(ctx)
+
 	// ---- server ----
 	srv := &http.Server{Addr: addr, Handler: api.WithCORS(mux)}
 	go func() {

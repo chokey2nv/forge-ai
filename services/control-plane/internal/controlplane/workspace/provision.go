@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -69,7 +70,7 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", "forge.run=" + runID,
+		"--label", LabelRun + "=" + runID,
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", worktreeDir + ":/workspace:rw",
@@ -89,7 +90,12 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Killing the docker CLI on timeout or shutdown does not stop the
+	// container, so name it and remove it explicitly on any failure.
+	name := "forge-setup-" + filepath.Base(worktreePath)
 	out, err := exec.CommandContext(sctx, "docker", "run", "--rm",
+		"--name", name,
+		"--label", LabelRun+"=setup-"+filepath.Base(worktreePath),
 		"--workdir", "/workspace",
 		"-v", worktreePath+":/workspace:rw",
 		"--network=bridge",
@@ -100,6 +106,7 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 		`,
 	).CombinedOutput()
 	if err != nil {
+		RemoveContainer(context.WithoutCancel(ctx), name)
 		return fmt.Errorf("dependency install: %s: %w", out, err)
 	}
 	return nil
@@ -128,7 +135,7 @@ func Provision(ctx context.Context, repoPath, baseCommit, image, runID string) (
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", "forge.run=" + runID,
+		"--label", LabelRun + "=" + runID,
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", worktreeDir + ":/workspace:rw",
@@ -156,6 +163,6 @@ func ApplyDiff(ctx context.Context, worktreePath, diff string) error {
 }
 
 func Cleanup(ctx context.Context, ws *Workspace, repoPath string) {
-	_ = exec.CommandContext(ctx, "docker", "rm", "-f", ws.ContainerName).Run()
+	RemoveContainer(ctx, ws.ContainerName)
 	removeWorkspaceDir(ctx, repoPath, ws.WorktreePath)
 }

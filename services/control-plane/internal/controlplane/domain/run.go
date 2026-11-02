@@ -32,6 +32,10 @@ type WorkflowRun struct {
 	CreatedAt           time.Time   `bson:"createdAt" json:"createdAt"`
 	UpdatedAt           time.Time   `bson:"updatedAt" json:"updatedAt"`
 
+	// WorkspaceReleasedAt is set once the run's container and workspace
+	// directory have been removed.
+	WorkspaceReleasedAt *time.Time `bson:"workspaceReleasedAt,omitempty" json:"workspaceReleasedAt,omitempty"`
+
 	Plan            *Plan  `bson:"plan,omitempty" json:"plan,omitempty"`
 	ReviewerVerdict string `bson:"reviewerVerdict,omitempty" json:"reviewerVerdict,omitempty"` // "pass" | "fail" | ""
 }

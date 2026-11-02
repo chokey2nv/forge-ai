@@ -56,7 +56,7 @@ func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, chil
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", "forge.run=" + runID,
+		"--label", LabelRun + "=" + runID,
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", worktree + ":/workspace:rw",
@@ -82,7 +82,7 @@ func ProvisionParentContainer(ctx context.Context, repoPath, integrationWorktree
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", "forge.run=" + runID,
+		"--label", LabelRun + "=" + runID,
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", integrationWorktree + ":/workspace:rw",
