@@ -44,10 +44,14 @@ phase4-blocked-demo:
 phase5-demo:
 	bash scripts/phase5-demo.sh
 
-.PHONY: phase8-vertical-slice-demo
+.PHONY: phase8-vertical-slice-demo phase8-two-child-slice
 
 phase8-vertical-slice-demo:
 	bash scripts/phase8-vertical-slice-demo.sh
+
+# Two dependent children integrating onto one parent branch.
+phase8-two-child-slice:
+	bash scripts/phase8-two-child-slice.sh
 
 .PHONY: eval console-install console-dev
 

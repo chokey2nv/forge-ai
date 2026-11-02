@@ -38,7 +38,7 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reviewers report against the implementer's run; keep its checkpoint.
-	if body.Role == "reviewer" {
+	if h.completionKindOf(body.Role) == kindReview {
 		_ = h.Runs.Heartbeat(ctx, runID, time.Now().UTC())
 	} else {
 		if err := h.Runs.SaveCheckpoint(ctx, runID, &cp, time.Now().UTC()); err != nil {

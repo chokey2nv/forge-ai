@@ -53,6 +53,12 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			h.failDecomposition(task, fmt.Sprintf("task %q assigned to unknown agent %q", t.ID, t.AssignedAgent))
 			return
 		}
+		if kind := h.completionKindOf(t.AssignedAgent); kind != kindWork {
+			h.failDecomposition(task, fmt.Sprintf(
+				"task %q assigned to %q, a %s agent; subtasks must change code (reviews run automatically after each one)",
+				t.ID, t.AssignedAgent, kind))
+			return
+		}
 	}
 	for _, t := range sub.Tasks {
 		for _, dep := range t.DependsOn {

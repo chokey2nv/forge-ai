@@ -88,9 +88,9 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The reviewer reports against the implementer's run ID; its conversation
+	// A reviewer reports against the implementer's run ID; its conversation
 	// must not replace the implementer's checkpoint, which retries resume from.
-	if body.Role == "reviewer" {
+	if h.completionKindOf(body.Role) == kindReview {
 		_ = h.Runs.Heartbeat(ctx, runID, time.Now().UTC())
 	} else {
 		cp := &domain.Checkpoint{
@@ -102,14 +102,7 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	switch body.Role {
-	case "planner":
-		h.handlePlannerDone(run, task, body)
-	case "reviewer":
-		h.handleReviewerDone(run, task, body)
-	default:
-		h.handleAgentDone(ctx, run, task, body)
-	}
+	h.dispatchCompletion(ctx, run, task, body)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -135,34 +128,6 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 	}
 	// Detach from the callback request: its context ends when we return 204.
 	go h.runVerificationAndReview(context.WithoutCancel(ctx), run, task)
-}
-func (h *Handlers) handleAgentDone(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
-	// Determine which agent ran from the run's provenance tag or the body.
-	switch body.Role {
-	case "head-engineer":
-		// The decomposition workspace is read-only scratch; children get their own.
-		defer workspace.Cleanup(context.Background(), &workspace.Workspace{
-			WorktreePath: run.WorktreePath, ContainerName: run.ContainerName,
-		}, task.RepoPath)
-		if body.Status != "complete" || body.Submission == nil {
-			_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
-			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "head-engineer failed: "+body.FinalMessage)
-			return
-		}
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunComplete, "", time.Now().UTC())
-		h.handleHeadEngineerDone(run, task, body.Submission)
-	case "planner", "implementer", "reviewer", "qa-engineer", "backend-engineer", "frontend-engineer":
-		// Route based on task.ParentID (child) vs root task.
-		// For now, root tasks that bypass decomposition still go through implementer.
-		h.handleImplementerDone(ctx, run, task, body)
-	default:
-		// Unknown agent: treat as implementer if the run looks like one.
-		if body.Status == "complete" {
-			h.handleImplementerDone(ctx, run, task, body)
-		} else {
-			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "agent failed: "+body.FinalMessage)
-		}
-	}
 }
 func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task) {
 	defer func() {

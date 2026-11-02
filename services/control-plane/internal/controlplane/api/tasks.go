@@ -125,7 +125,7 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the task prompt including available agents.
-	taskPrompt := buildHeadEngineerTask(task, h.Registry.ListAgents())
+	taskPrompt := buildHeadEngineerTask(task, h.assignableAgents())
 
 	// Create the run record.
 	run := &domain.WorkflowRun{
@@ -188,9 +188,6 @@ func buildHeadEngineerTask(task *domain.Task, agents []*agent.AgentDefinition) s
 	}
 	b.WriteString("\n\n# Available agents\n\n")
 	for _, a := range agents {
-		if a.Name == "head-engineer" {
-			continue
-		}
 		fmt.Fprintf(&b, "- **%s** — %s\n", a.Name, a.Description)
 	}
 	b.WriteString("\nUse only the agents listed above. Call submit_task_graph when done.")
