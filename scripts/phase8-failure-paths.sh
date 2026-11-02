@@ -10,6 +10,7 @@
 #   review-retry   reviewer rejects once, the re-invoked implementer passes
 #   exhaustion     verification keeps failing; child and parent block
 #   crash-resume   adapter dies mid-run; run goes RESUMABLE and resumes
+#   add-agent      a new agent is a markdown file and a reload: no code changes
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -23,7 +24,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry review-retry exhaustion crash-resume)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry review-retry exhaustion crash-resume add-agent)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -33,6 +34,10 @@ export CONTROL_PLANE_ADDR=":$CP_PORT" CONTROL_PLANE_SELF_URL="$CP" ADAPTER_URL="
 export ADAPTER_PORT=$AD_PORT MONGODB_DATABASE=$DB
 export MODEL_PROVIDER=scripted MODEL_NAME=scripted DEFAULT_PROVIDER=scripted DEFAULT_MODEL=scripted
 export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=5s MAX_VERIFICATION_ATTEMPTS=2
+
+# A private copy of the agent definitions: add-agent writes to it, never to agents/.
+cp -R "$ROOT/agents" "$WORK/agents"
+export AGENTS_DIR="$WORK/agents" SKILLS_DIR="$ROOT/skills"
 
 CP_PID="" AD_PID=""
 cleanup() {
@@ -169,9 +174,69 @@ run_crash_resume() {
   check "run points at the resumed workspace" "$(curl -sf "$CP/runs/$run" | jq -e '.containerName | endswith("-r")' >/dev/null; echo $?)"
 }
 
+run_add_agent() {
+  local repo task child final code
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$CP/agents/docs-writer")
+  check "docs-writer is not registered yet (HTTP $code)" "$([ "$code" = 404 ]; echo $?)"
+
+  cat >"$WORK/agents/docs-writer.md" <<'AGENT'
+---
+name: docs-writer
+description: Makes small, well-explained code and documentation changes.
+version: 1
+skills:
+  - generic-coding
+tools:
+  - read_file
+  - list_dir
+  - search
+  - write_file
+  - apply_patch
+  - run_command
+  - git_status
+  - git_diff
+reviewers:
+  - reviewer
+---
+
+You are a careful engineer who explains every change you make.
+AGENT
+  code=$(curl -s -o "$WORK/reload.out" -w '%{http_code}' -X POST "$CP/agents/reload")
+  check "reload accepts the new file (HTTP $code: $(head -c 120 "$WORK/reload.out"))" "$([ "$code" = 200 ]; echo $?)"
+  check "docs-writer is registered after reload" \
+    "$(curl -sf "$CP/agents/docs-writer" | jq -e '.name == "docs-writer" and (.reviewers == ["reviewer"])' >/dev/null; echo $?)"
+
+  repo=$(new_repo)
+  start_adapter "$SCEN/add-agent.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  child=$(child_of "$task")
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  reasons "$child" | sed 's/^/      /'
+
+  local he_prompt
+  he_prompt=$(mongosh --quiet "$DB" --eval "const t=db.tasks.findOne({_id:'$task'}); const r=db.workflowRuns.findOne({_id:t.latestRunId}); print(r.lastCheckpoint.messages[1].content)")
+  check "head engineer is offered docs-writer" "$(grep -qF -- '**docs-writer**' <<<"$he_prompt"; echo $?)"
+  check "child is assigned to docs-writer" "$(curl -sf "$CP/tasks/$child" | jq -e '.assignedAgent == "docs-writer"' >/dev/null; echo $?)"
+  check "child ran as docs-writer with its tools" "$(grep -E "runId=run-$child role=docs-writer .*tools=8" "$WORK/adapter.log" >/dev/null; echo $?)"
+  check "run provenance records docs-writer@v1" \
+    "$(curl -sf "$CP/runs/run-$child" | jq -e '.provenance.agentDefinition == "docs-writer@v1"' >/dev/null; echo $?)"
+  check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+
+  rm "$WORK/agents/docs-writer.md"
+  curl -sf -X POST "$CP/agents/reload" >/dev/null
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$CP/agents/docs-writer")
+  check "docs-writer is gone after deleting the file and reloading (HTTP $code)" "$([ "$code" = 404 ]; echo $?)"
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
-  if [ "$SC" = crash-resume ]; then run_crash_resume; else run_scenario; fi
+  case "$SC" in
+    crash-resume) run_crash_resume ;;
+    add-agent) run_add_agent ;;
+    *) run_scenario ;;
+  esac
 done
 
 echo
