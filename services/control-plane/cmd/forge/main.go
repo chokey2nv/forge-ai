@@ -158,6 +158,7 @@ func main() {
 	mux.HandleFunc("GET  /tasks/{id}/approvals", h.ListApprovals)
 	mux.HandleFunc("POST /tasks/{id}/approve", h.ApproveTask)
 	mux.HandleFunc("POST /tasks/{id}/reject", h.RejectTask)
+	mux.HandleFunc("POST /tasks/{id}/escalation", h.DecideEscalation)
 
 	mux.HandleFunc("POST /evals/results", h.RecordEval)
 	mux.HandleFunc("GET  /evals/results", h.ListEvals)
@@ -177,6 +178,11 @@ func main() {
 
 	// ---- watcher ----
 	watcher := runner.NewWatcher(runRepo, taskRepo, sm, staleAfter)
+	// A reviewer gets its wall clock plus a grace period before the watcher
+	// records it as an error and moves the review round on.
+	watcher.ReviewTimeout = time.Duration(h.ReviewerWallClockMS)*time.Millisecond +
+		parseDuration(envOr("REVIEW_TIMEOUT_GRACE", "60s"), 60*time.Second)
+	watcher.OnReviewTimeout = h.HandleReviewTimeout
 	go watcher.Run(ctx)
 
 	// ---- reaper: removes containers/workspaces nothing can use any more ----

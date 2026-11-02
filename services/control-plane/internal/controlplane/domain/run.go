@@ -12,6 +12,7 @@ const (
 	RunBlocked    RunStatus = "BLOCKED"
 	RunComplete   RunStatus = "COMPLETE"
 	RunError      RunStatus = "ERROR"
+	RunEscalated  RunStatus = "ESCALATED" // reviewers kept rejecting; awaiting a human decision
 )
 
 type WorkflowRun struct {

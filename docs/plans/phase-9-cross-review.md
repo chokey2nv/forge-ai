@@ -1,6 +1,6 @@
 # Phase 9 — Cross-review and escalation
 
-**Status:** 9.1 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 8 (`docs/operations/RUNBOOK.md` §9)
+**Status:** 9.1, 9.2 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 8 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -82,7 +82,7 @@ Each ends with its tests passing and a commit.
 | # | Scope | Exit check |
 |---|---|---|
 | 9.1 ✅ | `reviews` collection, sequential review engine, verdict aggregation, consolidated defects, loader validation of `reviewers`, `test-reviewer` + `security-reviewer` agents. The parent's final review moved onto the engine here too (it shares the callback path) | Unit tests for aggregation, callbacks and loader rules; scripted `two-reviewers-pass` and `split-verdict` pass; both Claude slices pass with two reviewers per child and on the parent |
-| 9.2 | `ESCALATED` state, escalation API, reviewer timeout in the watcher | Scripted `escalate-accept` (child integrates after human accept, parent proceeds), `escalate-retry` (guidance reaches the implementer), `reviewer-timeout` (round continues with an `error` verdict) |
+| 9.2 ✅ | `ESCALATED` state, escalation API, reviewer timeout in the watcher (with a single-winner claim so a late verdict and the timeout cannot both settle a reviewer) | Scripted `escalate-accept`, `escalate-retry` and `reviewer-timeout` pass. Found and fixed: a run re-entering `RUNNING` kept its old heartbeat, so the watcher marked retries `RESUMABLE` mid-provisioning |
 | 9.3 | Parent final-review rejection → `ESCALATED`; give reviewers the verification gate results (they cannot run tests themselves, and a Claude test-reviewer said so) | Scripted `final-review-escalates`; both Claude slices still pass |
 | 9.4 | Console: children, per-reviewer verdicts, escalation actions | Console runs against the dev control plane; an escalated task is decided from the UI |
 | 9.5 | Runbook §5 / §9 updates, `mile-stone-review.md` vision table | Docs match the verified behaviour |

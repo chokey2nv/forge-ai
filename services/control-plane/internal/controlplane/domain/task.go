@@ -21,6 +21,7 @@ const (
 	StatusDecomposing TaskStatus = "DECOMPOSING" // head-engineer is running
 	StatusIntegrating TaskStatus = "INTEGRATING" // applying child diffs to parent
 	StatusIntegrated  TaskStatus = "INTEGRATED"  // child terminal: merged into parent
+	StatusEscalated   TaskStatus = "ESCALATED"   // reviewers kept rejecting; a human decides (Phase 9)
 
 )
 

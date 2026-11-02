@@ -12,6 +12,9 @@
 #   exhaustion     verification keeps failing; child and parent block
 #   crash-resume   adapter dies mid-run; run goes RESUMABLE and resumes
 #   add-agent      a new agent is a markdown file and a reload: no code changes
+#   reviewer-timeout  a reviewer never reports; the watcher records an error, round 2 runs
+#   escalate-accept   reviewers keep rejecting -> ESCALATED; a human accepts; parent finishes
+#   escalate-retry    a human sends it back with guidance; the next round passes
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -25,7 +28,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -34,7 +37,9 @@ done
 export CONTROL_PLANE_ADDR=":$CP_PORT" CONTROL_PLANE_SELF_URL="$CP" ADAPTER_URL="http://localhost:$AD_PORT"
 export ADAPTER_PORT=$AD_PORT MONGODB_DATABASE=$DB
 export MODEL_PROVIDER=scripted MODEL_NAME=scripted DEFAULT_PROVIDER=scripted DEFAULT_MODEL=scripted
-export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=5s MAX_VERIFICATION_ATTEMPTS=2
+export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPTS=2 MAX_REVIEW_ROUNDS=2
+# Reviewers answer instantly here; a short timeout lets reviewer-timeout finish quickly.
+export REVIEWER_TIMEOUT=8s REVIEW_TIMEOUT_GRACE=2s
 
 # A private copy of the agent definitions: add-agent writes to it, never to agents/.
 cp -R "$ROOT/agents" "$WORK/agents"
@@ -153,6 +158,13 @@ run_scenario() {
       check "reworked change was re-verified" "$(reasons "$child" | grep -c "RUNNING -> VERIFYING" | grep -qx 2; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
       ;;
+    reviewer-timeout)
+      check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "silent test-reviewer recorded as error; round 2 both pass" \
+        "$(verdicts "run-$child" | grep -qx '1 reviewer pass,1 test-reviewer error,2 reviewer pass,2 test-reviewer pass'; echo $?)"
+      check "error verdict says it timed out" \
+        "$(curl -sf "$CP/runs/run-$child/reviews" | jq -e 'any(.verdict == "error" and (.summary | contains("timed out")))' >/dev/null; echo $?)"
+      ;;
     exhaustion)
       check "child blocks after exhausting verification" "$(has_reason "$child" "verification failed after 2 attempts"; echo $?)"
       check "parent blocks because the child did" "$([ "$final" = BLOCKED ] && has_reason "$task" "is BLOCKED"; echo $?)"
@@ -245,11 +257,50 @@ AGENT
   check "docs-writer is gone after deleting the file and reloading (HTTP $code)" "$([ "$code" = 404 ]; echo $?)"
 }
 
+decide() { # task decision guidance -> HTTP code
+  curl -s -o "$WORK/decide.out" -w '%{http_code}' -X POST "$CP/tasks/$1/escalation" -H 'Content-Type: application/json' \
+    -d "{\"decision\":\"$2\",\"reviewer\":\"harness\",\"rationale\":\"scenario $SC\",\"guidance\":\"$3\"}"
+}
+
+run_escalation() { # accept|retry
+  local repo task child final s code guidance="Keep the rounding: the acceptance criteria require it."
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 120); do child=$(child_of "$task"); [ -n "$child" ] && break; sleep 1; done
+  s=$(wait_status "$child" "ESCALATED|BLOCKED|INTEGRATED|REJECTED" 300) || true
+  check "child escalates after 2 rejected rounds ($s)" \
+    "$([ "$s" = ESCALATED ] && has_reason "$child" "review rejected the change in 2 round(s)"; echo $?)"
+  check "parent waits on the escalated child instead of blocking" "$([ "$(status_of "$task")" = DISPATCHED ]; echo $?)"
+  code=$(decide "$task" accept "")
+  check "decision on a task that is not escalated is refused (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+
+  code=$(decide "$child" "$1" "$guidance")
+  check "$1 decision accepted (HTTP $code: $(head -c 100 "$WORK/decide.out"))" "$([ "$code" = 202 ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  reasons "$child" | sed 's/^/      /'
+
+  check "decision recorded" \
+    "$(curl -sf "$CP/tasks/$child/approvals" | jq -e --arg a "escalation-$1" 'any(.action == $a and .reviewer == "harness")' >/dev/null; echo $?)"
+  check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
+  check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  if [ "$1" = retry ]; then
+    check "implementer received the human's guidance" \
+      "$(curl -sf "$CP/runs/run-$child" | jq -e --arg g "$guidance" '[.lastCheckpoint.messages[].content] | any(contains($g))' >/dev/null; echo $?)"
+    check "round 3 ran after the retry and passed" \
+      "$(verdicts "run-$child" | grep -q '3 reviewer pass,3 test-reviewer pass$'; echo $?)"
+  fi
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
     crash-resume) run_crash_resume ;;
     add-agent) run_add_agent ;;
+    escalate-accept) run_escalation accept ;;
+    escalate-retry) run_escalation retry ;;
     *) run_scenario ;;
   esac
 done

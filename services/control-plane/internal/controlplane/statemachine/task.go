@@ -53,7 +53,15 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusIntegrated,    // child: pass, back to parent (Phase 8)
 		domain.StatusReviewPending, // root: pass, human approval
 		domain.StatusRunning,       // reject, retry
+		domain.StatusEscalated,     // review rounds exhausted (Phase 9)
 		domain.StatusBlocked,
+	},
+	domain.StatusEscalated: { // a human decides
+		domain.StatusIntegrated,    // child accepted
+		domain.StatusReviewPending, // root accepted
+		domain.StatusRunning,       // sent back with guidance
+		domain.StatusRejected,
+		domain.StatusBlocked, // accepted, but the diff no longer applies
 	},
 	domain.StatusIntegrating: {
 		domain.StatusVerifying, // combined verification

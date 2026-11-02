@@ -34,11 +34,22 @@ func (r *RunRepo) Get(ctx context.Context, id string) (*domain.WorkflowRun, erro
 	return &run, nil
 }
 
+// heartbeatOnRunning: a run (re-)entering RUNNING gets a fresh heartbeat.
+// Otherwise the stale-run watcher measures from the last heartbeat before a
+// review or verification, which can be minutes old, and marks a retry
+// RESUMABLE while its new workspace is still being provisioned.
+func heartbeatOnRunning(set bson.M, status domain.RunStatus, at time.Time) {
+	if status == domain.RunRunning {
+		set["lastHeartbeat"] = at
+	}
+}
+
 func (r *RunRepo) UpdateStatus(ctx context.Context, id string, status domain.RunStatus, reason string, at time.Time) error {
 	set := bson.M{"status": status, "updatedAt": at}
 	if reason != "" {
 		set["blockedReason"] = reason
 	}
+	heartbeatOnRunning(set, status, at)
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
 	return err
 }
@@ -98,6 +109,7 @@ func (r *RunRepo) UpdateWorkspace(ctx context.Context, id, worktreePath, contain
 		"$set": bson.M{
 			"worktreePath":  worktreePath,
 			"containerName": containerName,
+			"lastHeartbeat": at, // provisioning just finished; the agent starts next
 			"updatedAt":     at,
 		},
 		"$unset": bson.M{"workspaceReleasedAt": ""},
@@ -120,6 +132,7 @@ func (r *RunRepo) UpdateVerification(
 		"verificationPassed":  passed,
 		"updatedAt":           at,
 	}
+	heartbeatOnRunning(set, status, at)
 	if reason != "" {
 		set["blockedReason"] = reason
 	}
@@ -190,6 +203,7 @@ func (r *RunRepo) StartReviewRound(ctx context.Context, id string, round int, at
 		"reviewRound":         round,
 		"verificationAttempt": 0,
 		"verificationPassed":  false,
+		"lastHeartbeat":       at,
 		"updatedAt":           at,
 	}})
 	return err
@@ -202,4 +216,27 @@ func (r *RunRepo) SetReviewPending(ctx context.Context, id string, p *domain.Rev
 	}
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, update)
 	return err
+}
+
+func (r *RunRepo) ClaimReviewPending(ctx context.Context, id string, round, index int) (bool, error) {
+	res, err := r.coll.UpdateOne(ctx,
+		bson.M{"_id": id, "reviewPending.round": round, "reviewPending.index": index},
+		bson.M{"$unset": bson.M{"reviewPending": ""}, "$set": bson.M{"updatedAt": time.Now().UTC()}})
+	if err != nil {
+		return false, err
+	}
+	return res.ModifiedCount == 1, nil
+}
+
+func (r *RunRepo) ListReviewsPendingSince(ctx context.Context, cutoff time.Time) ([]*domain.WorkflowRun, error) {
+	cur, err := r.coll.Find(ctx, bson.M{"reviewPending.startedAt": bson.M{"$lt": cutoff}},
+		options.Find().SetProjection(bson.M{"lastCheckpoint": 0}))
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.WorkflowRun
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

@@ -15,6 +15,12 @@ type Watcher struct {
 	Tasks      store.TaskRepo
 	SM         *statemachine.Service
 	StaleAfter time.Duration
+
+	// A reviewer that has not reported after ReviewTimeout is handed to
+	// OnReviewTimeout, which settles it as an error verdict. Reviewers run
+	// against VERIFYING runs, so the heartbeat check above never sees them.
+	ReviewTimeout   time.Duration
+	OnReviewTimeout func(ctx context.Context, run *domain.WorkflowRun, waited time.Duration)
 }
 
 func NewWatcher(runs store.RunRepo, tasks store.TaskRepo, sm *statemachine.Service, staleAfter time.Duration) *Watcher {
@@ -30,6 +36,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			w.settleSilentReviewers(ctx)
 			cutoff := time.Now().Add(-w.StaleAfter)
 			stale, err := w.Runs.MarkStale(ctx, cutoff)
 			if err != nil {
@@ -52,5 +59,20 @@ func (w *Watcher) Run(ctx context.Context) {
 				log.Printf("watcher: run %s marked RESUMABLE (task %s)", run.ID, task.ID)
 			}
 		}
+	}
+}
+
+func (w *Watcher) settleSilentReviewers(ctx context.Context) {
+	if w.OnReviewTimeout == nil || w.ReviewTimeout <= 0 {
+		return
+	}
+	now := time.Now()
+	runs, err := w.Runs.ListReviewsPendingSince(ctx, now.Add(-w.ReviewTimeout))
+	if err != nil {
+		log.Printf("watcher: list pending reviews: %v", err)
+		return
+	}
+	for _, run := range runs {
+		w.OnReviewTimeout(ctx, run, now.Sub(run.ReviewPending.StartedAt))
 	}
 }

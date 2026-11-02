@@ -142,9 +142,40 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 		log.Printf("review %s: ignoring verdict from %q (waiting for %q)", run.ID, body.Role, p.Reviewer())
 		return
 	}
+	// The watcher's reviewer timeout may be settling this slot right now;
+	// exactly one of them claims it.
+	if ok, err := h.Runs.ClaimReviewPending(ctx, run.ID, p.Round, p.Index); err != nil || !ok {
+		log.Printf("review %s: verdict from %s arrived after its slot was settled", run.ID, body.Role)
+		return
+	}
 	verdict, summary, defects := parseReview(body)
 	h.recordReview(ctx, latest, task, p, agentDefinitionOf(h, body.Role), verdict, summary, defects)
 	h.advanceReview(ctx, latest, task, p)
+}
+
+// HandleReviewTimeout settles a reviewer that never called back (its adapter
+// died, or the model call hung past the wall clock) as an error verdict, so
+// the round moves on instead of leaving the task in AGENT_REVIEW forever.
+// Called by the watcher.
+func (h *Handlers) HandleReviewTimeout(ctx context.Context, run *domain.WorkflowRun, waited time.Duration) {
+	p := run.ReviewPending
+	if p == nil {
+		return
+	}
+	if ok, err := h.Runs.ClaimReviewPending(ctx, run.ID, p.Round, p.Index); err != nil || !ok {
+		return // the verdict arrived meanwhile
+	}
+	task, err := h.Tasks.Get(ctx, run.TaskID)
+	if err != nil {
+		log.Printf("review timeout %s: load task: %v", run.ID, err)
+		return
+	}
+	reviewerRunID := fmt.Sprintf("%s-rev%d-%d", run.ID, p.Round, p.Index)
+	_ = h.Adapter.CancelRun(ctx, reviewerRunID) // best effort; a late verdict is ignored anyway
+	log.Printf("review %s: reviewer %s timed out after %s", run.ID, p.Reviewer(), waited.Round(time.Second))
+	h.recordReview(ctx, run, task, p, agentDefinitionOf(h, p.Reviewer()), domain.VerdictError,
+		fmt.Sprintf("reviewer timed out after %s without a verdict", waited.Round(time.Second)), nil)
+	h.advanceReview(ctx, run, task, p)
 }
 
 // acceptsReviewCallback rejects stale and duplicate callbacks: several
@@ -314,9 +345,13 @@ func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRu
 
 	rejections := run.ReviewRound + 1
 	if rejections >= h.MaxReviewRounds {
+		// Reviewer judgement, not an objective failure: a human decides
+		// (POST /tasks/{id}/escalation). Accept integrates from the
+		// checkpoint diff and retry provisions afresh, so the workspace goes.
 		reason := fmt.Sprintf("review rejected the change in %d round(s): %s", rejections, summary)
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, now)
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunEscalated, reason, now)
+		_ = h.SM.Transition(ctx, task, domain.StatusEscalated, reason)
+		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, RunID: run.ID, Type: "review.escalated", Reason: reason, At: now})
 		workspace.Cleanup(ctx, reviewWS, task.RepoPath)
 		return
 	}

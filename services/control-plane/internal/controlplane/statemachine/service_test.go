@@ -69,3 +69,22 @@ func TestTransitionUpdatesStoreAndTask(t *testing.T) {
 		t.Errorf("task=%s store=%s, want DISPATCHED", task.Status, tasks.status["c1"])
 	}
 }
+
+func TestEscalationTransitions(t *testing.T) {
+	if !CanTransition(domain.StatusAgentReview, domain.StatusEscalated) {
+		t.Error("AGENT_REVIEW -> ESCALATED must be allowed")
+	}
+	for _, to := range []domain.TaskStatus{
+		domain.StatusIntegrated, domain.StatusReviewPending, domain.StatusRunning,
+		domain.StatusRejected, domain.StatusBlocked,
+	} {
+		if !CanTransition(domain.StatusEscalated, to) {
+			t.Errorf("ESCALATED -> %s must be allowed", to)
+		}
+	}
+	for _, to := range []domain.TaskStatus{domain.StatusVerifying, domain.StatusApproved, domain.StatusMerged} {
+		if CanTransition(domain.StatusEscalated, to) {
+			t.Errorf("ESCALATED -> %s must not be allowed", to)
+		}
+	}
+}

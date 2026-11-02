@@ -194,6 +194,8 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
 | `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task blocks; each round runs every listed reviewer and gets fresh verification attempts |
 | `REVIEWER_ENABLED` | `true` | Control plane | Agent review after verification |
+| `REVIEWER_TIMEOUT` | `180s` | Control plane | Wall clock given to each reviewer run |
+| `REVIEW_TIMEOUT_GRACE` | `60s` | Control plane | Extra wait after `REVIEWER_TIMEOUT` before the watcher records a silent reviewer as an `error` verdict |
 | `ORPHAN_CONTAINER_GRACE` | `10m` | Control plane | Age before the reaper removes an unowned container or workspace directory |
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
 
@@ -550,6 +552,9 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `exhaustion` | Fix never improves | Child `BLOCKED` ("verification failed after 2 attempts"), parent `BLOCKED` |
 | `crash-resume` | Adapter killed mid-run | Child `RESUMABLE`; `POST /runs/{id}/resume` → 202; resumed run gets the agent's tools and new workspace; parent `REVIEW_PENDING` |
 | `add-agent` | `docs-writer.md` added, `POST /agents/reload`, task assigned to it, file deleted, reload | Registered after reload, offered to the head engineer, child runs as `docs-writer@v1` with its tools, unregistered after delete |
+| `reviewer-timeout` | `test-reviewer` never reports | Watcher records it as `error` ("timed out"), the round is rejected, round 2 passes |
+| `escalate-accept` | Reviewers reject two rounds | Child `ESCALATED` while the parent waits; a decision on a non-escalated task is refused (409); `accept` integrates the child and the parent finishes |
+| `escalate-retry` | Same, then `retry` with guidance | The guidance reaches the implementer, round 3 passes, child integrates |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
 
@@ -607,7 +612,22 @@ curl -s localhost:8080/runs/<runId> | jq '.lastCheckpoint.usage'
 curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 ```
 
-### 6.6 Stale runs
+### 6.6 Escalated tasks
+
+A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row. Its parent waits; nothing proceeds until a human decides.
+
+```bash
+# What the reviewers said, per round
+curl -s localhost:8080/runs/<runId>/reviews | jq '.[] | {round, reviewer, verdict, summary, defects}'
+
+# Decide: accept (integrate / go to approval), retry (one more round), or reject
+curl -s -X POST localhost:8080/tasks/<taskId>/escalation -H 'Content-Type: application/json' \
+  -d '{"decision":"retry","reviewer":"<you>","rationale":"why","guidance":"what to change"}'
+```
+
+`retry` sends every rejecting reviewer's defects plus your guidance to the implementer; another rejection escalates again. A parent's combined change cannot be retried, only accepted or rejected. Decisions are recorded in `GET /tasks/<taskId>/approvals`.
+
+### 6.7 Stale runs
 
 ```bash
 mongosh --quiet forge_ai --eval '

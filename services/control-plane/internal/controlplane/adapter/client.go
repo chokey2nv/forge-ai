@@ -58,3 +58,18 @@ func (c *Client) StartRun(ctx context.Context, req *StartRunRequest) (*StartRunR
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return &out, nil
 }
+
+// CancelRun asks the adapter to stop a run at its next step. A run the
+// adapter no longer knows (404) is already stopped.
+func (c *Client) CancelRun(ctx context.Context, runID string) error {
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/runs/"+runID+"/cancel", nil)
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 404 {
+		return fmt.Errorf("adapter cancel: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
