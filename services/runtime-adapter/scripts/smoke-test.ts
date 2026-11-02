@@ -113,7 +113,7 @@ try {
   } else {
     const tc = r1.toolCalls[0];
     const result = executeTool(tc.name, tc.arguments);
-    messages.push({ role: "assistant", content: r1.content });
+    messages.push({ role: "assistant", content: r1.content, toolCalls: r1.toolCalls });
     messages.push({ role: "tool", toolCallId: tc.id, toolName: tc.name, content: result });
     const r2 = await provider.complete({ messages, tools: [readFileTool] });
     const grounded = /hello|greet|name/i.test(r2.content);

@@ -5,6 +5,8 @@ export interface ModelMessage {
   content: string;
   toolCallId?: string;
   toolName?: string;
+  /** Present on assistant messages that issued tool calls (OpenAI + Claude wire formats both require this). */
+  toolCalls?: ModelToolCall[];
 }
 export type ToolSchema = ModelTool;
 export interface ModelTool {

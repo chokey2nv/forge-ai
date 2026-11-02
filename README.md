@@ -4,7 +4,7 @@ Autonomous AI software-engineering agent team.
 
 Forge AI takes a software requirement plus acceptance criteria, decomposes the work into a dependency-ordered task graph of specialized sub-tasks (head engineer → planner / implementer / reviewer / qa-engineer), executes each sub-task in an isolated Docker workspace, runs automated verification gates, reviews the diff, and surfaces it for human approval.
 
-**Stack:** Go control plane · TypeScript runtime adapter · React console · MongoDB · Ollama / OpenAI.
+**Stack:** Go control plane · TypeScript runtime adapter · React console · MongoDB · Ollama / OpenAI / Claude.
 
 ## Status
 
@@ -22,6 +22,20 @@ SWITCH TO OPENAI
 # MODEL_NAME=gpt-4o-mini
 # OPENAI_API_KEY=sk-...
 # FORGE_ALLOWED_PROVIDERS=ollama,openai
+
+make smoke
+make phase2-demo
+
+---
+
+SWITCH TO CLAUDE
+
+# .env additions:
+# MODEL_PROVIDER=claude
+# MODEL_NAME=claude-3-5-haiku-20241022   # or claude-sonnet-4-20250514, etc.
+# ANTHROPIC_API_KEY=sk-ant-...
+# ANTHROPIC_BASE_URL=https://api.anthropic.com/v1   # optional, override for proxies
+# FORGE_ALLOWED_PROVIDERS=ollama,openai,claude
 
 make smoke
 make phase2-demo
@@ -210,13 +224,15 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 
 | Variable | Default | Consumed by | Purpose |
 |---|---|---|---|
-| `MODEL_PROVIDER` | `ollama` | Adapter | Provider selection (`ollama` or `openai`) |
+| `MODEL_PROVIDER` | `ollama` | Adapter | Provider selection (`ollama`, `openai`, or `claude`) |
 | `MODEL_NAME` | *(required)* | Adapter | Model identifier sent to the provider |
 | `MODEL_TIMEOUT_MS` | `120000` | Adapter | Per-request timeout |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434/v1` | Adapter | Ollama endpoint — note `/v1` suffix |
 | `OPENAI_API_KEY` | *(unset)* | Adapter | Required only when `MODEL_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Adapter | Override for compatible proxies |
-| `FORGE_ALLOWED_PROVIDERS` | `ollama` | Adapter + CP | Comma-separated allow-list; enabling `openai` requires opt-in |
+| `ANTHROPIC_API_KEY` | *(unset)* | Adapter | Required only when `MODEL_PROVIDER=claude` |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Adapter | Override for compatible proxies |
+| `FORGE_ALLOWED_PROVIDERS` | `ollama` | Adapter + CP | Comma-separated allow-list; enabling `openai` / `claude` requires opt-in |
 | `MONGODB_URI` | `mongodb://127.0.0.1:27017` | Control plane | Mongo connection |
 | `MONGODB_DATABASE` | `forge_ai` | Control plane | Database name |
 | `WORKER_IMAGE` | `forge-worker:dev` | Control plane | Container image per run |

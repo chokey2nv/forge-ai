@@ -2,9 +2,10 @@
 import process from "node:process";
 import { OllamaProvider } from "./ollama-provider";
 import { OpenAIProvider } from "./openai-provider";
+import { ClaudeProvider } from "./claude-provider";
 import type { ModelProvider } from "./types";
 
-export type ProviderId = "ollama" | "openai";
+export type ProviderId = "ollama" | "openai" | "claude";
 
 export interface ProviderConfig {
   provider: ProviderId;
@@ -13,6 +14,8 @@ export interface ProviderConfig {
   ollamaBaseUrl?: string;
   openaiApiKey?: string;
   openaiBaseUrl?: string;
+  anthropicApiKey?: string;
+  anthropicBaseUrl?: string;
 }
 
 export function createProvider(cfg: ProviderConfig): ModelProvider {
@@ -33,6 +36,15 @@ export function createProvider(cfg: ProviderConfig): ModelProvider {
         apiKey: cfg.openaiApiKey,
         defaultModel: cfg.modelName,
         timeoutMs: cfg.timeoutMs,
+      });
+    case "claude":
+      if (!cfg.anthropicApiKey) throw new Error("ANTHROPIC_API_KEY is required when MODEL_PROVIDER=claude");
+      return new ClaudeProvider({
+        baseUrl: cfg.anthropicBaseUrl ?? "https://api.anthropic.com/v1",
+        apiKey: cfg.anthropicApiKey,
+        defaultModel: cfg.modelName,
+        timeoutMs: cfg.timeoutMs,
+        version: process.env.ANTHROPIC_API_VERSION,
       });
     default:
       throw new Error(`unknown MODEL_PROVIDER: ${cfg.provider}`);
@@ -67,5 +79,7 @@ export function providerFromEnv(): ModelProvider {
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL,
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiBaseUrl: process.env.OPENAI_BASE_URL,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
   });
 }

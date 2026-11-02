@@ -79,6 +79,7 @@ interface StartBody {
 
 app.post("/runs", async (req: express.Request, res: express.Response) => {
   const body = req.body as StartBody;
+  console.log(`[adapter] /runs received runId=${body.runId} role=${body.role ?? "implementer"} container=${body.containerName} taskLen=${(body.task || "").length} tools=${(body.tools || []).length} model=${body.model ?? ""}`);
   if (!body.runId || !body.containerName || !body.worktreePath || !body.task || !body.callbackUrl) {
     return res.status(400).json({ error: "runId, containerName, worktreePath, task, callbackUrl are required" });
   }
@@ -133,7 +134,8 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       isCancelled: () => cancelled,
       onCheckpoint: async (state) => {
         const diff = await getWorkspaceDiff(body.containerName);
-        await postCallback(body.callbackUrl + `/runs/${body.runId}/checkpoint`, {
+        const callbackId = body.callbackRunId ?? body.runId;
+        await postCallback(body.callbackUrl + `/runs/${callbackId}/checkpoint`, {
           messages: state.messages,
           stepCount: state.stepCount,
           usage: state.usage,
@@ -155,7 +157,9 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       messages: result.state.messages,
       workspaceDiff: diff,
     });
-  })();
+  })().catch((err) => {
+    console.error(`[adapter] run ${body.runId} failed during completion:`, err);
+  });
 });
 
 app.post("/runs/:id/cancel", (req: Request, res: Response) => {
@@ -196,6 +200,11 @@ async function postCallback(url: string, body: unknown) {
   });
   if (!res.ok) throw new Error(`callback ${url}: HTTP ${res.status}`);
 }
+
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[adapter] unhandled error:", err);
+  if (!res.headersSent) res.status(500).json({ ok: false, error: String(err) });
+});
 
 const port = Number(process.env.ADAPTER_PORT ?? 8081);
 app.listen(port, () => console.log(`adapter listening on :${port}`));

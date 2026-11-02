@@ -100,14 +100,12 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 	case "reviewer":
 		h.handleReviewerDone(run, task, body)
 	default:
-		h.handleAgentDone(run, task, body)
+		h.handleAgentDone(ctx, run, task, body)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
-func (h *Handlers) handleImplementerDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
-	ctx := context.Background()
-
+func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
 	if body.Status != "complete" {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, body.FinalMessage)
@@ -119,9 +117,9 @@ func (h *Handlers) handleImplementerDone(run *domain.WorkflowRun, task *domain.T
 		log.Printf("transition to VERIFYING failed: %v", err)
 		return
 	}
-	go h.runVerificationAndReview(run, task)
+	go h.runVerificationAndReview(ctx, run, task)
 }
-func (h *Handlers) handleAgentDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
+func (h *Handlers) handleAgentDone(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
 	// Determine which agent ran from the run's provenance tag or the body.
 	switch body.Role {
 	case "head-engineer":
@@ -133,18 +131,25 @@ func (h *Handlers) handleAgentDone(run *domain.WorkflowRun, task *domain.Task, b
 	case "planner", "implementer", "reviewer", "qa-engineer", "backend-engineer", "frontend-engineer":
 		// Route based on task.ParentID (child) vs root task.
 		// For now, root tasks that bypass decomposition still go through implementer.
-		h.handleImplementerDone(run, task, body)
+		h.handleImplementerDone(ctx, run, task, body)
 	default:
 		// Unknown agent: treat as implementer if the run looks like one.
 		if body.Status == "complete" {
-			h.handleImplementerDone(run, task, body)
+			h.handleImplementerDone(ctx, run, task, body)
 		} else {
 			_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "agent failed: "+body.FinalMessage)
 		}
 	}
 }
-func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domain.Task) {
-	ctx := context.Background()
+func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("verification panic for run %s: %v", run.ID, rec)
+			_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, fmt.Sprintf("verification panic: %v", rec), time.Now().UTC())
+			_ = h.SM.Transition(ctx, task, domain.StatusBlocked, fmt.Sprintf("verification panic: %v", rec))
+		}
+	}()
+
 	attempt := run.VerificationAttempt + 1
 
 	vr := h.Verifier.Run(ctx, run.ContainerName, run.WorktreePath, task.DiffScope)
@@ -171,7 +176,11 @@ func (h *Handlers) runVerificationAndReview(run *domain.WorkflowRun, task *domai
 	_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunVerifying, "", time.Now().UTC())
 
 	// Invoke reviewer via adapter.
-	latest, _ := h.Runs.Get(ctx, run.ID)
+	latest, err := h.Runs.Get(ctx, run.ID)
+	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "load run for review: "+err.Error())
+		return
+	}
 	// diff := latest.LastCheckpoint.WorkspaceDiff
 
 	// taskPrompt := buildReviewerPrompt(task, diff)
@@ -284,7 +293,11 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 	if verdict == "pass" {
 		if task.ParentID != "" {
 			// Child: integrate into parent.
-			latest, _ := h.Runs.Get(ctx, run.ID)
+			latest, err := h.Runs.Get(ctx, run.ID)
+			if err != nil {
+				_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "get run for integration: "+err.Error())
+				return
+			}
 			diff := ""
 			if latest.LastCheckpoint != nil {
 				diff = latest.LastCheckpoint.WorkspaceDiff
@@ -386,7 +399,12 @@ func (h *Handlers) invokeImplementer(run *domain.WorkflowRun, task *domain.Task,
 
 func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Task, diagnostics string) {
 	ctx := context.Background()
-	latest, _ := h.Runs.Get(ctx, run.ID)
+	latest, err := h.Runs.Get(ctx, run.ID)
+	if err != nil {
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "load run for retry: "+err.Error(), time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "load run for retry: "+err.Error())
+		return
+	}
 
 	// Fresh workspace (container running the previous attempt is retired on transition)
 	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-ri", h.SetupTimeout)

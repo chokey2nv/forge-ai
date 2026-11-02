@@ -17,7 +17,7 @@ TASK=$(curl -sf -X POST $CP/tasks -H 'Content-Type: application/json' -d "{
 echo "task: $TASK"
 
 RUN=$(curl -sf -X POST $CP/tasks/$TASK/runs -H 'Content-Type: application/json' \
-  -d '{"provider":"ollama","model":"qwen3-coder:30b"}' | jq -r .runId)
+  -d '{"provider":"claude","model":"claude-haiku-5-5"}' | jq -r .runId)
 echo "run:  $RUN"
 
 LAST=""

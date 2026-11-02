@@ -77,6 +77,10 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
 
     let submission: Record<string, unknown> | undefined;
 
+    // Persist the assistant turn (including tool_calls) before branching —
+    // both the submission and tool-execution paths below assume it is in history.
+    state.messages.push({ role: "assistant", content: resp.content, toolCalls: resp.toolCalls });
+
     const submissionName = cfg.submissionTool;
     const submissionCall = submissionName
       ? resp.toolCalls.find((c) => c.name === submissionName)
@@ -88,9 +92,6 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
         role: "tool", toolCallId: submissionCall.id, toolName: submissionCall.name,
         content: JSON.stringify({ accepted: true }),
       });
-    }
-
-    if (submission) {
       state.status = "complete";
       await cfg.onCheckpoint?.(state);
       state.finishedAt = new Date().toISOString();
@@ -109,19 +110,16 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
 
 
 
-    if (resp.toolCalls.length > 0) {
-      state.stepCount++;
-      state.usage.push(resp.usage);
-      state.messages.push({ role: "assistant", content: resp.content });
-      for (const call of resp.toolCalls) {
-        const result = await executeToolCall(cfg.workspace, call);
-        state.messages.push({
-          role: "tool",
-          content: truncate(result.output, 8_000),
-          toolCallId: call.id,
-          toolName: call.name,
-        });
-      }
+    state.stepCount++;
+    state.usage.push(resp.usage);
+    for (const call of resp.toolCalls) {
+      const result = await executeToolCall(cfg.workspace, call);
+      state.messages.push({
+        role: "tool",
+        content: truncate(result.output, 8_000),
+        toolCallId: call.id,
+        toolName: call.name,
+      });
     }
 
     await cfg.onCheckpoint?.(state);

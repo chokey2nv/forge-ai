@@ -125,6 +125,17 @@ function toOpenAIMessage(m: ModelRequest["messages"][number]) {
   if (m.role === "tool") {
     return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
   }
+  if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+    return {
+      role: "assistant",
+      content: m.content || null,
+      tool_calls: m.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+      })),
+    };
+  }
   return { role: m.role, content: m.content };
 }
 
