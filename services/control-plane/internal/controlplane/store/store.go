@@ -43,9 +43,11 @@ type RunRepo interface {
 	StartReviewRound(ctx context.Context, id string, round int, at time.Time) error
 	// SetReviewPending records the reviewer the run waits for; nil clears it.
 	SetReviewPending(ctx context.Context, id string, p *domain.ReviewPending, at time.Time) error
-	// ClaimReviewPending clears the pending reviewer only if it is still the
-	// given slot; the one caller that gets true settles that reviewer.
-	ClaimReviewPending(ctx context.Context, id string, round, index int) (bool, error)
+	// ClaimReviewSlot removes index from the round's outstanding reviewers;
+	// the one caller that gets true settles that reviewer.
+	ClaimReviewSlot(ctx context.Context, id string, round, index int) (bool, error)
+	// MarkReviewRecorded counts a saved verdict and returns the new count.
+	MarkReviewRecorded(ctx context.Context, id string, round int) (int, error)
 	// ListReviewsPendingSince returns runs waiting on a reviewer started before cutoff.
 	ListReviewsPendingSince(ctx context.Context, cutoff time.Time) ([]*domain.WorkflowRun, error)
 

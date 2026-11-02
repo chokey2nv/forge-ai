@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -170,8 +171,11 @@ func (r *RunRepo) ListByTask(ctx context.Context, taskID string) ([]*domain.Work
 	return out, nil
 }
 
+// uuidShort makes a document ID. It used to be the time in nanoseconds,
+// which collides when two goroutines write in the same clock tick (macOS
+// clocks advance in microseconds), and parallel subtasks do exactly that.
 func uuidShort() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return uuid.NewString()
 }
 
 func (r *RunRepo) ListUnreleasedWorkspaces(ctx context.Context) ([]*domain.WorkflowRun, error) {
@@ -218,14 +222,30 @@ func (r *RunRepo) SetReviewPending(ctx context.Context, id string, p *domain.Rev
 	return err
 }
 
-func (r *RunRepo) ClaimReviewPending(ctx context.Context, id string, round, index int) (bool, error) {
+func (r *RunRepo) ClaimReviewSlot(ctx context.Context, id string, round, index int) (bool, error) {
 	res, err := r.coll.UpdateOne(ctx,
-		bson.M{"_id": id, "reviewPending.round": round, "reviewPending.index": index},
-		bson.M{"$unset": bson.M{"reviewPending": ""}, "$set": bson.M{"updatedAt": time.Now().UTC()}})
+		bson.M{"_id": id, "reviewPending.round": round, "reviewPending.outstanding": index},
+		bson.M{"$pull": bson.M{"reviewPending.outstanding": index}, "$set": bson.M{"updatedAt": time.Now().UTC()}})
 	if err != nil {
 		return false, err
 	}
 	return res.ModifiedCount == 1, nil
+}
+
+func (r *RunRepo) MarkReviewRecorded(ctx context.Context, id string, round int) (int, error) {
+	var run domain.WorkflowRun
+	err := r.coll.FindOneAndUpdate(ctx,
+		bson.M{"_id": id, "reviewPending.round": round},
+		bson.M{"$inc": bson.M{"reviewPending.recorded": 1}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After).SetProjection(bson.M{"reviewPending": 1}),
+	).Decode(&run)
+	if err != nil {
+		return 0, err
+	}
+	if run.ReviewPending == nil {
+		return 0, fmt.Errorf("run %s has no review in flight", id)
+	}
+	return run.ReviewPending.Recorded, nil
 }
 
 func (r *RunRepo) ListReviewsPendingSince(ctx context.Context, cutoff time.Time) ([]*domain.WorkflowRun, error) {

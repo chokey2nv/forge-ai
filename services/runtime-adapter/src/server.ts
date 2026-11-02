@@ -87,12 +87,19 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
     return res.status(409).json({ error: "run already active" });
   }
 
+  // Reviewers run in parallel in the implementer's container (Phase 10). They
+  // only read: skip workspace-diff capture (it stages and resets the index)
+  // and keep their git commands from taking the index lock.
+  const isReview = body.submissionTool === "submit_review";
+  const execEnv = isReview ? { GIT_OPTIONAL_LOCKS: "0" } : undefined;
+  const workspaceDiff = async () => (isReview ? "" : getWorkspaceDiff(body.containerName));
+
   // Build a workspace proxy that just execs into the pre-provisioned container.
   const ws = {
     id: body.runId,
     containerName: body.containerName,
     worktreePath: body.worktreePath,
-    exec: (argv: string[]) => execInContainer(body.containerName, argv),
+    exec: (argv: string[]) => execInContainer(body.containerName, argv, execEnv),
     destroy: async () => { /* lifecycle owned by control plane */ },
   };
 
@@ -133,7 +140,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       resumeFrom,
       isCancelled: () => cancelled,
       onCheckpoint: async (state) => {
-        const diff = await getWorkspaceDiff(body.containerName);
+        const diff = await workspaceDiff();
         const callbackId = body.callbackRunId ?? body.runId;
         await postCallback(body.callbackUrl + `/runs/${callbackId}/checkpoint`, {
           role,
@@ -146,7 +153,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       },
     }, body.task);
 
-    const diff = await getWorkspaceDiff(body.containerName);
+    const diff = await workspaceDiff();
     const callbackId = body.callbackRunId ?? body.runId;
     await postCallback(body.callbackUrl + `/runs/${callbackId}/complete`, {
       role,
@@ -175,10 +182,11 @@ app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
 
 // -- helpers --
 
-async function execInContainer(containerName: string, argv: string[]) {
+async function execInContainer(containerName: string, argv: string[], env?: Record<string, string>) {
   const { spawn } = await import("node:child_process");
+  const envArgs = Object.entries(env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-    const p = spawn("docker", ["exec", containerName, ...argv]);
+    const p = spawn("docker", ["exec", ...envArgs, containerName, ...argv]);
     let stdout = "", stderr = "";
     p.stdout.on("data", (d) => (stdout += d.toString()));
     p.stderr.on("data", (d) => (stderr += d.toString()));

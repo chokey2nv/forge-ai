@@ -32,19 +32,12 @@ type Defect struct {
 	Location    string `bson:"location,omitempty" json:"location,omitempty"`
 }
 
-// ReviewPending marks the reviewer a run is waiting for. Several reviewers
-// report against one run ID, so a callback is accepted only from this one.
+// ReviewPending is a review round in flight. Several reviewers report
+// against one run ID, so a verdict is accepted only for an outstanding slot.
 type ReviewPending struct {
-	Round     int       `bson:"round" json:"round"`
-	Index     int       `bson:"index" json:"index"`
-	Reviewers []string  `bson:"reviewers" json:"reviewers"` // the round's reviewers, in order
-	StartedAt time.Time `bson:"startedAt" json:"startedAt"`
-}
-
-// Reviewer is the agent the run is waiting for.
-func (p *ReviewPending) Reviewer() string {
-	if p == nil || p.Index < 0 || p.Index >= len(p.Reviewers) {
-		return ""
-	}
-	return p.Reviewers[p.Index]
+	Round       int       `bson:"round" json:"round"`
+	Reviewers   []string  `bson:"reviewers" json:"reviewers"`     // the round's reviewers, in order
+	Outstanding []int     `bson:"outstanding" json:"outstanding"` // slots not yet claimed by a verdict or timeout
+	Recorded    int       `bson:"recorded" json:"recorded"`       // verdicts saved; the last one decides the round
+	StartedAt   time.Time `bson:"startedAt" json:"startedAt"`
 }

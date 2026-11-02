@@ -88,3 +88,21 @@ func TestEscalationTransitions(t *testing.T) {
 		}
 	}
 }
+
+type failingEvents struct{ store.EventRepo }
+
+func (failingEvents) Append(context.Context, *domain.Event) error {
+	return errors.New("E11000 duplicate key")
+}
+
+func TestTransitionSucceedsWhenItsEventCannotBeRecorded(t *testing.T) {
+	tasks := &memTasks{status: map[string]domain.TaskStatus{"c1": domain.StatusDispatched}}
+	sm := &Service{Tasks: tasks, Events: failingEvents{}}
+	task := &domain.Task{ID: "c1", Status: domain.StatusDispatched}
+	if err := sm.Transition(context.Background(), task, domain.StatusRunning, "start"); err != nil {
+		t.Fatalf("the status changed, so the transition must report success: %v", err)
+	}
+	if tasks.status["c1"] != domain.StatusRunning || task.Status != domain.StatusRunning {
+		t.Errorf("status not applied: store %s, task %s", tasks.status["c1"], task.Status)
+	}
+}

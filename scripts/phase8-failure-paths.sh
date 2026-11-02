@@ -21,6 +21,7 @@
 #   concurrency-cap    MAX_CONCURRENT_RUNS=1: the same two subtasks never overlap
 #   overlap-serialized one subtask declares no diffScope, so it waits for its sibling
 #   cycle-rejected     a cyclic task graph blocks the parent at decomposition
+#   parallel-reviewers two 3s reviewers finish one round in well under 6s (Phase 10.3)
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -34,7 +35,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -152,6 +153,15 @@ run_scenario() {
       check "child retried after failed verification" "$(has_reason "$child" "verification failed; retrying"; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
       check "integrated fix rounds to cents" "$(git -C "$repo" show "forge/$task:src/price.js" | grep -q Math.round; echo $?)"
+      ;;
+    parallel-reviewers)
+      check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "both child reviewers passed in round 1" \
+        "$(verdicts "run-$child" | grep -qx '1 reviewer pass,1 test-reviewer pass'; echo $?)"
+      local span
+      span=$(curl -sf "$CP/runs/run-$child/reviews" | jq '[.[] | select(.round == 1)] | ((map(.finishedAt | sub("\\.[0-9]+"; "") | fromdateiso8601) | max) - (map(.startedAt | sub("\\.[0-9]+"; "") | fromdateiso8601) | min))')
+      echo "      round 1 took ${span}s with two 3s reviewers"
+      check "the two reviewers ran at the same time (round took <6s)" "$([ -n "$span" ] && [ "$span" -lt 6 ]; echo $?)"
       ;;
     two-reviewers-pass)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"

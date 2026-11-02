@@ -553,7 +553,7 @@ make phase8-failure-paths                      # all scenarios
 bash scripts/phase8-failure-paths.sh exhaustion add-agent   # a subset
 ```
 
-With `SCRIPTED_PROVIDER_LOG` set (the harness sets it), the scripted provider appends each agent's task prompt to that file, so scenarios can assert on what an agent was told. When runs of one role overlap (parallel subtasks), a role's turns can be keyed by a substring of the task prompt instead of one shared queue; see `services/runtime-adapter/src/scripted-provider.ts`.
+With `SCRIPTED_PROVIDER_LOG` set (the harness sets it), the scripted provider appends each agent's task prompt to that file, so scenarios can assert on what an agent was told. When runs of one role overlap (parallel subtasks, parallel reviewers), a role's turns can be keyed by a substring of the agent's system prompt or task prompt instead of one shared queue; reviewers are told apart by their agent prompt ("You review tests", ...). See `services/runtime-adapter/src/scripted-provider.ts`.
 
 The harness starts its own control plane and adapter on `:8090` / `:8091` against the `forge_ai_failpaths` database and a private copy of `agents/`, so it can run alongside your dev services. Ports must be free. Docker workspaces, gates, review and integration are all real.
 
@@ -572,6 +572,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `diamond` | Two in parallel, a third depending on both | The third is claimed only after both integrated and starts from a commit containing both |
 | `concurrency-cap` | The same two with `MAX_CONCURRENT_RUNS=1` (the harness restarts its control plane) | They never overlap |
 | `overlap-serialized` | One of the two declares no `diffScope` | It gets an implicit dependency on its sibling (`implicitDependsOn`, `child.serialized` event "no diffScope declared"), and they never overlap |
+| `parallel-reviewers` | Both child reviewers take 3s | They run at the same time: round 1 takes about 3s, not 6s |
 | `cycle-rejected` | The head engineer submits a dependency cycle | Parent `BLOCKED` at decomposition ("dependency cycle: t1 -> t2 -> t1"); no subtasks created |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
@@ -727,7 +728,7 @@ If the CP log shows no `checkpoint` events during a run, the callback URL is wro
 
 ### 8.0 Concurrency
 
-Only subtasks with declared, non-overlapping `diffScope`s run in parallel. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from.
+Only subtasks with declared, non-overlapping `diffScope`s run in parallel. At decomposition, independent tasks whose scopes overlap, or that declare none, get an implicit dependency on the earlier one (`implicitDependsOn`, shown in the console as "(overlapping scope)", with a `child.serialized` event giving the reason). Ready subtasks are claimed up to `MAX_CONCURRENT_RUNS` live workspaces, oldest parent first. A claimed subtask's run is `PROVISIONING` while its workspace is cloned and dependencies install (the stale-run watcher ignores it), then `RUNNING`. Children of one parent integrate one at a time, each diff applied 3-way against the commit it started from. A change's reviewers all run at the same time in its container; they only read (no diff capture, `GIT_OPTIONAL_LOCKS=0`), and the round is decided when the last verdict is in.
 
 Run **one control plane per database**: the integration lock is in-process. The failure-path harness uses its own database, so it can run beside your dev control plane.
 

@@ -66,23 +66,26 @@ func TestRejectionFeedbackGroupsEveryRejectingReviewer(t *testing.T) {
 	}
 }
 
-func TestAcceptsOnlyThePendingReviewer(t *testing.T) {
-	p := &domain.ReviewPending{Round: 1, Index: 1, Reviewers: []string{"reviewer", "test-reviewer"}}
+func TestPendingIndexForMatchesOutstandingSlots(t *testing.T) {
+	p := &domain.ReviewPending{Round: 1, Reviewers: []string{"reviewer", "test-reviewer"}, Outstanding: []int{1}}
 	cases := []struct {
 		p        *domain.ReviewPending
 		reviewer string
-		want     bool
+		want     int
 	}{
-		{p, "test-reviewer", true},
-		{p, "reviewer", false}, // stale: the previous reviewer reporting again
-		{p, "implementer", false},
-		{p, "", false},
-		{nil, "reviewer", false}, // round already decided
-		{&domain.ReviewPending{Index: 5, Reviewers: []string{"reviewer"}}, "reviewer", false},
+		{p, "test-reviewer", 1},
+		{p, "reviewer", -1}, // already settled: a duplicate or stale callback
+		{p, "implementer", -1},
+		{p, "", -1},
+		{nil, "reviewer", -1}, // round already decided
+		{&domain.ReviewPending{Reviewers: []string{"reviewer"}, Outstanding: []int{5}}, "reviewer", -1},
+		// The same agent listed twice settles its slots one at a time.
+		{&domain.ReviewPending{Reviewers: []string{"reviewer", "reviewer"}, Outstanding: []int{0, 1}}, "reviewer", 0},
+		{&domain.ReviewPending{Reviewers: []string{"reviewer", "reviewer"}, Outstanding: []int{1}}, "reviewer", 1},
 	}
 	for i, c := range cases {
-		if got := acceptsReviewCallback(c.p, c.reviewer); got != c.want {
-			t.Errorf("case %d (%q): got %v, want %v", i, c.reviewer, got, c.want)
+		if got := pendingIndexFor(c.p, c.reviewer); got != c.want {
+			t.Errorf("case %d (%q): got %d, want %d", i, c.reviewer, got, c.want)
 		}
 	}
 }

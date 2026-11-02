@@ -47,79 +47,85 @@
       "content": "The existing suite already covers 0% (\"0% off leaves the price unchanged\")."
     }
   ],
-  "reviewer": [
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "fail",
-            "summary": "The 0% discount case has no test.",
-            "defects": [
-              {
-                "severity": "major",
-                "description": "No test covers a 0% discount",
-                "location": "tests/price.test.js"
-              }
-            ]
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "fail",
+              "summary": "The 0% discount case has no test.",
+              "defects": [
+                {
+                  "severity": "major",
+                  "description": "No test covers a 0% discount",
+                  "location": "tests/price.test.js"
+                }
+              ]
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    }
-  ]
+        ]
+      }
+    ]
+  }
 }

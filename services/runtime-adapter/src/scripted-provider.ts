@@ -16,10 +16,12 @@
 // retry or a reviewer's second pass simply takes the next turn. The role is
 // inferred from the submission tool offered in the request.
 //
-// When runs of one role overlap (parallel subtasks), a role may instead map
-// task-prompt substrings to queues; a call takes the first queue whose key
-// its task prompt contains and that still has turns, else "*":
-//   "implementer": { "Fix applyDiscount": [...], "Add formatPrice": [...], "*": [...] }
+// When runs of one role overlap (parallel subtasks, parallel reviewers), a
+// role may instead map substrings to queues; a call takes the first queue
+// whose key appears in its system prompt or task prompt and that still has
+// turns, else "*". Reviewers are told apart by their agent prompt:
+//   "implementer": { "Add taxFor": [...], "Add formatPrice": [...] }
+//   "reviewer":    { "You review tests": [...], "You are a code reviewer": [...] }
 import fs from "node:fs";
 import process from "node:process";
 import type { ModelCapabilities, ModelProvider, ModelRequest, ModelResponse, ModelToolCall } from "./types";
@@ -51,9 +53,10 @@ function taskPrompt(req: ModelRequest): string {
 function pick(role: string, req: ModelRequest): Queue | undefined {
   const entry = queues[role];
   if (!entry || Array.isArray(entry)) return entry;
-  const task = taskPrompt(req);
+  const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+  const text = system + "\n" + taskPrompt(req);
   for (const [key, queue] of Object.entries(entry)) {
-    if (key !== "*" && task.includes(key) && queue.length > 0) return queue;
+    if (key !== "*" && text.includes(key) && queue.length > 0) return queue;
   }
   return entry["*"];
 }

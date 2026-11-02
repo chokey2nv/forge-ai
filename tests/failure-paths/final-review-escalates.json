@@ -44,57 +44,63 @@
       "content": "Fixed applyDiscount."
     }
   ],
-  "reviewer": [
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "fail",
+              "summary": "The combined change logs the discount rate.",
+              "defects": [
+                {
+                  "severity": "major",
+                  "description": "Remove the debug log of the discount rate",
+                  "location": "src/price.js"
+                }
+              ]
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "fail",
-            "summary": "The combined change logs the discount rate.",
-            "defects": [
-              {
-                "severity": "major",
-                "description": "Remove the debug log of the discount rate",
-                "location": "src/price.js"
-              }
-            ]
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    }
-  ]
+        ]
+      }
+    ]
+  }
 }

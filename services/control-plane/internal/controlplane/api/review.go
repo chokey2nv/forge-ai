@@ -15,11 +15,17 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
 
-// Review engine (Phase 9). Every reviewer the producing agent lists reviews
-// the change, one after another: they share the implementer's container and
-// its git index. Every reviewer runs each round, even after a rejection, so
-// one round collects all the feedback. A round passes only when every
-// verdict is "pass".
+// Review engine. Every reviewer the producing agent lists reviews the
+// change, all at the same time (Phase 10): reviewers only read, the adapter
+// skips diff capture for them and their git commands take no index lock, so
+// they can share the implementer's container. Every reviewer runs each
+// round, even after a rejection, so one round collects all the feedback. A
+// round passes only when every verdict is "pass".
+//
+// Each reviewer's verdict settles its slot in two atomic steps: claim the
+// slot (so a verdict and the watcher's timeout cannot both settle it), save
+// the verdict, then count it. Whoever records the last verdict decides the
+// round, after every verdict is saved.
 
 // startReviews begins the next review round for a run whose change passed
 // verification. The task is already in AGENT_REVIEW.
@@ -29,12 +35,21 @@ func (h *Handlers) startReviews(ctx context.Context, run *domain.WorkflowRun, ta
 		h.finishReviewRound(ctx, run, task, nil)
 		return
 	}
-	h.startReviewer(ctx, run, task, &domain.ReviewPending{
+	p := &domain.ReviewPending{
 		Round:     run.ReviewRound + 1,
-		Index:     0,
 		Reviewers: reviewers,
 		StartedAt: time.Now().UTC(),
-	})
+	}
+	for i := range reviewers {
+		p.Outstanding = append(p.Outstanding, i)
+	}
+	// Recorded before any reviewer starts, so even an instant callback is accepted.
+	if err := h.Runs.SetReviewPending(ctx, run.ID, p, p.StartedAt); err != nil {
+		log.Printf("review %s: record pending reviewers: %v", run.ID, err)
+	}
+	for i := range reviewers {
+		h.startReviewer(ctx, run, task, p, i)
+	}
 }
 
 // reviewersFor returns who reviews this run: the head engineer's reviewers
@@ -56,18 +71,15 @@ func isParentReview(task *domain.Task) bool {
 	return task.ParentID == "" && task.IntegrationBranch != ""
 }
 
-func (h *Handlers) startReviewer(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending) {
-	p.StartedAt = time.Now().UTC()
-	name := p.Reviewer()
-	// Recorded before the adapter starts, so even an instant callback is accepted.
-	if err := h.Runs.SetReviewPending(ctx, run.ID, p, p.StartedAt); err != nil {
-		log.Printf("review %s: record pending reviewer %s: %v", run.ID, name, err)
-	}
+func reviewerRunID(run *domain.WorkflowRun, p *domain.ReviewPending, index int) string {
+	return fmt.Sprintf("%s-rev%d-%d", run.ID, p.Round, index)
+}
 
+func (h *Handlers) startReviewer(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending, index int) {
+	name := p.Reviewers[index]
 	fail := func(reason string) {
 		log.Printf("review %s: reviewer %s could not run: %s", run.ID, name, reason)
-		h.recordReview(ctx, run, task, p, "", domain.VerdictError, "reviewer could not run: "+reason, nil)
-		h.advanceReview(ctx, run, task, p)
+		h.settleReviewer(ctx, run, task, p, index, "", domain.VerdictError, "reviewer could not run: "+reason, nil)
 	}
 
 	def, ok := h.Registry.GetAgent(name)
@@ -92,7 +104,7 @@ func (h *Handlers) startReviewer(ctx context.Context, run *domain.WorkflowRun, t
 	}
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:          fmt.Sprintf("%s-rev%d-%d", run.ID, p.Round, p.Index),
+		RunID:          reviewerRunID(run, p, index),
 		CallbackRunID:  run.ID,
 		ContainerName:  latest.ContainerName,
 		WorktreePath:   worktree,
@@ -129,7 +141,7 @@ func reviewInput(run *domain.WorkflowRun, task *domain.Task) (diff, worktree str
 	return diff, run.WorktreePath, nil
 }
 
-// handleReviewerDone records a reviewer's verdict and moves the round on.
+// handleReviewerDone settles the reporting reviewer's slot with its verdict.
 func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
 	ctx := context.Background()
 	latest, err := h.Runs.Get(ctx, run.ID)
@@ -138,50 +150,83 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 		return
 	}
 	p := latest.ReviewPending
-	if !acceptsReviewCallback(p, body.Role) {
-		log.Printf("review %s: ignoring verdict from %q (waiting for %q)", run.ID, body.Role, p.Reviewer())
-		return
-	}
-	// The watcher's reviewer timeout may be settling this slot right now;
-	// exactly one of them claims it.
-	if ok, err := h.Runs.ClaimReviewPending(ctx, run.ID, p.Round, p.Index); err != nil || !ok {
-		log.Printf("review %s: verdict from %s arrived after its slot was settled", run.ID, body.Role)
+	index := pendingIndexFor(p, body.Role)
+	if index < 0 {
+		log.Printf("review %s: ignoring verdict from %q: not an outstanding reviewer", run.ID, body.Role)
 		return
 	}
 	verdict, summary, defects := parseReview(body)
-	h.recordReview(ctx, latest, task, p, agentDefinitionOf(h, body.Role), verdict, summary, defects)
-	h.advanceReview(ctx, latest, task, p)
+	h.settleReviewer(ctx, latest, task, p, index, agentDefinitionOf(h, body.Role), verdict, summary, defects)
 }
 
-// HandleReviewTimeout settles a reviewer that never called back (its adapter
-// died, or the model call hung past the wall clock) as an error verdict, so
-// the round moves on instead of leaving the task in AGENT_REVIEW forever.
-// Called by the watcher.
+// HandleReviewTimeout settles every reviewer of a round that has not called
+// back (its adapter died, or the model call hung past the wall clock) as an
+// error verdict, so the round is decided instead of leaving the task in
+// AGENT_REVIEW forever. Called by the watcher.
 func (h *Handlers) HandleReviewTimeout(ctx context.Context, run *domain.WorkflowRun, waited time.Duration) {
 	p := run.ReviewPending
-	if p == nil {
+	if p == nil || len(p.Outstanding) == 0 {
 		return
-	}
-	if ok, err := h.Runs.ClaimReviewPending(ctx, run.ID, p.Round, p.Index); err != nil || !ok {
-		return // the verdict arrived meanwhile
 	}
 	task, err := h.Tasks.Get(ctx, run.TaskID)
 	if err != nil {
 		log.Printf("review timeout %s: load task: %v", run.ID, err)
 		return
 	}
-	reviewerRunID := fmt.Sprintf("%s-rev%d-%d", run.ID, p.Round, p.Index)
-	_ = h.Adapter.CancelRun(ctx, reviewerRunID) // best effort; a late verdict is ignored anyway
-	log.Printf("review %s: reviewer %s timed out after %s", run.ID, p.Reviewer(), waited.Round(time.Second))
-	h.recordReview(ctx, run, task, p, agentDefinitionOf(h, p.Reviewer()), domain.VerdictError,
-		fmt.Sprintf("reviewer timed out after %s without a verdict", waited.Round(time.Second)), nil)
-	h.advanceReview(ctx, run, task, p)
+	for _, index := range p.Outstanding {
+		_ = h.Adapter.CancelRun(ctx, reviewerRunID(run, p, index)) // best effort; a late verdict is ignored anyway
+		log.Printf("review %s: reviewer %s timed out after %s", run.ID, p.Reviewers[index], waited.Round(time.Second))
+		h.settleReviewer(ctx, run, task, p, index, agentDefinitionOf(h, p.Reviewers[index]), domain.VerdictError,
+			fmt.Sprintf("reviewer timed out after %s without a verdict", waited.Round(time.Second)), nil)
+	}
 }
 
-// acceptsReviewCallback rejects stale and duplicate callbacks: several
-// reviewers report against one run ID, and only the pending one counts.
-func acceptsReviewCallback(p *domain.ReviewPending, reviewer string) bool {
-	return p != nil && reviewer != "" && p.Reviewer() == reviewer
+// pendingIndexFor is the slot a reporting reviewer settles: its first
+// outstanding position in the round. -1 rejects stale and duplicate
+// callbacks, since every reviewer reports against the same run ID.
+func pendingIndexFor(p *domain.ReviewPending, reviewer string) int {
+	if p == nil || reviewer == "" {
+		return -1
+	}
+	for _, i := range p.Outstanding {
+		if i >= 0 && i < len(p.Reviewers) && p.Reviewers[i] == reviewer {
+			return i
+		}
+	}
+	return -1
+}
+
+// settleReviewer records one reviewer's verdict for the round and, if it is
+// the last, decides the round.
+func (h *Handlers) settleReviewer(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending, index int, agentDef, verdict, summary string, defects []domain.Defect) {
+	claimed, err := h.Runs.ClaimReviewSlot(ctx, run.ID, p.Round, index)
+	if err != nil || !claimed {
+		log.Printf("review %s: verdict for %s arrived after its slot was settled", run.ID, p.Reviewers[index])
+		return
+	}
+	h.recordReview(ctx, run, task, p, index, agentDef, verdict, summary, defects)
+	recorded, err := h.Runs.MarkReviewRecorded(ctx, run.ID, p.Round)
+	if err != nil {
+		log.Printf("review %s: count verdict: %v", run.ID, err)
+		return
+	}
+	if recorded < len(p.Reviewers) {
+		return // other reviewers are still at work
+	}
+
+	_ = h.Runs.SetReviewPending(ctx, run.ID, nil, time.Now().UTC())
+	all, err := h.Reviews.ListByRun(ctx, run.ID)
+	if err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "load review verdicts: "+err.Error())
+		return
+	}
+	var round []*domain.Review
+	for _, rv := range all {
+		if rv.Round == p.Round {
+			round = append(round, rv)
+		}
+	}
+	h.finishReviewRound(ctx, run, task, round)
 }
 
 // parseReview turns a reviewer's completion into a verdict. A reviewer that
@@ -212,14 +257,14 @@ func agentDefinitionOf(h *Handlers, name string) string {
 	return name
 }
 
-func (h *Handlers) recordReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending, agentDef, verdict, summary string, defects []domain.Defect) {
+func (h *Handlers) recordReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending, index int, agentDef, verdict, summary string, defects []domain.Defect) {
 	rv := &domain.Review{
-		ID:              fmt.Sprintf("%s-r%d-%d", run.ID, p.Round, p.Index),
+		ID:              fmt.Sprintf("%s-r%d-%d", run.ID, p.Round, index),
 		TaskID:          task.ID,
 		RunID:           run.ID,
 		Round:           p.Round,
-		Index:           p.Index,
-		Reviewer:        p.Reviewer(),
+		Index:           index,
+		Reviewer:        p.Reviewers[index],
 		AgentDefinition: agentDef,
 		Verdict:         verdict,
 		Summary:         summary,
@@ -236,30 +281,6 @@ func (h *Handlers) recordReview(ctx context.Context, run *domain.WorkflowRun, ta
 		Payload: map[string]any{"round": p.Round, "reviewer": rv.Reviewer, "verdict": verdict},
 		At:      rv.FinishedAt,
 	})
-}
-
-// advanceReview starts the round's next reviewer, or decides the round.
-func (h *Handlers) advanceReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, p *domain.ReviewPending) {
-	if p.Index+1 < len(p.Reviewers) {
-		next := *p
-		next.Index++
-		h.startReviewer(ctx, run, task, &next)
-		return
-	}
-	_ = h.Runs.SetReviewPending(ctx, run.ID, nil, time.Now().UTC())
-
-	all, err := h.Reviews.ListByRun(ctx, run.ID)
-	if err != nil {
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "load review verdicts: "+err.Error())
-		return
-	}
-	var round []*domain.Review
-	for _, rv := range all {
-		if rv.Round == p.Round {
-			round = append(round, rv)
-		}
-	}
-	h.finishReviewRound(ctx, run, task, round)
 }
 
 // roundPassed is true when every reviewer in the round passed. A round with

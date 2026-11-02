@@ -50,106 +50,112 @@
       "content": "Kept the change as the human reviewer asked."
     }
   ],
-  "reviewer": [
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "fail",
-            "summary": "Rounding is not explained in the code.",
-            "defects": [
-              {
-                "severity": "minor",
-                "description": "Explain why the result is rounded to cents"
-              }
-            ]
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "fail",
+              "summary": "Rounding is not explained in the code.",
+              "defects": [
+                {
+                  "severity": "minor",
+                  "description": "Explain why the result is rounded to cents"
+                }
+              ]
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "fail",
+              "summary": "Rounding is not explained in the code.",
+              "defects": [
+                {
+                  "severity": "minor",
+                  "description": "Explain why the result is rounded to cents"
+                }
+              ]
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "fail",
-            "summary": "Rounding is not explained in the code.",
-            "defects": [
-              {
-                "severity": "minor",
-                "description": "Explain why the result is rounded to cents"
-              }
-            ]
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    }
-  ]
+        ]
+      }
+    ]
+  }
 }

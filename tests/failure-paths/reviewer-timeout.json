@@ -47,73 +47,79 @@
       "content": "No change needed; a reviewer timed out."
     }
   ],
-  "reviewer": [
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "late"
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ],
-      "delayMs": 600000
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "late"
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ],
+        "delayMs": 600000
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    },
-    {
-      "toolCalls": [
-        {
-          "name": "submit_review",
-          "arguments": {
-            "verdict": "pass",
-            "summary": "Meets every acceptance criterion."
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
           }
-        }
-      ]
-    }
-  ]
+        ]
+      }
+    ]
+  }
 }

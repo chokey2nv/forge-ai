@@ -1,6 +1,6 @@
 # Phase 10 — Parallel execution
 
-**Status:** 10.1–10.2 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
+**Status:** 10.1–10.3 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -70,7 +70,7 @@ Each ends with its tests passing and a commit.
 |---|---|---|
 | 10.1 ✅ | `PROVISIONING` status (dispatch, retry and resume); provisioning off the tick; `MAX_CONCURRENT_RUNS`; base commit as SHA; per-parent integration lock with `--3way`; scripted provider turn queues keyed by task | Unit tests (race detector): tick never waits on provisioning, runs are `PROVISIONING` meanwhile, cap honoured, base pinned, dependents wait; `--3way` on a real repo merges, conflicts cleanly. Scripted `parallel-siblings`, `diamond`, `concurrency-cap` pass on new fixture `parallel-features`; all 13 scenarios pass. Claude slices not re-run |
 | 10.2 ✅ | Scope-overlap serialization with `implicitDependsOn` and a `child.serialized` event per reason; dependency cycles rejected at decomposition; console shows implicit dependencies. **Changed from the plan:** an integration conflict blocks (with a clean reset, from 10.1) instead of triggering a rework; see below | Unit tests for pattern overlap, serialization, cycle detection, and the scheduler honouring implicit dependencies; scripted `overlap-serialized` and `cycle-rejected`; all 15 scenarios pass |
-| 10.3 | Parallel reviewers | Scripted: reviewers start before the first verdict arrives; `split-verdict`, `reviewer-timeout`, escalation scenarios still pass |
+| 10.3 ✅ | Parallel reviewers: all of a round's reviewers start together; each verdict settles its slot by claim → save → count, and the last to count decides the round; the watcher's timeout settles every outstanding slot; adapter skips diff capture and sets `GIT_OPTIONAL_LOCKS=0` for review runs; scripted provider can key turns by agent prompt | Unit tests for slot matching (incl. an agent listed twice); scripted `parallel-reviewers` (two 3s reviewers, round took 3s); every review scenario re-keyed by reviewer and passing. The full run found a real concurrency bug: document IDs were the time in nanoseconds and collided when parallel subtasks transitioned in the same clock tick, failing a transition that had already happened. IDs are now UUIDs (concurrency test), a transition no longer fails on its event write, and the parallel scenarios passed 3 extra times each. All 16 scenarios pass |
 | 10.4 | Three-child Claude slice (two independent + one dependent) with wall-time report; console concurrency view; docs | Slice passes with Claude and its wall time beats the sum of its children's; runbook §5/§9 updated |
 
 ## Costs and risks
