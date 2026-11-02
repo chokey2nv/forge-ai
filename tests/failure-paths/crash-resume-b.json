@@ -26,6 +26,28 @@
           }
         }
       ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
     }
   ]
 }

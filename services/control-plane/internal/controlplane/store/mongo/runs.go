@@ -194,3 +194,12 @@ func (r *RunRepo) StartReviewRound(ctx context.Context, id string, round int, at
 	}})
 	return err
 }
+
+func (r *RunRepo) SetReviewPending(ctx context.Context, id string, p *domain.ReviewPending, at time.Time) error {
+	update := bson.M{"$set": bson.M{"reviewPending": p, "updatedAt": at}}
+	if p == nil {
+		update = bson.M{"$set": bson.M{"updatedAt": at}, "$unset": bson.M{"reviewPending": ""}}
+	}
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, update)
+	return err
+}

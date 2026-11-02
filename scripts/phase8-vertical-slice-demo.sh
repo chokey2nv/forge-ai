@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-CP=http://localhost:8080
+CP=${CP:-http://localhost:8080}
 REPO=$(pwd)/tests/evaluations/fixtures/pagination-off-by-one
 
 TASK=$(curl -sf -X POST $CP/tasks -H 'Content-Type: application/json' -d "{

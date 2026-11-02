@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
-	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
@@ -44,85 +42,31 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 		return err
 	}
 
-	// Determine reviewer: use head-engineer's reviewers[0].
-	he, ok := h.Registry.GetAgent("head-engineer")
-	if !ok || len(he.Reviewers) == 0 {
-		_ = h.SM.Transition(ctx, parent, domain.StatusReviewPending, "no reviewer configured")
-		return nil
-	}
-	reviewerName := he.Reviewers[0]
-	reviewer, ok := h.Registry.GetAgent(reviewerName)
-	if !ok {
-		_ = h.SM.Transition(ctx, parent, domain.StatusReviewPending, "reviewer not registered")
-		return nil
-	}
-	sysPrompt, tools, err := agent.Compose(reviewer, h.Registry.GetSkill)
-	if err != nil {
-		_ = h.SM.Transition(ctx, parent, domain.StatusReviewPending, "compose reviewer: "+err.Error())
-		return nil
-	}
-
-	diff, err := workspace.DiffFromBase(parent.IntegrationWorktree, parent.IntegrationBaseCommit)
-	if err != nil {
-		_ = h.SM.Transition(ctx, parent, domain.StatusBlocked, "combined diff: "+err.Error())
-		workspace.Cleanup(ctx, &workspace.Workspace{ContainerName: ws.ContainerName}, parent.RepoPath)
-		return err
-	}
-
-	toolSchemas := make([]agent.ToolSchema, len(tools))
-	for i, t := range tools {
-		toolSchemas[i] = agent.ToolSchema{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
-	}
-
-	// The reviewer's completion callback needs a run record to land on.
-	// WorktreePath is left empty so review cleanup only removes the container,
-	// never the parent's integration worktree.
+	// The combined change is reviewed by the head engineer's reviewers. Their
+	// callbacks need a run record to land on; WorktreePath stays empty so
+	// cleanup only removes the container, never the integration worktree.
 	provider, model := parentProvenance(ctx, h, parent)
-	runID := "run-" + parent.ID + "-final-review"
 	now := time.Now().UTC()
-	if err := h.Runs.Create(ctx, &domain.WorkflowRun{
-		ID: runID, TaskID: parent.ID,
+	run := &domain.WorkflowRun{
+		ID: "run-" + parent.ID + "-final-review", TaskID: parent.ID,
 		Status:        domain.RunVerifying,
 		ContainerName: ws.ContainerName,
 		BaseCommit:    parent.IntegrationBaseCommit,
 		Provenance: domain.Provenance{
-			AgentDefinition: fmt.Sprintf("%s@v%d", reviewer.Name, reviewer.Version),
+			AgentDefinition: "final-review",
 			Provider:        provider, Model: model,
 		},
 		LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		_ = h.SM.Transition(ctx, parent, domain.StatusReviewPending, "create review run: "+err.Error())
-		return nil
 	}
-
-	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:          runID,
-		CallbackRunID:  runID,
-		ContainerName:  ws.ContainerName,
-		WorktreePath:   ws.WorktreePath,
-		Role:           reviewer.Name,
-		Task:           buildReviewerPrompt(parent, diff),
-		SystemPrompt:   sysPrompt,
-		Tools:          toolSchemas,
-		SubmissionTool: reviewer.SubmissionTool,
-		CallbackURL:    h.SelfURL,
-		Provider:       provider,
-		Model:          model,
-		MaxSteps:       h.ReviewerMaxSteps,
-		MaxRetries:     parent.Budget.MaxRetries,
-		WallClockMS:    h.ReviewerWallClockMS,
-	})
-	if err != nil {
-		_ = h.SM.Transition(ctx, parent, domain.StatusReviewPending, "reviewer invocation failed: "+err.Error())
+	if err := h.Runs.Create(ctx, run); err != nil {
+		_ = h.SM.Transition(ctx, parent, domain.StatusBlocked, "create final review run: "+err.Error())
+		workspace.Cleanup(ctx, &workspace.Workspace{ContainerName: ws.ContainerName}, parent.RepoPath)
+		return err
 	}
+	h.startReviews(ctx, run, parent)
 	return nil
 }
 
-func parentProvenanceAgent(parent *domain.Task) string {
-	return "head-engineer" // Phase 8: parent review is delegated to head-engineer's reviewers
-}
-
-// parentProvenance reuses the provider/model the head-engineer ran with.
 func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (provider, model string) {
 	if run, err := h.Runs.Get(ctx, parent.LatestRunID); err == nil {
 		return run.Provenance.Provider, run.Provenance.Model

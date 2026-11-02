@@ -7,7 +7,8 @@
 # verification gates, review, integration. No model API is called.
 #
 #   verify-retry   first fix fails verification, the retry passes
-#   review-retry   reviewer rejects once, the re-invoked implementer passes
+#   two-reviewers-pass  every listed reviewer reviews, child and parent (Phase 9)
+#   split-verdict  one reviewer rejects; the implementer gets its defects, round 2 passes
 #   exhaustion     verification keeps failing; child and parent block
 #   crash-resume   adapter dies mid-run; run goes RESUMABLE and resumes
 #   add-agent      a new agent is a markdown file and a reload: no code changes
@@ -24,7 +25,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry review-retry exhaustion crash-resume add-agent)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -113,6 +114,9 @@ check() { # description, condition result (0 = ok)
   if [ "$2" -eq 0 ]; then echo "    ok   $1"; else echo "    FAIL $1"; FAILED+=("$SC: $1"); fi
 }
 has_reason() { reasons "$1" | grep -qF "$2"; }
+verdicts() { # run -> "round reviewer verdict,..." in review order
+  curl -sf "$CP/runs/$1/reviews" | jq -r '[.[] | "\(.round) \(.reviewer) \(.verdict)"] | join(",")'
+}
 
 run_scenario() {
   local repo task child final
@@ -132,9 +136,20 @@ run_scenario() {
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
       check "integrated fix rounds to cents" "$(git -C "$repo" show "forge/$task:src/price.js" | grep -q Math.round; echo $?)"
       ;;
-    review-retry)
+    two-reviewers-pass)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
-      check "child retried after reviewer rejection" "$(has_reason "$child" "reviewer rejected; retrying"; echo $?)"
+      check "child reviewed by reviewer then test-reviewer, both pass" \
+        "$(verdicts "run-$child" | grep -qx '1 reviewer pass,1 test-reviewer pass'; echo $?)"
+      check "combined change reviewed by reviewer then security-reviewer, both pass" \
+        "$(verdicts "run-$task-final-review" | grep -qx '1 reviewer pass,1 security-reviewer pass'; echo $?)"
+      ;;
+    split-verdict)
+      check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "round 1: reviewer passes, test-reviewer rejects; round 2: both pass" \
+        "$(verdicts "run-$child" | grep -qx '1 reviewer pass,1 test-reviewer fail,2 reviewer pass,2 test-reviewer pass'; echo $?)"
+      check "child retried after the rejection" "$(has_reason "$child" "review rejected; retrying"; echo $?)"
+      check "implementer received the test-reviewer's defects" \
+        "$(curl -sf "$CP/runs/run-$child" | jq -e '[.lastCheckpoint.messages[].content] | any(contains("## test-reviewer (fail)") and contains("No test covers a 0% discount"))' >/dev/null; echo $?)"
       check "reworked change was re-verified" "$(reasons "$child" | grep -c "RUNNING -> VERIFYING" | grep -qx 2; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
       ;;

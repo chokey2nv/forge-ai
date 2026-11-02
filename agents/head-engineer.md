@@ -15,6 +15,7 @@ tools:
   - git_diff
 reviewers:
   - reviewer
+  - security-reviewer
 ---
 
 You are the head engineer. You do NOT write code. Your output is a task graph.

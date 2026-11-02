@@ -80,6 +80,7 @@ func main() {
 	runRepo := mongo_store.NewRunRepo(db)
 	eventRepo := mongo_store.NewEventRepo(db)
 	verificationRepo := mongo_store.NewVerificationRepo(db)
+	reviewRepo := mongo_store.NewReviewRepo(db)
 	approvalRepo := mongo_store.NewApprovalRepo(db)
 	evalResultRepo := mongo_store.NewEvalResultRepo(db)
 
@@ -103,6 +104,7 @@ func main() {
 	h.Registry = registry
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
+	h.Reviews = reviewRepo
 	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
 	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
 	h.PlannerWallClockMS = int(parseDuration(envOr("PLANNER_TIMEOUT", "120s"), 120*time.Second) / time.Millisecond)
@@ -166,6 +168,7 @@ func main() {
 	mux.HandleFunc("GET /runs/{id}", h.GetRun)
 	mux.HandleFunc("GET /runs/{id}/events", h.ListEvents)
 	mux.HandleFunc("GET /runs/{id}/diff", h.GetDiff)
+	mux.HandleFunc("GET /runs/{id}/reviews", h.ListRunReviews)
 	mux.HandleFunc("POST /runs/{id}/resume", h.ResumeRun)
 
 	// callbacks from adapter

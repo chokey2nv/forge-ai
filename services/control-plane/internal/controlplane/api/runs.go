@@ -162,57 +162,7 @@ func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.Wor
 	}
 	_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, true, domain.RunVerifying, "", time.Now().UTC())
 
-	// Invoke reviewer via adapter.
-	latest, err := h.Runs.Get(ctx, run.ID)
-	if err != nil {
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "load run for review: "+err.Error())
-		return
-	}
-	// diff := latest.LastCheckpoint.WorkspaceDiff
-
-	// taskPrompt := buildReviewerPrompt(task, diff)
-
-	// Look up the implementer's configured reviewer.
-	impl, ok := h.Registry.GetAgent(agentNameOf(run))
-	if !ok || len(impl.Reviewers) == 0 {
-		h.passWithoutReviewer(ctx, run, task, attempt, "verification passed; no agent reviewer configured")
-		return
-	}
-
-	reviewerName := impl.Reviewers[0]
-	reviewer, ok := h.Registry.GetAgent(reviewerName)
-	if !ok {
-		h.reviewerUnavailable(ctx, run, task, "configured reviewer "+reviewerName+" not registered")
-		return
-	}
-	systemPrompt, tools, err := agent.Compose(reviewer, h.Registry.GetSkill)
-	if err != nil {
-		h.reviewerUnavailable(ctx, run, task, "reviewer compose failed: "+err.Error())
-		return
-	}
-
-	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:          run.ID + "-rev" + fmt.Sprint(attempt),
-		CallbackRunID:  run.ID,
-		ContainerName:  run.ContainerName,
-		WorktreePath:   run.WorktreePath,
-		Role:           reviewer.Name,
-		Task:           buildReviewerPrompt(task, latest.LastCheckpoint.WorkspaceDiff),
-		SystemPrompt:   systemPrompt,
-		Tools:          tools,
-		SubmissionTool: reviewer.SubmissionTool,
-		CallbackURL:    h.SelfURL,
-		Provider:       latest.Provenance.Provider,
-		Model:          latest.Provenance.Model,
-		MaxSteps:       h.ReviewerMaxSteps,
-		MaxRetries:     task.Budget.MaxRetries,
-		WallClockMS:    h.ReviewerWallClockMS,
-	})
-
-	if err != nil {
-		log.Printf("reviewer invocation failed: %v", err)
-		h.reviewerUnavailable(ctx, run, task, "reviewer failed to start: "+err.Error())
-	}
+	h.startReviews(ctx, run, task)
 }
 
 // passWithoutReviewer finishes a verified run that has no agent reviewer: a
@@ -224,18 +174,6 @@ func (h *Handlers) passWithoutReviewer(ctx context.Context, run *domain.Workflow
 		return
 	}
 	_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, reason)
-}
-
-// reviewerUnavailable handles a reviewer that is configured but cannot run.
-// A root still has a human reviewer, so it proceeds. A child is blocked: in
-// REVIEW_PENDING it would never reach INTEGRATED and its parent would wait forever.
-func (h *Handlers) reviewerUnavailable(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, reason string) {
-	if task.ParentID != "" {
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
-		return
-	}
-	_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "verification passed; "+reason)
 }
 
 // integrateChild applies a finished child's diff to its parent's integration
@@ -325,81 +263,6 @@ func (h *Handlers) handleVerificationFailure(run *domain.WorkflowRun, task *doma
 	_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, false, domain.RunRunning, "", time.Now().UTC())
 	_ = h.SM.Transition(ctx, task, domain.StatusRunning, "verification failed; retrying")
 	h.reinvokeImplementer(run, task, "The previous attempt failed verification:\n\n"+h.Verifier.SummaryText(vr))
-}
-
-func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {
-	ctx := context.Background()
-
-	var sub struct {
-		Verdict string `json:"verdict"`
-		Summary string `json:"summary"`
-		Defects []struct {
-			Severity    string `json:"severity"`
-			Description string `json:"description"`
-			Location    string `json:"location,omitempty"`
-		} `json:"defects"`
-	}
-	_ = json.Unmarshal(body.Submission, &sub)
-
-	verdict := strings.ToLower(strings.TrimSpace(sub.Verdict))
-	if verdict != "pass" {
-		verdict = "fail"
-	}
-	_ = h.Runs.SaveReviewVerdict(ctx, run.ID, verdict, time.Now().UTC())
-
-	if verdict == "pass" {
-		if task.ParentID != "" {
-			h.integrateChild(ctx, run, task)
-			return
-		}
-		// Root: proceed to human review.
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunComplete, "", time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, "reviewer passed: "+sub.Summary)
-		workspace.Cleanup(ctx, &workspace.Workspace{
-			WorktreePath:  run.WorktreePath,
-			ContainerName: run.ContainerName,
-		}, task.RepoPath)
-		return
-	}
-
-	// A parent's final review has no implementer to send back to.
-	if task.ParentID == "" && task.IntegrationBranch != "" {
-		reason := "final review failed: " + sub.Summary
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
-		workspace.Cleanup(ctx, &workspace.Workspace{ContainerName: run.ContainerName}, task.RepoPath)
-		return
-	}
-
-	// Review rounds are counted on their own: sharing the verification counter
-	// meant a change that passed verification once was blocked by its first
-	// rejection, so review feedback could never be acted on.
-	round := run.ReviewRound + 1
-	if round >= h.MaxReviewRounds {
-		reason := fmt.Sprintf("reviewer rejected the change %d time(s): %s", round, sub.Summary)
-		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
-		workspace.Cleanup(ctx, &workspace.Workspace{WorktreePath: run.WorktreePath, ContainerName: run.ContainerName}, task.RepoPath)
-		return
-	}
-
-	// The reworked change gets a fresh set of verification attempts.
-	_ = h.Runs.StartReviewRound(ctx, run.ID, round, time.Now().UTC())
-	_ = h.SM.Transition(ctx, task, domain.StatusRunning, "reviewer rejected; retrying")
-
-	var diag strings.Builder
-	diag.WriteString("A code review rejected your change:\n\n")
-	diag.WriteString(sub.Summary)
-	diag.WriteString("\n\nDefects:\n")
-	for _, d := range sub.Defects {
-		fmt.Fprintf(&diag, "- [%s] %s", d.Severity, d.Description)
-		if d.Location != "" {
-			fmt.Fprintf(&diag, " (%s)", d.Location)
-		}
-		diag.WriteString("\n")
-	}
-	diag.WriteString("\nAddress every defect, then re-verify the acceptance criteria.")
-	h.reinvokeImplementer(run, task, diag.String())
 }
 
 func (h *Handlers) handlePlannerDone(run *domain.WorkflowRun, task *domain.Task, body AgentCompleteBody) {

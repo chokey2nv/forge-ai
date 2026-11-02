@@ -15,23 +15,24 @@ const (
 )
 
 type WorkflowRun struct {
-	ID                  string      `bson:"_id" json:"id"`
-	TaskID              string      `bson:"taskId" json:"taskId"`
-	Status              RunStatus   `bson:"status" json:"status"`
-	WorktreePath        string      `bson:"worktreePath" json:"worktreePath"`
-	ContainerName       string      `bson:"containerName" json:"containerName"`
-	BaseCommit          string      `bson:"baseCommit" json:"baseCommit"`
-	Provenance          Provenance  `bson:"provenance" json:"provenance"`
-	StepCount           int         `bson:"stepCount" json:"stepCount"`
-	VerificationAttempt int         `bson:"verificationAttempt" json:"verificationAttempt"`
-	VerificationPassed  bool        `bson:"verificationPassed" json:"verificationPassed"`
-	ReviewRound         int         `bson:"reviewRound" json:"reviewRound"` // reviewer rejections so far
-	LastCheckpoint      *Checkpoint `bson:"lastCheckpoint,omitempty" json:"lastCheckpoint,omitempty"`
-	LastHeartbeat       time.Time   `bson:"lastHeartbeat" json:"lastHeartbeat"`
-	BlockedReason       string      `bson:"blockedReason,omitempty" json:"blockedReason,omitempty"`
-	FinalMessage        string      `bson:"finalMessage,omitempty" json:"finalMessage,omitempty"`
-	CreatedAt           time.Time   `bson:"createdAt" json:"createdAt"`
-	UpdatedAt           time.Time   `bson:"updatedAt" json:"updatedAt"`
+	ID                  string         `bson:"_id" json:"id"`
+	TaskID              string         `bson:"taskId" json:"taskId"`
+	Status              RunStatus      `bson:"status" json:"status"`
+	WorktreePath        string         `bson:"worktreePath" json:"worktreePath"`
+	ContainerName       string         `bson:"containerName" json:"containerName"`
+	BaseCommit          string         `bson:"baseCommit" json:"baseCommit"`
+	Provenance          Provenance     `bson:"provenance" json:"provenance"`
+	StepCount           int            `bson:"stepCount" json:"stepCount"`
+	VerificationAttempt int            `bson:"verificationAttempt" json:"verificationAttempt"`
+	VerificationPassed  bool           `bson:"verificationPassed" json:"verificationPassed"`
+	ReviewRound         int            `bson:"reviewRound" json:"reviewRound"` // reviewer rejections so far
+	ReviewPending       *ReviewPending `bson:"reviewPending,omitempty" json:"reviewPending,omitempty"`
+	LastCheckpoint      *Checkpoint    `bson:"lastCheckpoint,omitempty" json:"lastCheckpoint,omitempty"`
+	LastHeartbeat       time.Time      `bson:"lastHeartbeat" json:"lastHeartbeat"`
+	BlockedReason       string         `bson:"blockedReason,omitempty" json:"blockedReason,omitempty"`
+	FinalMessage        string         `bson:"finalMessage,omitempty" json:"finalMessage,omitempty"`
+	CreatedAt           time.Time      `bson:"createdAt" json:"createdAt"`
+	UpdatedAt           time.Time      `bson:"updatedAt" json:"updatedAt"`
 
 	// WorkspaceReleasedAt is set once the run's container and workspace
 	// directory have been removed.

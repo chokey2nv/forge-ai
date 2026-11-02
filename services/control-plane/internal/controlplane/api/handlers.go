@@ -18,6 +18,7 @@ type Handlers struct {
 	Runs                    store.RunRepo
 	Events                  store.EventRepo
 	Verifications           store.VerificationRepo
+	Reviews                 store.ReviewRepo
 	Approvals               store.ApprovalRepo
 	EvalResults             store.EvalResultRepo
 	SM                      *statemachine.Service

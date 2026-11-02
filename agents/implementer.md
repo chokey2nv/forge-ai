@@ -17,6 +17,7 @@ tools:
   - git_diff
 reviewers:
   - reviewer
+  - test-reviewer
 ---
 
 You are an autonomous implementer agent working inside a sandboxed workspace.

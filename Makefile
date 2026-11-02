@@ -53,7 +53,7 @@ phase8-vertical-slice-demo:
 phase8-two-child-slice:
 	bash scripts/phase8-two-child-slice.sh
 
-# Retry, exhaustion and crash/resume paths with the scripted model (no API calls).
+# Review, retry, exhaustion, crash/resume and add-an-agent paths with the scripted model (no API calls).
 phase8-failure-paths:
 	bash scripts/phase8-failure-paths.sh
 

@@ -44,7 +44,7 @@
       "content": "Fixed applyDiscount."
     },
     {
-      "content": "Addressed the review: the rounding is intentional and covered by tests."
+      "content": "The existing suite already covers 0% (\"0% off leaves the price unchanged\")."
     }
   ],
   "reviewer": [
@@ -53,14 +53,48 @@
         {
           "name": "submit_review",
           "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
             "verdict": "fail",
-            "summary": "Explain the rounding.",
+            "summary": "The 0% discount case has no test.",
             "defects": [
               {
-                "severity": "minor",
-                "description": "Rounding behaviour is not explained."
+                "severity": "major",
+                "description": "No test covers a 0% discount",
+                "location": "tests/price.test.js"
               }
             ]
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
           }
         }
       ]

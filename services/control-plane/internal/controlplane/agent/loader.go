@@ -63,10 +63,18 @@ func LoadAgentsDir(dir string, skills map[string]*Skill) (*LoadResult, error) {
 				res.Errors = append(res.Errors, fmt.Errorf("agent %q references unknown submission_tool %q", a.Name, a.SubmissionTool))
 			}
 		}
+		// Reviewers are review agents (submission_tool: submit_review). Every
+		// listed reviewer runs on each change, so a bad entry must fail the
+		// load rather than surface mid-pipeline.
 		for _, r := range a.Reviewers {
-			if _, ok := res.Agents[r]; !ok {
-				res.Warnings = append(res.Warnings,
-					fmt.Sprintf("agent %q lists reviewer %q which is not yet loaded", a.Name, r))
+			rev, ok := res.Agents[r]
+			switch {
+			case r == a.Name:
+				res.Errors = append(res.Errors, fmt.Errorf("agent %q lists itself as a reviewer", a.Name))
+			case !ok:
+				res.Errors = append(res.Errors, fmt.Errorf("agent %q lists unknown reviewer %q", a.Name, r))
+			case rev.SubmissionTool != "submit_review":
+				res.Errors = append(res.Errors, fmt.Errorf("agent %q lists reviewer %q, which is not a review agent (submission_tool: submit_review)", a.Name, r))
 			}
 		}
 	}

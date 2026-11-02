@@ -192,7 +192,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `AGENTS_DIR` / `SKILLS_DIR` | `agents` / `skills` | Control plane | Agent and skill markdown, re-read on `POST /agents/reload` |
 | `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
-| `MAX_REVIEW_ROUNDS` | `2` | Control plane | Reviewer rejections before a task blocks; each round gets fresh verification attempts |
+| `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task blocks; each round runs every listed reviewer and gets fresh verification attempts |
 | `REVIEWER_ENABLED` | `true` | Control plane | Agent review after verification |
 | `ORPHAN_CONTAINER_GRACE` | `10m` | Control plane | Age before the reaper removes an unowned container or workspace directory |
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
@@ -520,6 +520,8 @@ make phase8-two-child-slice
 # overrides: PROVIDER=claude MODEL=claude-haiku-5-5 CP=http://localhost:8080
 ```
 
+Each child is reviewed by every reviewer its agent lists (`implementer`: `reviewer`, `test-reviewer`), and the combined change by the head engineer's (`reviewer`, `security-reviewer`). Verdicts: `curl -s localhost:8080/runs/<runId>/reviews | jq`.
+
 Copies `tests/evaluations/fixtures/cart-pricing` into a fresh temp git repo on every run (path printed as `repo:`), so runs are independent. The requirement asks for a discount fix plus a cart module that depends on it.
 
 **Pass criteria** (checked by the script itself, independently of the platform's own gates):
@@ -543,7 +545,8 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | Scenario | What happens | Pass criteria |
 |---|---|---|
 | `verify-retry` | First fix fails the test gate; implementer re-invoked with the gate output | Child retried, integrated, fix in the branch, parent `REVIEW_PENDING` |
-| `review-retry` | Reviewer rejects once | Implementer re-invoked, change re-verified, child integrated |
+| `two-reviewers-pass` | Every listed reviewer reviews in order | Child: `reviewer` then `test-reviewer` pass; combined change: `reviewer` then `security-reviewer` pass |
+| `split-verdict` | `reviewer` passes, `test-reviewer` rejects | Implementer re-invoked with the test-reviewer's defects, re-verified, round 2 both pass, child integrated |
 | `exhaustion` | Fix never improves | Child `BLOCKED` ("verification failed after 2 attempts"), parent `BLOCKED` |
 | `crash-resume` | Adapter killed mid-run | Child `RESUMABLE`; `POST /runs/{id}/resume` → 202; resumed run gets the agent's tools and new workspace; parent `REVIEW_PENDING` |
 | `add-agent` | `docs-writer.md` added, `POST /agents/reload`, task assigned to it, file deleted, reload | Registered after reload, offered to the head engineer, child runs as `docs-writer@v1` with its tools, unregistered after delete |

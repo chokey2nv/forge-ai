@@ -41,6 +41,8 @@ type RunRepo interface {
 	// StartReviewRound records a reviewer rejection and resets verification
 	// attempts for the reworked change.
 	StartReviewRound(ctx context.Context, id string, round int, at time.Time) error
+	// SetReviewPending records the reviewer the run waits for; nil clears it.
+	SetReviewPending(ctx context.Context, id string, p *domain.ReviewPending, at time.Time) error
 
 	ListByTask(ctx context.Context, taskID string) ([]*domain.WorkflowRun, error)
 
@@ -53,6 +55,11 @@ type EventRepo interface {
 	Append(ctx context.Context, e *domain.Event) error
 	ListByRun(ctx context.Context, runID string) ([]*domain.Event, error)
 }
+type ReviewRepo interface {
+	Create(ctx context.Context, r *domain.Review) error
+	ListByRun(ctx context.Context, runID string) ([]*domain.Review, error)
+}
+
 type VerificationRepo interface {
 	Create(ctx context.Context, vr *domain.VerificationRun) error
 	LatestForRun(ctx context.Context, runID string) (*domain.VerificationRun, error)
