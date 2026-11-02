@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"net/http"
 	"time"
 
@@ -19,6 +20,7 @@ type Handlers struct {
 	Events                  store.EventRepo
 	Verifications           store.VerificationRepo
 	Reviews                 store.ReviewRepo
+	Delivery                *delivery.Inspector
 	Approvals               store.ApprovalRepo
 	EvalResults             store.EvalResultRepo
 	SM                      *statemachine.Service

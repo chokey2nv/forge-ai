@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   api, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
-  type EscalationDecision, AgentDefinition, Skill,
+  type EscalationDecision, type DeliveryPreview, AgentDefinition, Skill,
 } from "./api";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" };
@@ -184,6 +184,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [events, setEvents] = useState<Event[]>([]);
   const [verification, setVerification] = useState<VerificationRun | null>(null);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
   const [reviewer, setReviewer] = useState("human");
   const [rationale, setRationale] = useState("");
   const [guidance, setGuidance] = useState("");
@@ -213,6 +214,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         setVerification(await api.getVerification(rid));
       }
       setApprovals(await api.listApprovals(id));
+      setDelivery(!t.parentId ? await api.getDelivery(id).catch(() => null) : null);
       setErr("");
     } catch (e) { setErr(String(e)); }
   };
@@ -266,6 +268,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
 
+      {delivery && <DeliveryHint preview={delivery} />}
+
       {task.status === "ESCALATED" && (
         <section className="approval escalation">
           <h3>Escalated — your decision</h3>
@@ -315,6 +319,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {task.status === "REVIEW_PENDING" && (
         <section className="approval">
           <h3>Decision</h3>
+          {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision; delivery is not wired up yet (Phase 11.3)."}</p>}
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (optional)" />
           <div>
@@ -471,6 +476,27 @@ function Timeline({ children, events, onOpen }: { children: Task[]; events: Reco
           );
         })}
       </div>
+    </section>
+  );
+}
+
+/** Where the task's work lives and what approving it will do. */
+function DeliveryHint({ preview: p }: { preview: DeliveryPreview }) {
+  return (
+    <section className={`delivery delivery-${p.mode}`}>
+      <h3>Delivery</h3>
+      {p.branch && (
+        <p>
+          Work branch <code>{p.branch}</code> → target <code>{p.targetBranch}</code>
+          {" · "}
+          {p.remote ? <>remote <code>{p.remote.name}</code> ({p.remote.host ? `${p.remote.host}/${p.remote.repo}` : p.remote.url})</> : "no remote"}
+        </p>
+      )}
+      <p><strong>{p.action}</strong></p>
+      {!p.deliversOnApproval && p.mode !== "unavailable" && (
+        <p className="hint">Not active yet: approval currently records the decision only (delivery lands in Phase 11.3).</p>
+      )}
+      {p.warnings.map((w, i) => <p key={i} className="warning">⚠ {w}</p>)}
     </section>
   );
 }

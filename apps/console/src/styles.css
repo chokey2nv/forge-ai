@@ -78,3 +78,11 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .timeline-bar.bar-escalated { background: #dd8a2a; }
 .timeline-bar.bar-open { opacity: 0.6; }
 .timeline-dur { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Phase 11: delivery */
+.delivery { border: 1px solid #c6d4e3; background: #f5f9fd; padding: 10px 12px; border-radius: 8px; }
+.delivery h3 { margin-top: 0; }
+.delivery p { margin: 6px 0; font-size: 14px; }
+.delivery-pull_request { border-color: #b7c9f0; }
+.delivery-local_merge { border-color: #c5e3c5; background: #f6fbf6; }
+.delivery .warning, .warning { color: #9a5b00; }

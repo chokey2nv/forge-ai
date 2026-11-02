@@ -49,6 +49,19 @@ export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPT
 export REVIEWER_TIMEOUT=8s REVIEW_TIMEOUT_GRACE=2s
 export SCRIPTED_PROVIDER_LOG="$WORK/prompts.jsonl" # every agent's task prompt, for assertions
 
+# A stand-in gh: tests never call the real one (it would act as your account).
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/gh" <<'GH'
+#!/bin/sh
+echo "gh $*" >>"${GH_LOG:-/dev/null}"
+case "$1 $2" in
+  "auth status") echo "  ✓ Logged in to github.com account forge-test (keyring)"; exit 0 ;;
+esac
+echo "stub gh: unsupported: $*" >&2; exit 1
+GH
+chmod +x "$WORK/bin/gh"
+export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log"
+
 # A private copy of the agent definitions: add-agent writes to it, never to agents/.
 cp -R "$ROOT/agents" "$WORK/agents"
 export AGENTS_DIR="$WORK/agents" SKILLS_DIR="$ROOT/skills"
@@ -149,10 +162,19 @@ run_scenario() {
 
   case "$SC" in
     verify-retry)
+      check "the parent branch was created with the task, named from its description" \
+        "$(b=$(branch_of "$task"); [[ "$b" == forge/fix-applydiscount-in-src-price-js-so-it-* ]] && [[ "$b" == *"${task#task-}" ]] && git -C "$repo" show-ref --verify --quiet "refs/heads/$b"; echo $?)"
+      check "the target branch is the repository's checked-out branch" \
+        "$([ "$(curl -sf "$CP/tasks/$task" | jq -r .targetBranch)" = "$(git -C "$repo" symbolic-ref --short HEAD)" ]; echo $?)"
+      check "no remote: approval would merge locally" \
+        "$(curl -sf "$CP/tasks/$task/delivery" | jq -e '.mode == "local_merge" and (.action | contains("locally"))' >/dev/null; echo $?)"
+      git -C "$repo" remote add origin https://github.com/example/app.git
+      check "a GitHub remote: approval would open a pull request as the gh account" \
+        "$(curl -sf "$CP/tasks/$task/delivery" | jq -e '.mode == "pull_request" and .ghReady and (.action | contains("on github.com/example/app as forge-test"))' >/dev/null; echo $?)"
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "child retried after failed verification" "$(has_reason "$child" "verification failed; retrying"; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
-      check "integrated fix rounds to cents" "$(git -C "$repo" show "forge/$task:src/price.js" | grep -q Math.round; echo $?)"
+      check "integrated fix rounds to cents" "$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q Math.round; echo $?)"
       ;;
     parallel-reviewers)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
@@ -348,6 +370,7 @@ event_count() { # task type reason-substring -> number of matching events
   q=$(printf 'print(db.events.countDocuments({taskId: "%s", type: "%s", reason: {$regex: "%s"}}))' "$1" "$2" "$3")
   mongosh --quiet "$DB" --eval "$q"
 }
+branch_of() { curl -sf "$CP/tasks/$1" | jq -r .integrationBranch; }
 child_titled() { curl -sf "$CP/tasks/$1/children" | jq -r --arg t "$2" '.[] | select(.title == $t) | .id'; }
 run_base() { curl -sf "$CP/runs/run-$1" | jq -r .baseCommit; }
 
@@ -396,11 +419,11 @@ run_parallel() { # siblings | diamond | cap
     check "dependent starts only after both dependencies integrated" \
       "$(cc=$(at "$c" CREATED DISPATCHED); [ -n "$cc" ] && [ "$cc" -ge "$ia" ] && [ "$cc" -ge "$ib" ]; echo $?)"
     check "dependent started from a commit that includes both" \
-      "$(git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($b)" "forge/$task")" "$(run_base "$c")" && git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($a)" "forge/$task")" "$(run_base "$c")"; echo $?)"
+      "$(git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($b)" "$(branch_of "$task")")" "$(run_base "$c")" && git -C "$repo" merge-base --is-ancestor "$(git -C "$repo" log --format=%H --grep "integrate($a)" "$(branch_of "$task")")" "$(run_base "$c")"; echo $?)"
   fi
   n=$(curl -sf "$CP/tasks/$task/children" | jq length)
   check "one integration commit per subtask ($n)" \
-    "$([ "$(git -C "$repo" rev-list --count "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)..forge/$task")" -eq "$n" ]; echo $?)"
+    "$([ "$(git -C "$repo" rev-list --count "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)..$(branch_of "$task")")" -eq "$n" ]; echo $?)"
   check "integrated branch passes its tests on the host" \
     "$(cd "$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)" && node --test >/dev/null 2>&1; echo $?)"
 }

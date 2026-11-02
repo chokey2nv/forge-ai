@@ -32,6 +32,22 @@ func CreateIntegrationWorktree(repoPath, baseCommit, branch string) (string, err
 	return worktree, nil
 }
 
+// AddWorktreeForBranch checks out an existing branch in a new integration
+// worktree, without moving the branch.
+func AddWorktreeForBranch(repoPath, branch string) (string, error) {
+	worktree, err := mktempDir("forge-int-")
+	if err != nil {
+		return "", err
+	}
+	if out, err := exec.Command("git", "-C", repoPath, "worktree", "prune").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git worktree prune: %s: %w", out, err)
+	}
+	if out, err := exec.Command("git", "-C", repoPath, "worktree", "add", worktree, branch).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("worktree add %s: %s: %w", branch, out, err)
+	}
+	return worktree, nil
+}
+
 // ProvisionChild creates a workspace for a child task from the parent's
 // integration branch HEAD, installs dependencies, and starts a
 // network-isolated container. childBranch is unused: a child's work reaches

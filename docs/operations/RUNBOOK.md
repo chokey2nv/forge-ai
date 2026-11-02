@@ -200,6 +200,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `MAX_CONCURRENT_RUNS` | `3` | Control plane | Live workspaces across the control plane (each a 2 GB / 2 CPU container); ready subtasks beyond it wait in `CREATED`. `0` = no cap |
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
 | `SCRIPTED_PROVIDER_LOG` | *(unset)* | Adapter | With `scripted`: file to append each agent's task prompt to |
+| `FORGE_GH` | `gh` | Control plane | The `gh` binary used to open pull requests on approval (and to check its login for the console hint) |
 
 ---
 
@@ -649,6 +650,16 @@ curl -s localhost:8080/runs/<runId> | jq '.lastCheckpoint.usage'
 curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 ```
 
+### 6.5.1 Branches and delivery preview
+
+Creating a task creates its parent branch right away, at the tip of its target branch: `forge/<first words of the requirement>-<task id>`. The target is `targetBranch` if given, else the branch `baseCommit` names, else the repository's checked-out branch; a detached HEAD or a SHA base needs `targetBranch` (the API answers 400).
+
+```bash
+curl -s localhost:8080/tasks/<taskId>/delivery | jq   # what approval will do
+```
+
+`mode` is `pull_request` when the repository has a remote (origin, else the first): approval will push the parent branch and open a PR into the target with `gh`, as the account `gh` is logged in with. With no remote it is `local_merge`. `warnings` explain why a PR would fail (`gh` missing or not logged in, a local-path remote). The console shows the same as a *Delivery* panel on a task's page. Approval does not deliver yet (Phase 11.3).
+
 ### 6.6 Escalated tasks
 
 A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row; a parent goes `ESCALATED` as soon as its final review rejects the combined change. A parent waits on an escalated child; nothing proceeds until a human decides.
@@ -711,6 +722,7 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Parent `BLOCKED`: "child … is BLOCKED" | Look at that child's transitions (§6.1); the parent blocks as soon as any child does |
 | Task `ESCALATED`: "review rejected the change in N round(s)" or "final review rejected" | Reviewers kept rejecting. Read their verdicts and decide (§6.6); the parent waits meanwhile |
 | Review verdict `error`: "reviewer timed out after …" | The reviewer never reported (adapter died or the model call hung). Raise `REVIEWER_TIMEOUT` for slow models; the round already continued |
+| Creating a task answers 400 "detached HEAD" / "is not a branch" / "does not exist" | The target branch could not be resolved. Pass `targetBranch` explicitly |
 | Parent `BLOCKED`: "decomposition: dependency cycle: …" | The head engineer's `dependsOn` edges form a loop; re-dispatch |
 | Subtask `BLOCKED` by `diff-scope` after a review asked for files outside its scope | Should not happen since 10.4 (agents are told the subtask's scope and siblings). If it does, check the subtask's prompt carries "## Scope of this subtask" |
 | Subtasks you expected in parallel run one after another | They declare overlapping or no `diffScope`. See the `child.serialized` event on the waiting subtask |

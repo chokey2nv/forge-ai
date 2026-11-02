@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 	"github.com/google/uuid"
@@ -25,6 +27,9 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		BaseCommit  string        `json:"baseCommit"`
 		Budget      domain.Budget `json:"budget"`
 		DiffScope   []string      `json:"diffScope,omitempty"`
+		// TargetBranch is where the work is delivered. Defaults to the branch
+		// baseCommit names, or the repository's current branch for HEAD.
+		TargetBranch string `json:"targetBranch,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -41,23 +46,45 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		body.Budget = domain.Budget{MaxSteps: 20, MaxRetries: 2, WallClockMS: 1_800_000}
 	}
 
+	// The task's work lives on its own branch from the start: resolve the
+	// branch it is for, and create the parent branch at that branch's tip.
+	target, tip, err := delivery.ResolveTarget(ctx, body.RepoPath, body.TargetBranch, body.BaseCommit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	now := time.Now().UTC()
 	task := &domain.Task{
 		ID:          "task-" + uuid.NewString()[:8],
 		Requirement: body.Requirement,
 		Acceptance:  body.Acceptance,
 		RepoPath:    body.RepoPath,
-		BaseCommit:  body.BaseCommit,
+		BaseCommit:  tip,
 		Status:      domain.StatusCreated,
 		Budget:      body.Budget,
 		DiffScope:   body.DiffScope,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+
+		TargetBranch:          target,
+		IntegrationBaseCommit: tip,
+	}
+	task.IntegrationBranch = delivery.ParentBranchName(task.ID, task.Requirement)
+	if err := delivery.CreateBranch(ctx, task.RepoPath, task.IntegrationBranch, tip); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if err := h.Tasks.Create(ctx, task); err != nil {
+		_ = delivery.DeleteBranch(context.WithoutCancel(ctx), task.RepoPath, task.IntegrationBranch)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	_ = h.Events.Append(ctx, &domain.Event{
+		TaskID: task.ID, Type: "branch.created",
+		Reason: fmt.Sprintf("%s from %s at %s", task.IntegrationBranch, target, shortSHA(tip)),
+		At:     now,
+	})
 
 	writeJSON(w, http.StatusCreated, task)
 }
@@ -304,4 +331,22 @@ func (h *Handlers) ListTaskEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 8 {
+		return sha[:8]
+	}
+	return sha
+}
+
+// GetDelivery previews what approving the task will do: open a pull request
+// with gh when the repository has a remote, otherwise merge locally.
+func (h *Handlers) GetDelivery(w http.ResponseWriter, r *http.Request) {
+	task, err := h.Tasks.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.Delivery.Preview(r.Context(), task))
 }

@@ -66,6 +66,10 @@ type Task struct {
 	Branch string `bson:"branch,omitempty" json:"branch,omitempty"`
 
 	// Root task: the integration branch that children merge into.
+	// TargetBranch is the branch the task's work is delivered to (Phase 11),
+	// recorded at creation. IntegrationBranch, the task's parent branch, is
+	// created then too, at the target's tip.
+	TargetBranch          string `bson:"targetBranch,omitempty" json:"targetBranch,omitempty"`
 	IntegrationWorktree   string `bson:"integrationWorktree,omitempty" json:"integrationWorktree,omitempty"`
 	IntegrationBranch     string `bson:"integrationBranch,omitempty" json:"integrationBranch,omitempty"`
 	IntegrationBaseCommit string `bson:"integrationBaseCommit,omitempty" json:"integrationBaseCommit,omitempty"`

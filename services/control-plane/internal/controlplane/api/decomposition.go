@@ -81,8 +81,12 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 	// another; only provably disjoint work runs in parallel.
 	implicit := serializeOverlaps(graph)
 
-	// Prepare parent's integration branch.
-	integrationBranch := fmt.Sprintf("forge/%s", task.ID)
+	// The parent branch was created with the task (Phase 11); tasks from
+	// before that get one named after their ID here.
+	integrationBranch := task.IntegrationBranch
+	if integrationBranch == "" {
+		integrationBranch = fmt.Sprintf("forge/%s", task.ID)
+	}
 	if err := h.prepareIntegrationBranch(task, integrationBranch); err != nil {
 		h.failDecomposition(task, "prepare integration branch: "+err.Error())
 		return
@@ -158,6 +162,17 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 
 // prepareIntegrationBranch creates the parent's integration worktree and branch.
 func (h *Handlers) prepareIntegrationBranch(task *domain.Task, branch string) error {
+	// A branch created with the task already exists at its pinned base:
+	// check it out as it is.
+	if task.IntegrationBranch == branch && task.IntegrationBaseCommit != "" {
+		worktree, err := workspace.AddWorktreeForBranch(task.RepoPath, branch)
+		if err != nil {
+			return err
+		}
+		task.IntegrationWorktree = worktree
+		return nil
+	}
+
 	// Pin the base to a SHA: a symbolic base like "HEAD" would move with the
 	// integration branch, and the final review would diff HEAD..HEAD (empty).
 	base, err := workspace.ResolveCommit(context.Background(), task.RepoPath, task.BaseCommit)

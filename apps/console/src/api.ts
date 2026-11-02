@@ -49,6 +49,7 @@ export interface Task {
   /** Added by the platform: overlapping or undeclared diffScope, so these never run in parallel. */
   implicitDependsOn?: string[];
   integrationBranch?: string;
+  targetBranch?: string;
 }
 
 /** A decomposed parent: its own review covers the combined change. */
@@ -86,6 +87,19 @@ export interface Review {
 }
 
 export type EscalationDecision = "accept" | "retry" | "reject";
+
+/** What approving a task will do (GET /tasks/{id}/delivery). */
+export interface DeliveryPreview {
+  mode: "pull_request" | "local_merge" | "unavailable";
+  remote: { name: string; url: string; host?: string; repo?: string } | null;
+  targetBranch?: string;
+  branch?: string;
+  ghReady: boolean;
+  ghAccount?: string;
+  action: string;
+  warnings: string[];
+  deliversOnApproval: boolean;
+}
 
 export interface VerificationRun {
   id: string;
@@ -161,6 +175,7 @@ export const api = {
         }),
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
+    getDelivery: (taskId: string) => j<DeliveryPreview>(`/tasks/${taskId}/delivery`),
     decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {
             method: "POST",

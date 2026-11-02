@@ -16,6 +16,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/api"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/orchestration"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/runner"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
@@ -105,6 +106,7 @@ func main() {
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
 	h.Reviews = reviewRepo
+	h.Delivery = delivery.NewInspector(envOr("FORGE_GH", "gh"))
 	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
 	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
 	h.PlannerWallClockMS = int(parseDuration(envOr("PLANNER_TIMEOUT", "120s"), 120*time.Second) / time.Millisecond)
@@ -162,6 +164,7 @@ func main() {
 	mux.HandleFunc("POST /tasks/{id}/escalation", h.DecideEscalation)
 	mux.HandleFunc("GET /tasks/{id}/children", h.ListTaskChildren)
 	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
+	mux.HandleFunc("GET /tasks/{id}/delivery", h.GetDelivery)
 
 	mux.HandleFunc("POST /evals/results", h.RecordEval)
 	mux.HandleFunc("GET  /evals/results", h.ListEvals)
