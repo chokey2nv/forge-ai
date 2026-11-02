@@ -1,9 +1,9 @@
 # Forge AI — Operations Runbook
 
-Setup, startup, and validation for the platform at its current build state (Phases 1–8). Phase 9+ sections are marked *Not yet implemented*.
+Setup, startup, and validation for the platform at its current build state (Phases 1–9). Phase 10+ features are not covered.
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 2 Nov 2026 (Phase 8 verified end to end; see §5.7–§5.9 and §9).
+**Last updated:** 2 Nov 2026 (Phases 8 and 9 verified end to end; see §5.7–§5.9 and §9).
 
 ---
 
@@ -192,7 +192,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `AGENTS_DIR` / `SKILLS_DIR` | `agents` / `skills` | Control plane | Agent and skill markdown, re-read on `POST /agents/reload` |
 | `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
-| `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task blocks; each round runs every listed reviewer and gets fresh verification attempts |
+| `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task is `ESCALATED` to a human (§6.6); each round runs every listed reviewer and gets fresh verification attempts |
 | `REVIEWER_ENABLED` | `true` | Control plane | Agent review after verification |
 | `REVIEWER_TIMEOUT` | `180s` | Control plane | Wall clock given to each reviewer run |
 | `REVIEW_TIMEOUT_GRACE` | `60s` | Control plane | Extra wait after `REVIEWER_TIMEOUT` before the watcher records a silent reviewer as an `error` verdict |
@@ -543,9 +543,9 @@ Copies `tests/evaluations/fixtures/cart-pricing` into a fresh temp git repo on e
 - One integration commit per child on `forge/<task>`
 - `node --test` passes on the integration worktree, run on the host
 
-### 5.9 Phase 8 — Failure paths and add-an-agent (no model API)
+### 5.9 Phases 8–9 — Failure paths, cross-review and escalation (no model API)
 
-**Validates:** retry, exhaustion, crash recovery, and that a new agent needs only a markdown file — deterministically, with the `scripted` provider replaying canned turns from `tests/failure-paths/*.json`.
+**Validates:** retry, exhaustion, crash recovery, that a new agent needs only a markdown file, and Phase 9's cross-review (every listed reviewer, consolidated rejections, reviewer timeout, escalation to a human) — deterministically, with the `scripted` provider replaying canned turns from `tests/failure-paths/*.json`. The target keeps its Phase 8 name; it is the regression suite for both phases.
 
 ```bash
 make phase8-failure-paths                      # all scenarios
@@ -685,6 +685,9 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Task `BLOCKED`: "agent finished without changing the workspace" | The agent replied without editing (often "I'm blocked"). Read its last messages (§6.3) |
 | Task `BLOCKED`: "decomposition: … assigned to … a review agent" | The head engineer gave a subtask to a reviewer or planner. Only work agents (no `submission_tool`) take subtasks; re-dispatch |
 | Parent `BLOCKED`: "child … is BLOCKED" | Look at that child's transitions (§6.1); the parent blocks as soon as any child does |
+| Task `ESCALATED`: "review rejected the change in N round(s)" or "final review rejected" | Reviewers kept rejecting. Read their verdicts and decide (§6.6); the parent waits meanwhile |
+| Review verdict `error`: "reviewer timed out after …" | The reviewer never reported (adapter died or the model call hung). Raise `REVIEWER_TIMEOUT` for slow models; the round already continued |
+| Reload fails: "lists reviewer …, which is not a review agent" | Every `reviewers` entry must be an agent with `submission_tool: submit_review`, and not the agent itself |
 | Log: `checkpoint … save failed (diff N bytes)` | Diff over Mongo's 16MB limit — usually untracked build output. `node_modules/` and lockfiles are excluded automatically; add others to the repo's `.gitignore` |
 | `fatal: not a git repository` inside a container | Workspace created by an old build as a `git worktree`. Current builds use standalone clones; restart the CP |
 | `model call failed after N retries` | Adapter log shows the provider error (`[adapter] model call failed`) |
@@ -770,10 +773,11 @@ rm -rf .forge
 | 2. Single-agent loop, containerized | Verified | Agent edits code in an isolated container | Every §5.7–§5.9 run |
 | 3. Control plane + persistence | Verified | Lifecycle to `REVIEW_PENDING`; recovery after crash | §5.9 `crash-resume`; the older `phase3-*` demos are not re-checked |
 | 4. Verification gates | Verified | Gates run and block failing changes | §5.9 `verify-retry`, `exhaustion` |
-| 5. Planner + Reviewer roles | Reviewer verified; planner not | Reviewer gates integration and sends work back | §5.9 `review-retry`; the planner path is unexercised |
+| 5. Planner + Reviewer roles | Reviewer verified; planner not | Reviewer gates integration and sends work back | §5.9 `split-verdict`; the planner path is unexercised |
 | 6. Eval suite formalized + console | Console verified; eval harness not | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
 | 7. Agent registry, skills, composer | Verified | A new agent is a markdown file and a reload | §5.9 `add-agent` |
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
+| 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 
 Not covered yet: approval changes the state only; nothing merges the integration branch (Phase 11). The Phase 6 eval harness has not been re-run.
 
@@ -864,15 +868,17 @@ make phase3-demo                        # Phase 3: lifecycle
 make phase3-resume-demo                 # Phase 3: crash recovery
 make phase8-vertical-slice-demo         # Phase 8: single-child slice (real model)
 make phase8-two-child-slice             # Phase 8: two dependent children (real model)
-make phase8-failure-paths               # retries, crash/resume, add-an-agent (no API)
+make phase8-failure-paths               # retries, crash/resume, add-an-agent, cross-review, escalation (no API)
 
 # ---- inspect ----
 curl -s localhost:8080/runs/<runId> | jq
 curl -s localhost:8080/runs/<runId>/events | jq
 curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
+curl -s localhost:8080/runs/<runId>/reviews | jq       # every reviewer's verdict per round
+curl -s localhost:8080/tasks/<taskId>/children | jq    # a parent's subtasks
 mongosh forge_ai --eval 'db.tasks.find().sort({createdAt:-1}).limit(1).pretty()'
 ```
 
 ---
 
-*Runbook reflects the verified Phase 8 build state (2 Nov 2026). Sections marked "Not yet implemented" will be updated as Phases 9–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
+*Runbook reflects the verified Phase 9 build state (2 Nov 2026). It will be updated as Phases 10–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*

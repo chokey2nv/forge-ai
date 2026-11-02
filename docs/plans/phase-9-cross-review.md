@@ -1,6 +1,6 @@
 # Phase 9 — Cross-review and escalation
 
-**Status:** 9.1–9.4 done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 8 (`docs/operations/RUNBOOK.md` §9)
+**Status:** done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 8 (`docs/operations/RUNBOOK.md` §9)
 
 ## Goal
 
@@ -85,7 +85,7 @@ Each ends with its tests passing and a commit.
 | 9.2 ✅ | `ESCALATED` state, escalation API, reviewer timeout in the watcher (with a single-winner claim so a late verdict and the timeout cannot both settle a reviewer) | Scripted `escalate-accept`, `escalate-retry` and `reviewer-timeout` pass. Found and fixed: a run re-entering `RUNNING` kept its old heartbeat, so the watcher marked retries `RESUMABLE` mid-provisioning |
 | 9.3 ✅ | Parent final-review rejection → `ESCALATED`; reviewers see the platform's gate results with the tail of each gate's output (they cannot run tests themselves, and a Claude test-reviewer said so) | Scripted `final-review-escalates` passes, including that child and final reviewers' prompts carry the gate results; all 10 scripted scenarios and both Claude slices pass |
 | 9.4 ✅ | Console: subtasks, per-round reviewer verdicts and defects, escalation actions, live refresh; `GET /tasks/{id}/children` | Against a live control plane (scripted `escalate-accept`): escalated subtask accepted from the UI, parent went through final review to `REVIEW_PENDING` and was approved from the UI |
-| 9.5 | Runbook §5 / §9 updates, `mile-stone-review.md` vision table | Docs match the verified behaviour |
+| 9.5 ✅ | Runbook (scope, settings, §5.9, troubleshooting, §9 Phase 9 row), `mile-stone-review.md` update note and vision table, README status, `qa-engineer` description | Docs match the verified behaviour |
 
 The scripted provider serves review turns from one queue in call order, which is deterministic because reviewers run sequentially; no provider change is needed.
 
@@ -95,6 +95,18 @@ The scripted provider serves review turns from one queue in call order, which is
 - **Latency:** sequential reviews add one reviewer's wall time per extra reviewer. Acceptable until Phase 10.
 - **Reviewer quality:** a strict reviewer can push every task to `ESCALATED`. The Claude slices are the signal; prompts are markdown and cheap to tune.
 - **Callback identity:** several reviewers report against one run ID. The engine relies on `reviewPending` to reject stale callbacks; 9.1 tests this directly.
+
+## Follow-ups
+
+Found while building Phase 9; none blocks it.
+
+- **Provisioning vs `STALE_AFTER`.** A retry is marked `RESUMABLE` if setting up its workspace (clone, `npm install`) takes longer than `STALE_AFTER` (60s by default; setup may take up to `VERIFICATION_SETUP_TIMEOUT_SECONDS`, 120s). Either a provisioning state the watcher ignores, or `STALE_AFTER` validated to exceed the setup timeout.
+- **Reviewer cost.** Two reviewers per change plus two on the combined change roughly doubled review calls. Worth measuring once real repositories are in use.
+- **Re-planning on escalation.** Escalation goes to a human; sending an escalated parent back to the head engineer to re-plan is deferred (Phase 10–12).
+- **Parallel reviewers** belong with Phase 10, once reviewers no longer share the implementer's git index.
+- **Console Agents screens** exist in `apps/console/src/App.tsx` but are not in the navigation.
+- **Planner path** (Phase 5) is still unexercised by any test.
+- **Harness name.** `make phase8-failure-paths` now covers Phase 9 too; renaming it would break existing muscle memory, so it is documented instead.
 
 ## Out of scope
 

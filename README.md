@@ -8,7 +8,7 @@ Forge AI takes a software requirement plus acceptance criteria, decomposes the w
 
 ## Status
 
-**Current build state: Phase 8, verified end to end** — head engineer, task graph, scheduler, integrator and combined parent verification run with a real model (`make phase8-vertical-slice-demo`, `make phase8-two-child-slice`), and retry, crash-recovery and add-an-agent paths are covered by `make phase8-failure-paths`. See the [runbook](docs/operations/RUNBOOK.md#9-phase-status) for per-phase evidence and `mile-stone-review.md` for the Phase 9–13 roadmap.
+**Current build state: Phase 9, verified end to end** — the head engineer decomposes work into dependent subtasks, every reviewer an agent lists must pass each change, and changes the reviewers keep rejecting are escalated to a human, who decides from the console. Real-model slices: `make phase8-vertical-slice-demo`, `make phase8-two-child-slice`; deterministic regression suite (retries, crash recovery, add-an-agent, cross-review, escalation): `make phase8-failure-paths`. See the [runbook](docs/operations/RUNBOOK.md#9-phase-status) for per-phase evidence, `docs/plans/phase-9-cross-review.md` for the Phase 9 design, and `mile-stone-review.md` for the Phase 10–13 roadmap.
 
 ## How to run
 

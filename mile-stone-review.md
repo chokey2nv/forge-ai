@@ -1,5 +1,13 @@
 # Review of Forge AI — state of the build
 
+> **Update, 2 Nov 2026.** The review below was written at the Phase 8 build state, before anything past Phase 1 had been run. Since then:
+>
+> - **Phase 8 is verified end to end** with a real model (`make phase8-vertical-slice-demo`, `make phase8-two-child-slice`) and a deterministic failure-path suite (`make phase8-failure-paths`). Getting there fixed the dispatch loop, git inside agent containers, checkpoint persistence, resume, review retries and container cleanup.
+> - **The §5 flags are closed:** completion routing is data (an agent's `submission_tool`, §5.B); `reviewers` is honoured in full (§5.C); the add-an-agent test passes (§5.D).
+> - **Phase 9 (cross-review and escalation) is built and verified.** See `docs/plans/phase-9-cross-review.md`.
+>
+> Per-phase evidence lives in `docs/operations/RUNBOOK.md` §9. The tables below are marked where they have changed; the rest of the review is kept as written.
+
 This is a status check, not a summary. Three things: what exists, what actually works, and where the risks are.
 
 ---
@@ -80,8 +88,8 @@ Your stated vision:
 | Head engineer decomposes | ✅ Phase 8 — `submit_task_graph`, task tree with deps |
 | Specialized tasks → specialized agents | ✅ Phase 8 — `assignedAgent` per child |
 | Organize work (dependency-aware) | ✅ Phase 8 — scheduler + `dependsOn` |
-| **Supervise / review each other** | ⚠️ **Partial** — single reviewer per agent (Phase 8). Cross-review of multiple reviewers is Phase 9. |
-| Console for approval | ✅ Phase 6 — Approve/Reject with rationale |
+| **Supervise / review each other** | ✅ Phase 9 — every listed reviewer reviews each change; all must pass; repeated rejection escalates to a human *(was ⚠️ Partial at Phase 8)* |
+| Console for approval | ✅ Phase 6 — Approve/Reject with rationale; Phase 9 adds escalation decisions *(first run from the UI in Phase 9.4)* |
 | Console for **feedback** (inline comments on diff) | ❌ Phase 12 — not built |
 | Delivery (PR creation, merge) | ❌ Phase 11 — not built |
 
@@ -218,7 +226,7 @@ You described a harness where you define a team of agents, and they organize, ex
 
 | Feature | Phase |
 |---|---|
-| Multiple reviewers, cross-review, escalation | 9 |
+| ~~Multiple reviewers, cross-review, escalation~~ — done, 2 Nov 2026 | 9 |
 | Truly parallel child execution | 10 |
 | Delivery (PR creation, merge, rollback) | 11 |
 | Human feedback loop — inline comments, threaded responses | 12 |

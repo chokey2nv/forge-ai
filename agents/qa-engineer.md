@@ -1,6 +1,6 @@
 ---
 name: qa-engineer
-description: Designs test plans and writes tests for untested behaviour. Not yet wired into the main pipeline (Phase 9 will assign work here).
+description: Designs test plans and writes tests for untested behaviour.
 version: 1
 skills:
   - testing-discipline
