@@ -141,7 +141,7 @@ func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.Wor
 	attempt := run.VerificationAttempt + 1
 
 	vr := h.Verifier.Run(ctx, run.ContainerName, run.WorktreePath, task.DiffScope)
-	vr.ID = fmt.Sprintf("vr-%s-%d", run.ID, attempt)
+	vr.ID = fmt.Sprintf("vr-%s-r%d-%d", run.ID, run.ReviewRound, attempt)
 	vr.RunID, vr.TaskID, vr.Attempt = run.ID, task.ID, attempt
 	_ = h.Verifications.Create(ctx, vr)
 
@@ -371,16 +371,20 @@ func (h *Handlers) handleReviewerDone(run *domain.WorkflowRun, task *domain.Task
 		return
 	}
 
-	attempt := run.VerificationAttempt + 1
-	if attempt >= h.MaxVerificationAttempts {
-		reason := "reviewer failed change after " + fmt.Sprint(attempt) + " attempts: " + sub.Summary
-		_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, false, domain.RunBlocked, reason, time.Now().UTC())
+	// Review rounds are counted on their own: sharing the verification counter
+	// meant a change that passed verification once was blocked by its first
+	// rejection, so review feedback could never be acted on.
+	round := run.ReviewRound + 1
+	if round >= h.MaxReviewRounds {
+		reason := fmt.Sprintf("reviewer rejected the change %d time(s): %s", round, sub.Summary)
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
 		workspace.Cleanup(ctx, &workspace.Workspace{WorktreePath: run.WorktreePath, ContainerName: run.ContainerName}, task.RepoPath)
 		return
 	}
 
-	_ = h.Runs.UpdateVerification(ctx, run.ID, attempt, false, domain.RunRunning, "", time.Now().UTC())
+	// The reworked change gets a fresh set of verification attempts.
+	_ = h.Runs.StartReviewRound(ctx, run.ID, round, time.Now().UTC())
 	_ = h.SM.Transition(ctx, task, domain.StatusRunning, "reviewer rejected; retrying")
 
 	var diag strings.Builder
@@ -563,7 +567,7 @@ func (h *Handlers) runVerification(run *domain.WorkflowRun, task *domain.Task) {
 	attempt := run.VerificationAttempt + 1
 
 	vr := h.Verifier.Run(ctx, run.ContainerName, run.WorktreePath, diffScopeOf(task))
-	vr.ID = fmt.Sprintf("vr-%s-%d", run.ID, attempt)
+	vr.ID = fmt.Sprintf("vr-%s-r%d-%d", run.ID, run.ReviewRound, attempt)
 	vr.RunID = run.ID
 	vr.TaskID = task.ID
 	vr.Attempt = attempt

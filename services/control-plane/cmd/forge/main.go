@@ -21,6 +21,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	mongo_store "github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store/mongo"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/verification"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -35,6 +36,9 @@ func main() {
 	workerImage := envOr("WORKER_IMAGE", "forge-worker:dev")
 	mongoURI := envOr("MONGODB_URI", "mongodb://127.0.0.1:27017")
 	mongoDB := envOr("MONGODB_DATABASE", "forge_ai")
+	// One control plane per database; its containers and workspaces are
+	// labeled with it so the reaper only touches its own.
+	workspace.Instance = mongoDB
 	agentsDir := envOr("AGENTS_DIR", "agents")
 	skillsDir := envOr("SKILLS_DIR", "skills")
 
@@ -99,6 +103,7 @@ func main() {
 	h.Registry = registry
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
+	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
 	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
 	h.PlannerWallClockMS = int(parseDuration(envOr("PLANNER_TIMEOUT", "120s"), 120*time.Second) / time.Millisecond)
 	h.ReviewerMaxSteps = parseInt(envOr("REVIEWER_MAX_STEPS", "15"), 15)

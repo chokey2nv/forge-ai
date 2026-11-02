@@ -3,9 +3,10 @@ import process from "node:process";
 import { OllamaProvider } from "./ollama-provider";
 import { OpenAIProvider } from "./openai-provider";
 import { ClaudeProvider } from "./claude-provider";
+import { ScriptedProvider } from "./scripted-provider";
 import type { ModelProvider } from "./types";
 
-export type ProviderId = "ollama" | "openai" | "claude";
+export type ProviderId = "ollama" | "openai" | "claude" | "scripted";
 
 export interface ProviderConfig {
   provider: ProviderId;
@@ -46,6 +47,9 @@ export function createProvider(cfg: ProviderConfig): ModelProvider {
         timeoutMs: cfg.timeoutMs,
         version: process.env.ANTHROPIC_API_VERSION,
       });
+    case "scripted":
+      // Test double for pipeline tests; must still be on the allow-list.
+      return new ScriptedProvider(process.env.SCRIPTED_PROVIDER_FILE ?? "");
     default:
       throw new Error(`unknown MODEL_PROVIDER: ${cfg.provider}`);
   }

@@ -25,6 +25,7 @@ type WorkflowRun struct {
 	StepCount           int         `bson:"stepCount" json:"stepCount"`
 	VerificationAttempt int         `bson:"verificationAttempt" json:"verificationAttempt"`
 	VerificationPassed  bool        `bson:"verificationPassed" json:"verificationPassed"`
+	ReviewRound         int         `bson:"reviewRound" json:"reviewRound"` // reviewer rejections so far
 	LastCheckpoint      *Checkpoint `bson:"lastCheckpoint,omitempty" json:"lastCheckpoint,omitempty"`
 	LastHeartbeat       time.Time   `bson:"lastHeartbeat" json:"lastHeartbeat"`
 	BlockedReason       string      `bson:"blockedReason,omitempty" json:"blockedReason,omitempty"`

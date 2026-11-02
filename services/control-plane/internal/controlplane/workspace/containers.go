@@ -12,6 +12,27 @@ import (
 // dependency-install containers), so leaked ones can be found after a crash.
 const LabelRun = "forge.run"
 
+// LabelInstance scopes containers and workspace directories to one control
+// plane (one database), so a second instance, such as the failure-path test
+// harness, never reaps another's work.
+const LabelInstance = "forge.instance"
+
+// Instance identifies this control plane; set once at startup.
+var Instance = "default"
+
+func instanceLabel() string { return LabelInstance + "=" + Instance }
+
+// instanceTag is embedded in workspace directory names, e.g. forge-wt-forge_ai-123.
+func instanceTag() string {
+	var b strings.Builder
+	for _, r := range Instance {
+		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String() + "-"
+}
+
 // Container is a container carrying LabelRun.
 type Container struct {
 	Name    string
@@ -19,9 +40,10 @@ type Container struct {
 	Created time.Time
 }
 
-// ListManagedContainers returns all containers, running or not, that carry LabelRun.
+// ListManagedContainers returns this instance's containers, running or not.
 func ListManagedContainers(ctx context.Context) ([]Container, error) {
-	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "label="+LabelRun).Output()
+	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
+		"--filter", "label="+LabelRun, "--filter", "label="+instanceLabel()).Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %w", err)
 	}

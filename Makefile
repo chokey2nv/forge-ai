@@ -44,7 +44,7 @@ phase4-blocked-demo:
 phase5-demo:
 	bash scripts/phase5-demo.sh
 
-.PHONY: phase8-vertical-slice-demo phase8-two-child-slice
+.PHONY: phase8-vertical-slice-demo phase8-two-child-slice phase8-failure-paths
 
 phase8-vertical-slice-demo:
 	bash scripts/phase8-vertical-slice-demo.sh
@@ -52,6 +52,10 @@ phase8-vertical-slice-demo:
 # Two dependent children integrating onto one parent branch.
 phase8-two-child-slice:
 	bash scripts/phase8-two-child-slice.sh
+
+# Retry, exhaustion and crash/resume paths with the scripted model (no API calls).
+phase8-failure-paths:
+	bash scripts/phase8-failure-paths.sh
 
 .PHONY: eval console-install console-dev
 

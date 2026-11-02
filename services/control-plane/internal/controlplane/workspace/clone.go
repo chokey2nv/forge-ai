@@ -95,7 +95,7 @@ type WorkspaceDir struct {
 	ModTime time.Time
 }
 
-// ListWorkspaceDirs returns the per-run workspace directories in the temp dir.
+// ListWorkspaceDirs returns this instance's per-run workspace directories.
 func ListWorkspaceDirs() ([]WorkspaceDir, error) {
 	entries, err := os.ReadDir(os.TempDir())
 	if err != nil {
@@ -104,7 +104,7 @@ func ListWorkspaceDirs() ([]WorkspaceDir, error) {
 	var out []WorkspaceDir
 	for _, e := range entries {
 		path := filepath.Join(os.TempDir(), e.Name())
-		if !e.IsDir() || !isRemovableWorkspace(path) {
+		if !e.IsDir() || !isRemovableWorkspace(path) || !ownedByInstance(e.Name()) {
 			continue
 		}
 		info, err := e.Info()
@@ -119,6 +119,15 @@ func ListWorkspaceDirs() ([]WorkspaceDir, error) {
 // RemoveOrphanDir deletes a workspace directory no run refers to any more.
 func RemoveOrphanDir(ctx context.Context, dir string) {
 	removeWorkspaceDir(ctx, "", dir)
+}
+
+func ownedByInstance(base string) bool {
+	for _, p := range removablePrefixes {
+		if strings.HasPrefix(base, p+instanceTag()) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRemovableWorkspace(dir string) bool {

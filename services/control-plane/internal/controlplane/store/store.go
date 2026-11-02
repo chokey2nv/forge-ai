@@ -38,6 +38,9 @@ type RunRepo interface {
 
 	SavePlan(ctx context.Context, id string, plan *domain.Plan, at time.Time) error
 	SaveReviewVerdict(ctx context.Context, id, verdict string, at time.Time) error
+	// StartReviewRound records a reviewer rejection and resets verification
+	// attempts for the reworked change.
+	StartReviewRound(ctx context.Context, id string, round int, at time.Time) error
 
 	ListByTask(ctx context.Context, taskID string) ([]*domain.WorkflowRun, error)
 

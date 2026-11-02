@@ -70,7 +70,7 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", LabelRun + "=" + runID,
+		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", worktreeDir + ":/workspace:rw",
@@ -95,7 +95,7 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	name := "forge-setup-" + filepath.Base(worktreePath)
 	out, err := exec.CommandContext(sctx, "docker", "run", "--rm",
 		"--name", name,
-		"--label", LabelRun+"=setup-"+filepath.Base(worktreePath),
+		"--label", LabelRun+"=setup-"+filepath.Base(worktreePath), "--label", instanceLabel(),
 		"--workdir", "/workspace",
 		"-v", worktreePath+":/workspace:rw",
 		"--network=bridge",
@@ -113,7 +113,7 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 }
 
 func mktempDir(prefix string) (string, error) {
-	dir, err := os.MkdirTemp("", prefix)
+	dir, err := os.MkdirTemp("", prefix+instanceTag())
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +135,7 @@ func Provision(ctx context.Context, repoPath, baseCommit, image, runID string) (
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
-		"--label", LabelRun + "=" + runID,
+		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
 		"--network=none",
 		"--workdir", "/workspace",
 		"-v", worktreeDir + ":/workspace:rw",

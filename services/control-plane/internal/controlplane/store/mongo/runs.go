@@ -93,11 +93,15 @@ func (r *RunRepo) MarkStale(ctx context.Context, before time.Time) ([]*domain.Wo
 	return transitioned, nil
 }
 func (r *RunRepo) UpdateWorkspace(ctx context.Context, id, worktreePath, containerName string, at time.Time) error {
-	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
-		"worktreePath":  worktreePath,
-		"containerName": containerName,
-		"updatedAt":     at,
-	}})
+	// A new workspace is live again even if the reaper released the old one.
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$set": bson.M{
+			"worktreePath":  worktreePath,
+			"containerName": containerName,
+			"updatedAt":     at,
+		},
+		"$unset": bson.M{"workspaceReleasedAt": ""},
+	})
 	return err
 }
 
@@ -175,6 +179,17 @@ func (r *RunRepo) ListUnreleasedWorkspaces(ctx context.Context) ([]*domain.Workf
 func (r *RunRepo) MarkWorkspaceReleased(ctx context.Context, id string, at time.Time) error {
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
 		"workspaceReleasedAt": at,
+		"updatedAt":           at,
+	}})
+	return err
+}
+
+func (r *RunRepo) StartReviewRound(ctx context.Context, id string, round int, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"status":              domain.RunRunning,
+		"reviewRound":         round,
+		"verificationAttempt": 0,
+		"verificationPassed":  false,
 		"updatedAt":           at,
 	}})
 	return err

@@ -29,7 +29,8 @@ type Handlers struct {
 	SelfURL                 string
 	SystemPrompt            string
 	AllowedProviders        []string
-	MaxVerificationAttempts int
+	MaxVerificationAttempts int // consecutive verification failures before blocking
+	MaxReviewRounds         int // reviewer rejections before blocking
 	SetupTimeout            time.Duration
 	PlannerEnabled          bool
 	ReviewerEnabled         bool

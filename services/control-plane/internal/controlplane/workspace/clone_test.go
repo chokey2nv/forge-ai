@@ -146,3 +146,39 @@ func TestResolvedBaseSurvivesIntegrationCommits(t *testing.T) {
 		t.Errorf("diff from pinned base is missing the integrated change:\n%s", diff)
 	}
 }
+
+// Two control planes share the temp dir; each may only sweep its own workspaces.
+func TestListWorkspaceDirsIsScopedToInstance(t *testing.T) {
+	defer func(prev string) { Instance = prev }(Instance)
+
+	Instance = "other_instance"
+	theirs, err := mktempDir("forge-wt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(theirs)
+
+	Instance = "this_instance"
+	ours, err := mktempDir("forge-wt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(ours)
+
+	dirs, err := ListWorkspaceDirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawOurs bool
+	for _, d := range dirs {
+		if d.Path == theirs {
+			t.Errorf("listed another instance's workspace %s", theirs)
+		}
+		if d.Path == ours {
+			sawOurs = true
+		}
+	}
+	if !sawOurs {
+		t.Errorf("own workspace %s not listed", ours)
+	}
+}

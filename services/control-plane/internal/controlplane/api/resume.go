@@ -27,6 +27,11 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, _ := h.Tasks.Get(ctx, run.TaskID)
+	def, sysPrompt, tools, err := h.composeImplementer(run)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Re-provision fresh worktree + container
 	// ws, err := workspace.Provision(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r")
@@ -52,6 +57,11 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verification and review run in the run's recorded workspace; point it at
+	// the new one and retire the old (its agent is gone).
+	workspace.Cleanup(ctx, &workspace.Workspace{WorktreePath: run.WorktreePath, ContainerName: run.ContainerName}, task.RepoPath)
+	_ = h.Runs.UpdateWorkspace(ctx, runID, ws.WorktreePath, ws.ContainerName, time.Now().UTC())
+
 	if err := h.SM.Transition(ctx, task, domain.StatusRunning, "resume requested"); err != nil {
 		workspace.Cleanup(ctx, ws, task.RepoPath)
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -60,19 +70,22 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunRunning, "", time.Now().UTC())
 
 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:         run.ID + "-r",
-		CallbackRunID: run.ID,
-		ContainerName: ws.ContainerName,
-		WorktreePath:  ws.WorktreePath,
-		Task:          task.Requirement,
-		SystemPrompt:  h.SystemPrompt,
-		CallbackURL:   h.SelfURL,
-		Provider:      run.Provenance.Provider,
-		Model:         run.Provenance.Model,
-		MaxSteps:      task.Budget.MaxSteps,
-		MaxRetries:    task.Budget.MaxRetries,
-		WallClockMS:   task.Budget.WallClockMS,
-		Checkpoint:    run.LastCheckpoint,
+		RunID:          run.ID + "-r",
+		CallbackRunID:  run.ID,
+		ContainerName:  ws.ContainerName,
+		WorktreePath:   ws.WorktreePath,
+		Role:           def.Name,
+		Task:           task.Requirement + "\n\nAcceptance:\n" + bulletList(task.Acceptance),
+		SystemPrompt:   sysPrompt,
+		Tools:          tools,
+		SubmissionTool: def.SubmissionTool,
+		CallbackURL:    h.SelfURL,
+		Provider:       run.Provenance.Provider,
+		Model:          run.Provenance.Model,
+		MaxSteps:       task.Budget.MaxSteps,
+		MaxRetries:     task.Budget.MaxRetries,
+		WallClockMS:    task.Budget.WallClockMS,
+		Checkpoint:     run.LastCheckpoint,
 	}); err != nil {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
 		http.Error(w, err.Error(), http.StatusBadGateway)
