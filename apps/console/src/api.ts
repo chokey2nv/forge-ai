@@ -3,11 +3,11 @@ const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 export type TaskStatus =
   | "CREATED" | "PLANNED" | "DECOMPOSING" | "DISPATCHED" | "RUNNING" | "VERIFYING"
   | "AGENT_REVIEW" | "ESCALATED" | "REVIEW_PENDING" | "INTEGRATING" | "INTEGRATED"
-  | "APPROVED" | "MERGED" | "BLOCKED" | "RESUMABLE" | "REJECTED";
+  | "APPROVED" | "DELIVERING" | "PR_OPEN" | "MERGED" | "BLOCKED" | "RESUMABLE" | "REJECTED";
 
 export const TASK_STATUSES: TaskStatus[] = [
   "CREATED", "DECOMPOSING", "DISPATCHED", "RUNNING", "VERIFYING", "AGENT_REVIEW", "ESCALATED",
-  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "BLOCKED", "RESUMABLE", "REJECTED",
+  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "DELIVERING", "PR_OPEN", "MERGED", "BLOCKED", "RESUMABLE", "REJECTED",
 ];
 
 
@@ -50,6 +50,22 @@ export interface Task {
   implicitDependsOn?: string[];
   integrationBranch?: string;
   targetBranch?: string;
+  /** Phase 11.3: what approval did (set once delivery starts). */
+  delivery?: Delivery;
+}
+
+export interface Delivery {
+  mode: "pull_request" | "local_merge" | "unavailable";
+  targetBranch: string;
+  branch: string;
+  remote?: string;
+  targetMoved?: boolean;
+  mergeCommit?: string;
+  prUrl?: string;
+  prNumber?: number;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
 }
 
 /** A decomposed parent: its own review covers the combined change. */
@@ -176,6 +192,7 @@ export const api = {
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
     getDelivery: (taskId: string) => j<DeliveryPreview>(`/tasks/${taskId}/delivery`),
+    retryDelivery: (taskId: string) => j<{ status: string }>(`/tasks/${taskId}/deliver`, { method: "POST" }),
     decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {
             method: "POST",

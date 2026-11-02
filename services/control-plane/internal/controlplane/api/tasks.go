@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -299,6 +300,16 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 		Type: "approval." + action, Reason: body.Rationale,
 		At: time.Now().UTC(),
 	})
+
+	// Approval delivers: a pull request when the repository has a remote,
+	// otherwise a local merge into the target branch.
+	if to == domain.StatusApproved && canDeliver(task) {
+		if err := h.startDelivery(ctx, task, "approved by "+body.Reviewer); err != nil {
+			log.Printf("delivery of %s not started: %v", taskID, err)
+		} else {
+			to = domain.StatusDelivering
+		}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"taskId": taskID, "status": string(to)})
 }

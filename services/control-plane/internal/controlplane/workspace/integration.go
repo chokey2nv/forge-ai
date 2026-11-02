@@ -138,3 +138,10 @@ func CommitAll(worktree, message string) error {
 	}
 	return nil
 }
+
+// RemoveIntegrationWorktree drops a parent's integration worktree after its
+// branch is delivered. The branch stays.
+func RemoveIntegrationWorktree(repoPath, worktree string) {
+	_ = exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", worktree).Run()
+	_ = exec.Command("git", "-C", repoPath, "worktree", "prune").Run()
+}

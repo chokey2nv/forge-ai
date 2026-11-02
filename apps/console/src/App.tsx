@@ -167,7 +167,7 @@ function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-const TERMINAL = new Set(["APPROVED", "MERGED", "REJECTED", "INTEGRATED"]);
+const TERMINAL = new Set(["MERGED", "REJECTED", "INTEGRATED"]);
 
 const PRE_FINAL_REVIEW = new Set(["CREATED", "DECOMPOSING", "DISPATCHED", "INTEGRATING"]);
 
@@ -235,6 +235,10 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
     } catch (e) { setErr(String(e)); }
   };
 
+  const retryDelivery = async () => {
+    try { await api.retryDelivery(id); await reload(); } catch (e) { setErr(String(e)); }
+  };
+
   const decideEscalation = async (decision: EscalationDecision) => {
     try {
       await api.decideEscalation(id, decision, reviewer, rationale, guidance);
@@ -268,7 +272,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
 
-      {delivery && <DeliveryHint preview={delivery} />}
+      {task.delivery ? <DeliveryRecord task={task} onRetry={retryDelivery} /> : delivery && <DeliveryHint preview={delivery} />}
 
       {task.status === "ESCALATED" && (
         <section className="approval escalation">
@@ -319,7 +323,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {task.status === "REVIEW_PENDING" && (
         <section className="approval">
           <h3>Decision</h3>
-          {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision; delivery is not wired up yet (Phase 11.3)."}</p>}
+          {delivery && <p className="hint">{delivery.deliversOnApproval ? `Approving: ${delivery.action}` : "Approval records the decision only."}</p>}
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (optional)" />
           <div>
@@ -493,10 +497,33 @@ function DeliveryHint({ preview: p }: { preview: DeliveryPreview }) {
         </p>
       )}
       <p><strong>{p.action}</strong></p>
-      {!p.deliversOnApproval && p.mode !== "unavailable" && (
-        <p className="hint">Not active yet: approval currently records the decision only (delivery lands in Phase 11.3).</p>
-      )}
       {p.warnings.map((w, i) => <p key={i} className="warning">⚠ {w}</p>)}
+    </section>
+  );
+}
+
+/** What approval did: the merge commit or pull request, or why it stopped. */
+function DeliveryRecord({ task, onRetry }: { task: Task; onRetry: () => void }) {
+  const d = task.delivery!;
+  const blocked = task.status === "BLOCKED" && !!d.error;
+  return (
+    <section className={`delivery delivery-${d.mode}`}>
+      <h3>Delivery <StatusBadge status={task.status} /></h3>
+      <p>
+        <code>{d.branch}</code> → <code>{d.targetBranch}</code>
+        {" · "}{d.mode === "pull_request" ? <>pull request via <code>{d.remote}</code></> : "local merge"}
+        {d.targetMoved && <> · <code>{d.targetBranch}</code> had moved: merged in and verified again</>}
+      </p>
+      {task.status === "DELIVERING" && <p className="hint">Delivering…</p>}
+      {d.prUrl && <p>Pull request <a href={d.prUrl} target="_blank" rel="noreferrer">#{d.prNumber}</a>
+        {task.status === "PR_OPEN" && " — waiting for it to be merged on the forge"}</p>}
+      {d.mergeCommit && <p>Merge commit <code>{d.mergeCommit.slice(0, 12)}</code></p>}
+      {blocked && (
+        <>
+          <pre className="error">{d.error}</pre>
+          <button className="neutral" onClick={onRetry}>Retry delivery</button>
+        </>
+      )}
     </section>
   );
 }

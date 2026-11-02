@@ -123,3 +123,8 @@ func (r *TaskRepo) UpdateIntegration(ctx context.Context, id, worktree, branch, 
 	}})
 	return err
 }
+
+func (r *TaskRepo) UpdateDelivery(ctx context.Context, id string, d *domain.Delivery, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"delivery": d, "updatedAt": at}})
+	return err
+}

@@ -201,6 +201,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `SCRIPTED_PROVIDER_FILE` | *(unset)* | Adapter | Turn script for `MODEL_PROVIDER=scripted` (failure-path tests, §5.9) |
 | `SCRIPTED_PROVIDER_LOG` | *(unset)* | Adapter | With `scripted`: file to append each agent's task prompt to |
 | `FORGE_GH` | `gh` | Control plane | The `gh` binary used to open pull requests on approval (and to check its login for the console hint) |
+| `PR_POLL_INTERVAL` | `60s` | Control plane | How often open pull requests (`PR_OPEN` tasks) are checked with `gh pr view`: merged → `MERGED`, closed → `REJECTED` |
 
 ---
 
@@ -575,6 +576,11 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `overlap-serialized` | One of the two declares no `diffScope` | It gets an implicit dependency on its sibling (`implicitDependsOn`, `child.serialized` event "no diffScope declared"), and they never overlap |
 | `parallel-reviewers` | Both child reviewers take 3s | They run at the same time: round 1 takes about 3s, not 6s |
 | `cycle-rejected` | The head engineer submits a dependency cycle | Parent `BLOCKED` at decomposition ("dependency cycle: t1 -> t2 -> t1"); no subtasks created |
+| `deliver-local` | Approve a task in a repo with no remote | `MERGED`; the target's tip is a merge of its old tip and the parent branch; the checkout is updated and clean; tests pass; worktree removed |
+| `deliver-target-moved` | A commit lands on the target before approval | It is merged in and verified again (`targetMoved`), then merged; the target holds both |
+| `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
+| `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
+| `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
@@ -658,7 +664,19 @@ Creating a task creates its parent branch right away, at the tip of its target b
 curl -s localhost:8080/tasks/<taskId>/delivery | jq   # what approval will do
 ```
 
-`mode` is `pull_request` when the repository has a remote (origin, else the first): approval will push the parent branch and open a PR into the target with `gh`, as the account `gh` is logged in with. With no remote it is `local_merge`. `warnings` explain why a PR would fail (`gh` missing or not logged in, a local-path remote). The console shows the same as a *Delivery* panel on a task's page. Approval does not deliver yet (Phase 11.3).
+`mode` is `pull_request` when the repository has a remote (origin, else the first): approval will push the parent branch and open a PR into the target with `gh`, as the account `gh` is logged in with. With no remote it is `local_merge`. `warnings` explain why a PR would fail (`gh` missing or not logged in, a local-path remote). The console shows the same as a *Delivery* panel on a task's page.
+
+Approving delivers (`APPROVED → DELIVERING`, the API answers `DELIVERING`):
+
+- **Local merge** (no remote): if the target moved since the work started, it is merged into the parent branch first and the verification gates run again on the result (`delivery.targetMoved`, a `delivery.target_merged` event). Then a merge commit of the target and the parent branch is created; a clean checkout of the target is fast-forwarded to it (your files update), otherwise the ref moves by compare-and-swap. → `MERGED`, `delivery.mergeCommit`.
+- **Pull request** (a remote): the parent branch is pushed (never forced) and `gh pr create --base <target> --head <branch>` opens the PR with the requirement, acceptance criteria, subtasks and final review in its body. → `PR_OPEN`, `delivery.prUrl`. The watcher then follows it: merged on the forge → `MERGED`, closed → `REJECTED`.
+
+Either way the integration worktree is removed; the parent branch stays. A delivery that cannot finish goes to `BLOCKED` with `delivery.error`; fix the cause and retry:
+
+```bash
+curl -s localhost:8080/tasks/<taskId> | jq .delivery      # what happened
+curl -s -X POST localhost:8080/tasks/<taskId>/deliver     # retry (202); the console has a Retry delivery button
+```
 
 ### 6.6 Escalated tasks
 
@@ -722,6 +740,11 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Parent `BLOCKED`: "child … is BLOCKED" | Look at that child's transitions (§6.1); the parent blocks as soon as any child does |
 | Task `ESCALATED`: "review rejected the change in N round(s)" or "final review rejected" | Reviewers kept rejecting. Read their verdicts and decide (§6.6); the parent waits meanwhile |
 | Review verdict `error`: "reviewer timed out after …" | The reviewer never reported (adapter died or the model call hung). Raise `REVIEWER_TIMEOUT` for slow models; the round already continued |
+| Delivery `BLOCKED`: "target branch is checked out with uncommitted changes" | Commit or stash the edits in that checkout, then `POST /tasks/{id}/deliver` |
+| Delivery `BLOCKED`: "… moved since the work started and conflicts with it" | The target changed the same lines. Merge the target into the parent branch yourself, resolve, commit, then retry |
+| Delivery `BLOCKED`: "verification failed after merging …" | The target's new commits break the combined change; fix on the parent branch and retry |
+| Delivery `BLOCKED`: "push … rejected" / "gh pr create: …" | The remote branch has commits Forge did not make (it never forces), or `gh` is not logged in / cannot see the repo. Check the hint's warnings |
+| Task stays `DELIVERING` after a control-plane restart | Not resumed yet (Phase 11 gap): set it to `BLOCKED` in Mongo and retry delivery |
 | Creating a task answers 400 "detached HEAD" / "is not a branch" / "does not exist" | The target branch could not be resolved. Pass `targetBranch` explicitly |
 | Parent `BLOCKED`: "decomposition: dependency cycle: …" | The head engineer's `dependsOn` edges form a loop; re-dispatch |
 | Subtask `BLOCKED` by `diff-scope` after a review asked for files outside its scope | Should not happen since 10.4 (agents are told the subtask's scope and siblings). If it does, check the subtask's prompt carries "## Scope of this subtask" |

@@ -165,6 +165,7 @@ func main() {
 	mux.HandleFunc("GET /tasks/{id}/children", h.ListTaskChildren)
 	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
 	mux.HandleFunc("GET /tasks/{id}/delivery", h.GetDelivery)
+	mux.HandleFunc("POST /tasks/{id}/deliver", h.RetryDelivery)
 
 	mux.HandleFunc("POST /evals/results", h.RecordEval)
 	mux.HandleFunc("GET  /evals/results", h.ListEvals)
@@ -190,6 +191,20 @@ func main() {
 		parseDuration(envOr("REVIEW_TIMEOUT_GRACE", "60s"), 60*time.Second)
 	watcher.OnReviewTimeout = h.HandleReviewTimeout
 	go watcher.Run(ctx)
+
+	// ---- pull request watcher: merged/closed on the forge -> MERGED/REJECTED ----
+	go func() {
+		t := time.NewTicker(parseDuration(envOr("PR_POLL_INTERVAL", "60s"), 60*time.Second))
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.PollPullRequests(ctx)
+			}
+		}
+	}()
 
 	// ---- reaper: removes containers/workspaces nothing can use any more ----
 	reaper := runner.NewReaper(runRepo, taskRepo,

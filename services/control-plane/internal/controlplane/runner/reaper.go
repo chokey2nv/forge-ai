@@ -22,6 +22,7 @@ var activeStatuses = []domain.TaskStatus{
 	domain.StatusVerifying,
 	domain.StatusAgentReview,
 	domain.StatusIntegrating,
+	domain.StatusDelivering, // re-verification after the target moved
 }
 
 // Reaper removes agent containers and workspace directories once nothing can

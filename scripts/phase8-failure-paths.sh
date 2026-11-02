@@ -22,6 +22,11 @@
 #   overlap-serialized one subtask declares no diffScope, so it waits for its sibling
 #   cycle-rejected     a cyclic task graph blocks the parent at decomposition
 #   parallel-reviewers two 3s reviewers finish one round in well under 6s (Phase 10.3)
+#   deliver-local      no remote: approval merges the parent branch into the target (Phase 11.3)
+#   deliver-target-moved  the target advanced: merged in, verified again, then merged
+#   deliver-dirty      the target is checked out with edits: blocked; clean it, retry -> merged
+#   deliver-pr         a remote: approval pushes and opens a PR; merged on the forge -> MERGED
+#   deliver-pr-closed  the PR is closed without merging -> REJECTED
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -35,7 +40,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -56,11 +61,15 @@ cat >"$WORK/bin/gh" <<'GH'
 echo "gh $*" >>"${GH_LOG:-/dev/null}"
 case "$1 $2" in
   "auth status") echo "  ✓ Logged in to github.com account forge-test (keyring)"; exit 0 ;;
+  "pr create") echo "https://github.com/example/app/pull/7"; exit 0 ;;
+  # The harness plays the forge: it writes OPEN, MERGED or CLOSED to $GH_PR_STATE.
+  "pr view") s=$(cat "$GH_PR_STATE" 2>/dev/null || echo OPEN)
+    echo "{\"state\":\"$s\",\"mergeCommit\":$([ "$s" = MERGED ] && echo '{"oid":"f0f0f0f0"}' || echo null)}"; exit 0 ;;
 esac
 echo "stub gh: unsupported: $*" >&2; exit 1
 GH
 chmod +x "$WORK/bin/gh"
-export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log"
+export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log" GH_PR_STATE="$WORK/pr-state" PR_POLL_INTERVAL=2s
 
 # A private copy of the agent definitions: add-agent writes to it, never to agents/.
 cp -R "$ROOT/agents" "$WORK/agents"
@@ -436,6 +445,99 @@ run_parallel() { # siblings | diamond | cap
     "$(cd "$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)" && node --test >/dev/null 2>&1; echo $?)"
 }
 
+approve() { # task -> HTTP code
+  curl -s -o "$WORK/approve.out" -w '%{http_code}' -X POST "$CP/tasks/$1/approve" -H 'Content-Type: application/json' \
+    -d "{\"reviewer\":\"harness\",\"rationale\":\"scenario $SC\"}"
+}
+delivery_verifications() { # task -> passed verification runs made during delivery
+  mongosh --quiet "$DB" --eval "$(printf 'print(db.verificationRuns.countDocuments({_id: {$regex: "^vr-%s-delivery-"}, passed: true}))' "$1")"
+}
+delivery_of() { curl -sf "$CP/tasks/$1" | jq -c '.delivery // {}'; }
+
+run_delivery() { # local | moved | dirty | pr | pr-closed
+  local repo task final target branch wt d origin
+  repo=$(new_repo)
+  target=$(git -C "$repo" symbolic-ref --short HEAD)
+  if [[ "$1" == pr* ]]; then
+    # A GitHub-looking remote whose pushes land in a local bare repository.
+    origin="$WORK/origin-$RANDOM.git"; git init -q --bare "$origin"
+    git -C "$repo" remote add origin https://github.com/example/app.git
+    git -C "$repo" config "url.$origin.pushInsteadOf" https://github.com/example/app.git
+    echo OPEN >"$GH_PR_STATE"; : >"$GH_LOG"
+  fi
+  start_adapter "$SCEN/two-reviewers-pass.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  check "parent reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  branch=$(branch_of "$task"); wt=$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)
+
+  case "$1" in
+    moved) # someone lands an unrelated change on the target meanwhile
+      echo "# Notes" >"$repo/NOTES.md"; git -C "$repo" add NOTES.md
+      git -C "$repo" -c user.name=someone -c user.email=s@localhost commit -q -m "notes" ;;
+    dirty) echo "// my edit" >>"$repo/src/price.js" ;;
+  esac
+  local before; before=$(git -C "$repo" rev-parse "$target")
+
+  check "approval answers DELIVERING" "$([ "$(approve "$task")" = 200 ] && jq -e '.status == "DELIVERING"' "$WORK/approve.out" >/dev/null; echo $?)"
+  final=$(wait_status "$task" "MERGED|PR_OPEN|BLOCKED|REJECTED" 180) || true
+  d=$(delivery_of "$task"); echo "  delivery: $d"
+  reasons "$task" | tail -4 | sed 's/^/      /'
+
+  case "$1" in
+    local|moved)
+      check "task MERGED ($final)" "$([ "$final" = MERGED ]; echo $?)"
+      check "the target's tip is a merge of its old tip and the parent branch" \
+        "$(p=$(git -C "$repo" rev-list --parents -n1 "$target"); [ "$(echo "$p" | wc -w)" -eq 3 ] && [ "$(echo "$p" | awk '{print $2}')" = "$before" ] && [ "$(echo "$p" | awk '{print $3}')" = "$(git -C "$repo" rev-parse "$branch")" ]; echo $?)"
+      check "the delivery records that merge commit" "$(echo "$d" | jq -e --arg m "$(git -C "$repo" rev-parse "$target")" '.mode == "local_merge" and .mergeCommit == $m' >/dev/null; echo $?)"
+      check "the checked-out target has the fix and is clean" \
+        "$(grep -q Math.round "$repo/src/price.js" && [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; echo $?)"
+      check "tests pass on the target" "$(cd "$repo" && node --test >/dev/null 2>&1; echo $?)"
+      check "the integration worktree is removed" "$([ ! -e "$wt" ] && [ "$(curl -sf "$CP/tasks/$task" | jq -r '.integrationWorktree // ""')" = "" ]; echo $?)"
+      if [ "$1" = moved ]; then
+        check "the moved target was merged in and verified again" \
+          "$(echo "$d" | jq -e '.targetMoved' >/dev/null && [ "$(event_count "$task" delivery.target_merged "Merge $target")" -ge 1 ] && [ "$(delivery_verifications "$task")" -ge 1 ]; echo $?)"
+        check "the target holds both changes" "$([ -f "$repo/NOTES.md" ] && git -C "$repo" merge-base --is-ancestor "$before" "$target"; echo $?)"
+      fi
+      ;;
+    dirty)
+      check "delivery blocks on the dirty checkout ($final)" \
+        "$([ "$final" = BLOCKED ] && echo "$d" | jq -e '.error | contains("uncommitted changes") and contains("retry")' >/dev/null; echo $?)"
+      check "the target and the user's edit are untouched" \
+        "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ] && grep -q "my edit" "$repo/src/price.js"; echo $?)"
+      git -C "$repo" checkout -q -- src/price.js
+      code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/deliver")
+      final=$(wait_status "$task" "MERGED|BLOCKED" 120) || true
+      check "after cleaning up, retry delivers ($code, $final)" "$([ "$code" = 202 ] && [ "$final" = MERGED ]; echo $?)"
+      check "the retried delivery has no error and merged into the target" \
+        "$(delivery_of "$task" | jq -e '.error == null and .mergeCommit != null' >/dev/null && git -C "$repo" merge-base --is-ancestor "$branch" "$target"; echo $?)"
+      code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/deliver")
+      check "a delivered task cannot be retried (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+      ;;
+    pr|pr-closed)
+      check "task PR_OPEN ($final)" "$([ "$final" = PR_OPEN ]; echo $?)"
+      check "the parent branch was pushed" "$([ "$(git -C "$origin" rev-parse "$branch" 2>/dev/null)" = "$(git -C "$repo" rev-parse "$branch")" ]; echo $?)"
+      check "gh opened the PR from the parent branch into the target" \
+        "$(grep -qF "gh pr create --base $target --head $branch --title Fix applyDiscount" "$GH_LOG" && grep -qF -- "--repo github.com/example/app" "$GH_LOG"; echo $?)"
+      check "the PR body lists the acceptance criteria and the final review" \
+        "$(grep -A30 "gh pr create" "$GH_LOG" | grep -qF "applyDiscount(200, 10) returns 180" && grep -qF "**security-reviewer**: pass" "$GH_LOG"; echo $?)"
+      check "the delivery records the PR" "$(echo "$d" | jq -e '.mode == "pull_request" and .prUrl == "https://github.com/example/app/pull/7" and .prNumber == 7' >/dev/null; echo $?)"
+      check "the target branch did not move locally" "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ]; echo $?)"
+      if [ "$1" = pr ]; then
+        echo MERGED >"$GH_PR_STATE"
+        final=$(wait_status "$task" "MERGED|REJECTED" 30) || true
+        check "merged on the forge -> MERGED ($final)" \
+          "$([ "$final" = MERGED ] && delivery_of "$task" | jq -e '.mergeCommit == "f0f0f0f0"' >/dev/null; echo $?)"
+      else
+        echo CLOSED >"$GH_PR_STATE"
+        final=$(wait_status "$task" "MERGED|REJECTED" 30) || true
+        check "closed without merging -> REJECTED ($final)" "$([ "$final" = REJECTED ] && has_reason "$task" "closed without merging"; echo $?)"
+      fi
+      ;;
+  esac
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -448,6 +550,8 @@ for SC in "${SCENARIOS[@]}"; do
     diamond) run_parallel diamond ;;
     concurrency-cap) stop_cp; start_cp MAX_CONCURRENT_RUNS=1; run_parallel cap; stop_cp; start_cp ;;
     overlap-serialized) run_parallel serialized ;;
+    deliver-target-moved) run_delivery moved ;;
+    deliver-*) run_delivery "${SC#deliver-}" ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

@@ -71,8 +71,23 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusApproved,
 		domain.StatusRejected,
 	},
-	domain.StatusApproved:  {domain.StatusMerged},
-	domain.StatusBlocked:   {domain.StatusRunning},
+	domain.StatusApproved: {
+		domain.StatusDelivering, // Phase 11: approval delivers
+		domain.StatusMerged,
+	},
+	domain.StatusDelivering: {
+		domain.StatusMerged,  // merged locally
+		domain.StatusPROpen,  // pull request opened
+		domain.StatusBlocked, // conflict with the target, gates failed, dirty checkout, push or gh error
+	},
+	domain.StatusPROpen: {
+		domain.StatusMerged,   // merged on the forge
+		domain.StatusRejected, // closed without merging
+	},
+	domain.StatusBlocked: {
+		domain.StatusRunning,
+		domain.StatusDelivering, // delivery retried after fixing what blocked it
+	},
 	domain.StatusResumable: {domain.StatusRunning},
 	// Integrated, Merged, Rejected terminal
 }

@@ -22,6 +22,8 @@ const (
 	StatusIntegrating TaskStatus = "INTEGRATING" // applying child diffs to parent
 	StatusIntegrated  TaskStatus = "INTEGRATED"  // child terminal: merged into parent
 	StatusEscalated   TaskStatus = "ESCALATED"   // reviewers kept rejecting; a human decides (Phase 9)
+	StatusDelivering  TaskStatus = "DELIVERING"  // approved; merging or opening the PR (Phase 11)
+	StatusPROpen      TaskStatus = "PR_OPEN"     // pull request opened; a human merges it on the forge
 
 )
 
@@ -69,8 +71,28 @@ type Task struct {
 	// TargetBranch is the branch the task's work is delivered to (Phase 11),
 	// recorded at creation. IntegrationBranch, the task's parent branch, is
 	// created then too, at the target's tip.
-	TargetBranch          string `bson:"targetBranch,omitempty" json:"targetBranch,omitempty"`
-	IntegrationWorktree   string `bson:"integrationWorktree,omitempty" json:"integrationWorktree,omitempty"`
-	IntegrationBranch     string `bson:"integrationBranch,omitempty" json:"integrationBranch,omitempty"`
-	IntegrationBaseCommit string `bson:"integrationBaseCommit,omitempty" json:"integrationBaseCommit,omitempty"`
+	TargetBranch string `bson:"targetBranch,omitempty" json:"targetBranch,omitempty"`
+	// Delivery is set once an approved task starts delivering.
+	Delivery              *Delivery `bson:"delivery,omitempty" json:"delivery,omitempty"`
+	IntegrationWorktree   string    `bson:"integrationWorktree,omitempty" json:"integrationWorktree,omitempty"`
+	IntegrationBranch     string    `bson:"integrationBranch,omitempty" json:"integrationBranch,omitempty"`
+	IntegrationBaseCommit string    `bson:"integrationBaseCommit,omitempty" json:"integrationBaseCommit,omitempty"`
+}
+
+// Delivery records how an approved task reached (or failed to reach) its
+// target branch.
+type Delivery struct {
+	Mode         string `bson:"mode" json:"mode"` // pull_request | local_merge
+	TargetBranch string `bson:"targetBranch" json:"targetBranch"`
+	Branch       string `bson:"branch" json:"branch"`
+	Remote       string `bson:"remote,omitempty" json:"remote,omitempty"`
+	// TargetMoved: the target had advanced since the work started, so it was
+	// merged into the branch and the verification gates ran again.
+	TargetMoved bool      `bson:"targetMoved,omitempty" json:"targetMoved,omitempty"`
+	MergeCommit string    `bson:"mergeCommit,omitempty" json:"mergeCommit,omitempty"`
+	PRURL       string    `bson:"prUrl,omitempty" json:"prUrl,omitempty"`
+	PRNumber    int       `bson:"prNumber,omitempty" json:"prNumber,omitempty"`
+	Error       string    `bson:"error,omitempty" json:"error,omitempty"`
+	StartedAt   time.Time `bson:"startedAt" json:"startedAt"`
+	FinishedAt  time.Time `bson:"finishedAt,omitempty" json:"finishedAt,omitzero"`
 }

@@ -22,6 +22,7 @@ type TaskRepo interface {
 	ListByStatus(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
 	ListChildren(ctx context.Context, parentID string) ([]*domain.Task, error)
 	UpdateIntegration(ctx context.Context, id, worktree, branch, baseCommit string, at time.Time) error
+	UpdateDelivery(ctx context.Context, id string, d *domain.Delivery, at time.Time) error
 }
 
 type RunRepo interface {

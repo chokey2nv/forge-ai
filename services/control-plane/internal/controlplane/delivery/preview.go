@@ -39,8 +39,8 @@ type Preview struct {
 	GHAccount    string   `json:"ghAccount,omitempty"`
 	Action       string   `json:"action"`
 	Warnings     []string `json:"warnings"`
-	// DeliversOnApproval is false until approval performs the delivery
-	// (Phase 11.3); until then approval only records the decision.
+	// DeliversOnApproval: approval performs the action (false only for
+	// tasks that cannot be delivered).
 	DeliversOnApproval bool `json:"deliversOnApproval"`
 }
 
@@ -76,9 +76,11 @@ func (in *Inspector) Preview(ctx context.Context, task *domain.Task) Preview {
 		return p
 	}
 
+	p.DeliversOnApproval = true
 	remote, err := FindRemote(ctx, task.RepoPath)
 	if err != nil {
 		p.Mode = ModeUnavailable
+		p.DeliversOnApproval = false
 		p.Action = "Approval cannot deliver: " + err.Error()
 		return p
 	}
