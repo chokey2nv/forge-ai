@@ -1,0 +1,192 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "Fix applyDiscount",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "applyDiscount(200, 10) returns 180",
+                  "applyDiscount(19.99, 25) returns 14.99",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js"
+                ],
+                "rationale": "Single file fix."
+              }
+            ],
+            "notes": "One subtask."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "f1",
+                "title": "Name the cents factor",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "The 100 in applyDiscount is a named constant",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js"
+                ],
+                "rationale": "Reviewer asked for a named constant.",
+                "addresses": [
+                  "T1"
+                ]
+              }
+            ],
+            "notes": "Follow-up.",
+            "responses": [
+              {
+                "thread": "T2",
+                "body": "The existing suite already covers 0%: applyDiscount(50, 0) returns 50."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "implementer": [
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * 100) / 100;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Fixed applyDiscount."
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nconst CENTS = 100;\n\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * CENTS) / CENTS;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Named the cents factor."
+    }
+  ],
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

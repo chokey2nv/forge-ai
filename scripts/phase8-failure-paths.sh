@@ -29,6 +29,10 @@
 #   deliver-pr-closed  the PR is closed without merging -> REJECTED
 #   rollback-local     a delivered local merge is reverted by a commit on the target (Phase 11.4)
 #   rollback-pr        a merged PR is reverted by a revert PR; merged on the forge -> ROLLED_BACK
+#   feedback-request-changes  threads on r1, request changes -> head engineer follow-up -> r2 -> approve -> MERGED (Phase 12.3)
+#   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
+#   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
+#   feedback-budget    a task budgeted for one revision cannot be sent back
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -42,7 +46,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -126,13 +130,13 @@ new_repo() { # [fixture name] (default cart-pricing)
   echo "$repo"
 }
 
-create_and_dispatch() { # repo -> task id
+create_and_dispatch() { # repo [extra budget fields, e.g. ,"maxRevisions":2] -> task id
   local task
   task=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "{
     \"requirement\":\"Fix applyDiscount in src/price.js so it applies a percentage discount rounded to cents.\",
     \"acceptance\":[\"applyDiscount(200, 10) returns 180\",\"applyDiscount(19.99, 25) returns 14.99\",\"npm test passes\"],
     \"repoPath\":\"$1\",\"baseCommit\":\"HEAD\",
-    \"budget\":{\"maxSteps\":10,\"maxRetries\":0,\"wallClockMs\":300000}}" | jq -r .id)
+    \"budget\":{\"maxSteps\":10,\"maxRetries\":0,\"wallClockMs\":300000${2:-}}}" | jq -r .id)
   curl -sf -X POST "$CP/tasks/$task/runs" -H 'Content-Type: application/json' \
     -d '{"provider":"scripted","model":"scripted"}' >/dev/null
   echo "$task"
@@ -389,8 +393,8 @@ run_final_review_escalates() {
   final=$(wait_status "$task" "ESCALATED|REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
   check "parent escalates when the final review rejects ($final)" \
     "$([ "$final" = ESCALATED ] && has_reason "$task" "final review rejected: reviewer: fail, security-reviewer: pass"; echo $?)"
-  code=$(decide "$task" retry "")
-  check "retry is refused for a parent's combined change (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+  code=$(request_changes "$task" '{"reviewer":"harness","summary":"x"}')
+  check "changes cannot be requested while ESCALATED (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
   code=$(decide "$task" accept "")
   check "accept decision accepted (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
   final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 60) || true
@@ -654,6 +658,101 @@ rollback_delivery() { # local | pr  (task, repo, target, branch, origin from run
   check "a rolled-back task cannot be rolled back again (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
 }
 
+request_changes() { # task json -> HTTP code (body in $WORK/rc.out)
+  curl -s -o "$WORK/rc.out" -w '%{http_code}' -X POST "$CP/tasks/$1/request-changes" -H 'Content-Type: application/json' -d "$2"
+}
+thread_ids() { curl -sf "$CP/tasks/$1/threads" | jq -r '.threads[].id'; }
+
+run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry | budget
+  local repo task final code line t1 t2 first r1
+  repo=$(new_repo)
+  : >"$WORK/prompts.jsonl"
+  case "$1" in
+    budget) start_adapter "$SCEN/two-reviewers-pass.json"; task=$(create_and_dispatch "$repo" ',"maxRevisions":1') ;;
+    request-changes) start_adapter "$SCEN/feedback-$1.json"; task=$(create_and_dispatch "$repo" ',"maxRevisions":2') ;;
+    *) start_adapter "$SCEN/feedback-$1.json"; task=$(create_and_dispatch "$repo") ;;
+  esac
+
+  if [ "$1" = escalated-parent-retry ]; then
+    final=$(wait_status "$task" "ESCALATED|REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+    check "the final review rejects the debug log: parent ESCALATED ($final)" "$([ "$final" = ESCALATED ]; echo $?)"
+    first=$(curl -sf "$CP/tasks/$task/children" | jq -r '.[0].id')
+    code=$(decide "$task" retry "Remove the console.log; keep the rounding.")
+    check "retry sends the parent back to the head engineer (HTTP $code)" \
+      "$([ "$code" = 202 ] && jq -e '.status == "DECOMPOSING"' "$WORK/decide.out" >/dev/null; echo $?)"
+    final=$(wait_status "$task" "REVIEW_PENDING|ESCALATED|BLOCKED|REJECTED" 300) || true
+    stop_adapter
+    check "the follow-up fixed it and the parent reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+    check "the head engineer was shown the escalated review and the guidance" \
+      "$(jq -e -s '[.[] | select(.role == "head-engineer")] | length == 2 and (.[1].task | contains("# Final review (escalated)") and contains("Remove the debug log of the discount rate") and contains("Remove the console.log; keep the rounding.") and contains("+  console.log("))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+    check "a second subtask started from the escalated change and integrated" \
+      "$(c=$(child_titled "$task" "Remove the debug log"); [ -n "$c" ] && [ "$(status_of "$c")" = INTEGRATED ] && [ "$(status_of "$first")" = INTEGRATED ] && git -C "$repo" merge-base --is-ancestor "$(curl -sf "$CP/tasks/$first" | jq -r .branch)" "$(run_base "$c")"; echo $?)"
+    check "the parent branch no longer logs and still rounds" \
+      "$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q Math.round && ! git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q console.log; echo $?)"
+    check "r1 is recorded with the second final review attempt (-a2), the first kept" \
+      "$(curl -sf "$CP/tasks/$task" | jq -e --arg run "run-$task-final-review-a2" '(.revisions | length == 1 and .[0].finalReviewRunId == $run) and (.followUps | length == 1 and .[0].kind == "escalation_retry" and .[0].outcome == "planned" and .[0].revision == 0)' >/dev/null && verdicts "run-$task-final-review" | grep -q "reviewer fail" && verdicts "run-$task-final-review-a2" | grep -qx '1 reviewer pass,1 security-reviewer pass'; echo $?)"
+    return 0
+  fi
+
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  check "parent reaches REVIEW_PENDING with r1 ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  check "with no open thread and no summary, a request for changes is refused (400)" \
+    "$([ "$(request_changes "$task" '{"reviewer":"dana","summary":"  "}')" = 400 ]; echo $?)"
+  line=$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -n Math.round | head -1 | cut -d: -f1)
+  post_thread "$task" "{\"author\":\"dana\",\"body\":\"Name the 100.\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$line}}" >/dev/null
+  post_thread "$task" '{"author":"dana","body":"Is 0% covered by a test?"}' >/dev/null
+  t1=$(thread_ids "$task" | sed -n 1p); t2=$(thread_ids "$task" | sed -n 2p)
+
+  case "$1" in
+    budget)
+      stop_adapter
+      code=$(request_changes "$task" '{"reviewer":"dana","summary":"more"}')
+      check "a task budgeted for one revision cannot be sent back (HTTP $code)" \
+        "$([ "$code" = 409 ] && grep -q "revision budget is spent" "$WORK/rc.out" && [ "$(status_of "$task")" = REVIEW_PENDING ]; echo $?)"
+      check "it can still be approved" "$([ "$(approve "$task")" = 200 ]; echo $?)"
+      ;;
+    unhandled-thread)
+      code=$(request_changes "$task" '{"reviewer":"dana"}')
+      check "changes requested with two open threads (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+      final=$(wait_status "$task" "REVIEW_PENDING|DISPATCHED|BLOCKED" 120) || true
+      stop_adapter
+      check "the graph leaving both threads unhandled is refused: back to REVIEW_PENDING ($final)" \
+        "$([ "$final" = REVIEW_PENDING ] && has_reason "$task" "follow-up 1 refused: open thread(s) neither addressed by a subtask nor answered: T1 (src/price.js:$line), T2 (general)"; echo $?)"
+      check "no subtask was added, r1 is still the only revision, the refusal is recorded" \
+        "$([ "$(curl -sf "$CP/tasks/$task/children" | jq length)" = 1 ] && curl -sf "$CP/tasks/$task" | jq -e '(.revisions | length == 1) and (.followUps[0].outcome | startswith("refused: open thread"))' >/dev/null; echo $?)"
+      check "the threads are still open" "$(curl -sf "$CP/tasks/$task/threads" | jq -e '[.threads[] | select(.status == "open")] | length == 2' >/dev/null; echo $?)"
+      check "a subtask cannot have changes requested (400)" \
+        "$([ "$(request_changes "$(curl -sf "$CP/tasks/$task/children" | jq -r '.[0].id')" '{"reviewer":"dana","summary":"x"}')" = 400 ]; echo $?)"
+      ;;
+    request-changes)
+      code=$(request_changes "$task" '{"reviewer":"dana"}')
+      check "request changes answers DECOMPOSING with follow-up 1" \
+        "$(jq -e '.status == "DECOMPOSING" and .followUp == 1 and .openThreads == 2' "$WORK/rc.out" >/dev/null; echo $?)"
+      check "threads cannot change while the follow-up runs (409)" \
+        "$([ "$(post_thread "$task" '{"author":"dana","body":"late"}' | head -c3)" = 409 ]; echo $?)"
+      final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED|ESCALATED" 300) || true
+      stop_adapter
+      check "the follow-up ran and the parent is back in REVIEW_PENDING as r2 ($final)" \
+        "$([ "$final" = REVIEW_PENDING ] && curl -sf "$CP/tasks/$task" | jq -e --arg run "run-$task-final-review-r2" '(.revisions | length == 2) and .revisions[1].finalReviewRunId == $run and (.followUps | length == 1 and .[0].outcome == "planned" and .[0].revision == 1 and .[0].runId == ($run | sub("final-review-r2"; "revise-1")))' >/dev/null; echo $?)"
+      check "the head engineer was shown the threads as T1, T2 and the combined diff" \
+        "$(jq -e -s '[.[] | select(.role == "head-engineer")] | length == 2 and (.[1].task | contains("## T1 — src/price.js:") and contains("Name the 100.") and contains("## T2 — general") and contains("```diff\ndiff --git a/src/price.js"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+      local f; f=$(child_titled "$task" "Name the cents factor")
+      check "the follow-up subtask addresses T1, was told about it, and started from r1" \
+        "$([ -n "$f" ] && curl -sf "$CP/tasks/$f" | jq -e --arg t "$t1" '.addresses == [$t] and .status == "INTEGRATED" and (.requirement | contains("Review comments this subtask addresses:") and contains("dana: Name the 100."))' >/dev/null && [ "$(run_base "$f")" = "$(curl -sf "$CP/tasks/$task" | jq -r '.revisions[0].commit')" ]; echo $?)"
+      check "T1 is taken on by that subtask; T2 has the head engineer's answer and is addressed" \
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t1 "$t1" --arg t2 "$t2" --arg f "$f" '(.threads[] | select(.id == $t1) | .addressedBy == $f) and (.threads[] | select(.id == $t2) | .status == "addressed" and .comments[1].author == "head-engineer" and .comments[1].kind == "agent" and (.comments[1].body | contains("already covers 0%")))' >/dev/null; echo $?)"
+      check "r2's changes since r1 are just the named constant" \
+        "$(curl -sf "$CP/tasks/$task/diff?revision=2&since=1" | jq -r .diff | grep -q '^+const CENTS = 100;' && [ "$(curl -sf "$CP/tasks/$task/diff?revision=2&since=1" | jq -r .diff | grep -c '^diff --git')" = 1 ]; echo $?)"
+      check "the request is recorded as a decision with both threads" \
+        "$(curl -sf "$CP/tasks/$task/approvals" | jq -e '[.[] | select(.action == "request_changes")] | length == 1 and (.[0].unresolvedThreads | length == 2)' >/dev/null; echo $?)"
+      code=$(request_changes "$task" '{"reviewer":"dana","summary":"once more"}')
+      check "a budget of two revisions allows no second follow-up (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+      check "approving r2 delivers it -> MERGED" \
+        "$([ "$(approve "$task")" = 200 ] && [ "$(wait_status "$task" "MERGED|BLOCKED" 120)" = MERGED ] && grep -q "const CENTS = 100" "$repo/src/price.js"; echo $?)"
+      ;;
+  esac
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -669,6 +768,7 @@ for SC in "${SCENARIOS[@]}"; do
     deliver-target-moved) run_delivery moved ;;
     rollback-*) run_delivery "${SC#rollback-}" rollback ;;
     deliver-*) run_delivery "${SC#deliver-}" ;;
+    feedback-*) run_feedback "${SC#feedback-}" ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

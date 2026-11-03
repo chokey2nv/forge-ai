@@ -155,6 +155,11 @@ func (s *memThreads) SetStatus(_ context.Context, id string, st domain.ThreadSta
 	return nil
 }
 
+func (s *memThreads) SetAddressedBy(_ context.Context, id, taskID string, _ time.Time) error {
+	s.m[id].AddressedBy = taskID
+	return nil
+}
+
 type noEvents struct{ store.EventRepo }
 
 func (noEvents) Append(context.Context, *domain.Event) error { return nil }

@@ -54,6 +54,22 @@ export interface Task {
   delivery?: Delivery;
   /** Phase 12: each version of a parent's combined change put up for human review. */
   revisions?: Revision[];
+  /** Phase 12.3: each time a human sent the combined change back to the head engineer. */
+  followUps?: FollowUp[];
+  /** Follow-up subtask: the review threads it takes on. */
+  addresses?: string[];
+}
+
+export interface FollowUp {
+  n: number;
+  kind: "request_changes" | "escalation_retry";
+  revision: number;
+  reviewer: string;
+  summary?: string;
+  runId: string;
+  /** "planned", or "refused: …" when the head engineer's graph was not accepted. */
+  outcome?: string;
+  at: string;
 }
 
 export interface Revision {
@@ -177,7 +193,9 @@ export const reviewRunId = (t: Task) => {
   const revs = t.revisions ?? [];
   if (revs.length && !REWORKING.has(t.status)) return revs[revs.length - 1].finalReviewRunId;
   const n = revs.length + 1;
-  return n === 1 ? `run-${t.id}-final-review` : `run-${t.id}-final-review-r${n}`;
+  // An escalated final review sent back is tried again: -a2, -a3, …
+  const retries = (t.followUps ?? []).filter((f) => f.kind === "escalation_retry" && f.revision === revs.length).length;
+  return (n === 1 ? `run-${t.id}-final-review` : `run-${t.id}-final-review-r${n}`) + (retries ? `-a${retries + 1}` : "");
 };
 
 export interface Run {
@@ -335,6 +353,10 @@ export const api = {
       if (since) q.set("since", String(since));
       return j<TaskDiff>(`/tasks/${taskId}/diff${q.size ? `?${q}` : ""}`);
     },
+    requestChanges: (taskId: string, reviewer: string, summary: string) =>
+        j<{ status: string; followUp: number }>(`/tasks/${taskId}/request-changes`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reviewer, summary }),
+        }),
     listThreads: (taskId: string) => j<ThreadList>(`/tasks/${taskId}/threads`),
     createThread: (taskId: string, t: { author: string; body: string; revision?: number; anchor?: { path: string; side: "old" | "new"; line: number } }) =>
         j<Thread>(`/tasks/${taskId}/threads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }),

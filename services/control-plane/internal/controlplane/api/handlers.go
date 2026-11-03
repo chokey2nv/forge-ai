@@ -37,6 +37,7 @@ type Handlers struct {
 	DefaultProvider, DefaultModel string
 	MaxVerificationAttempts       int // consecutive verification failures before blocking
 	MaxReviewRounds               int // reviewer rejections before blocking
+	MaxRevisions                  int // Phase 12: default revisions per parent task (0: 3)
 	SetupTimeout                  time.Duration
 	PlannerEnabled                bool
 	ReviewerEnabled               bool

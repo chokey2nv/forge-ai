@@ -130,51 +130,56 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compose head-engineer from registry.
+	runID := "run-" + uuid.NewString()[:8]
+	if code, err := h.startHeadEngineer(ctx, task, runID, task.BaseCommit, body.Provider, body.Model, ""); err != nil {
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "head-engineer: "+err.Error())
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	// The task stays DECOMPOSING until handleHeadEngineerDone has created the
+	// children and the integration branch; only then may the scheduler see it.
+	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDecomposing)})
+}
+
+// startHeadEngineer provisions a read-only workspace at base and starts the
+// head engineer under runID. An empty prompt is the first decomposition;
+// a follow-up passes its own. On error it answers the HTTP status to
+// report; the caller decides what becomes of the task.
+func (h *Handlers) startHeadEngineer(ctx context.Context, task *domain.Task, runID, base, provider, model, prompt string) (int, error) {
 	he, ok := h.Registry.GetAgent("head-engineer")
 	if !ok {
-		http.Error(w, "head-engineer agent not registered", http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, fmt.Errorf("head-engineer agent not registered")
 	}
 	sysPrompt, tools, err := agent.Compose(he, h.Registry.GetSkill)
 	if err != nil {
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "compose head-engineer: "+err.Error())
-		http.Error(w, "compose head-engineer: "+err.Error(), http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, fmt.Errorf("compose head-engineer: %w", err)
 	}
-
-	// Provision the decomposition workspace.
-	runID := "run-" + uuid.NewString()[:8]
-	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, task.BaseCommit, h.WorkerImage, runID, h.SetupTimeout)
+	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, base, h.WorkerImage, runID, h.SetupTimeout)
 	if err != nil {
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "provision head-engineer: "+err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, fmt.Errorf("provision head-engineer: %w", err)
+	}
+	if prompt == "" {
+		prompt = buildHeadEngineerTask(task, h.assignableAgents())
 	}
 
-	// Build the task prompt including available agents.
-	taskPrompt := buildHeadEngineerTask(task, h.assignableAgents())
-
-	// Create the run record.
+	now := time.Now().UTC()
 	run := &domain.WorkflowRun{
 		ID: runID, TaskID: task.ID,
 		Status:       domain.RunRunning,
 		WorktreePath: ws.WorktreePath, ContainerName: ws.ContainerName,
-		BaseCommit: task.BaseCommit,
+		BaseCommit: base,
 		Provenance: domain.Provenance{
 			AgentDefinition: "head-engineer@v" + fmt.Sprint(he.Version),
-			Model:           body.Model, Provider: body.Provider,
+			Model:           model, Provider: provider,
 		},
-		LastHeartbeat: time.Now().UTC(),
-		CreatedAt:     time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := h.Runs.Create(ctx, run); err != nil {
 		workspace.Cleanup(ctx, ws, task.RepoPath)
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "create head-engineer run: "+err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return http.StatusInternalServerError, fmt.Errorf("create head-engineer run: %w", err)
 	}
-	_ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, time.Now().UTC())
+	_ = h.Tasks.UpdateLatestRun(ctx, task.ID, runID, now)
 
 	_, err = h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:          runID + "-he",
@@ -182,13 +187,13 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		ContainerName:  ws.ContainerName,
 		WorktreePath:   ws.WorktreePath,
 		Role:           "head-engineer",
-		Task:           taskPrompt,
+		Task:           prompt,
 		SystemPrompt:   sysPrompt,
 		Tools:          tools,
 		SubmissionTool: "submit_task_graph",
 		CallbackURL:    h.SelfURL,
-		Provider:       body.Provider,
-		Model:          body.Model,
+		Provider:       provider,
+		Model:          model,
 		MaxSteps:       h.PlannerMaxSteps * 2, // head engineer gets more room
 		MaxRetries:     task.Budget.MaxRetries,
 		WallClockMS:    h.PlannerWallClockMS * 2,
@@ -196,14 +201,9 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
 		workspace.Cleanup(ctx, ws, task.RepoPath)
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "head-engineer dispatch failed")
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, fmt.Errorf("head-engineer dispatch failed: %w", err)
 	}
-
-	// The task stays DECOMPOSING until handleHeadEngineerDone has created the
-	// children and the integration branch; only then may the scheduler see it.
-	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": string(domain.StatusDecomposing)})
+	return 0, nil
 }
 
 func buildHeadEngineerTask(task *domain.Task, agents []*agent.AgentDefinition) string {

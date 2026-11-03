@@ -25,6 +25,9 @@ type TaskRepo interface {
 	UpdateDelivery(ctx context.Context, id string, d *domain.Delivery, at time.Time) error
 	// AddRevision appends rev unless a revision with its number exists.
 	AddRevision(ctx context.Context, id string, rev domain.Revision, at time.Time) error
+	// AddFollowUp appends f unless a follow-up with its number exists.
+	AddFollowUp(ctx context.Context, id string, f domain.FollowUp, at time.Time) error
+	SetFollowUpOutcome(ctx context.Context, id string, n int, outcome string, at time.Time) error
 }
 
 type RunRepo interface {
@@ -98,4 +101,6 @@ type ThreadRepo interface {
 	AddComment(ctx context.Context, id string, c domain.Comment) error
 	// SetStatus records a status change; by is who resolved it (empty otherwise).
 	SetStatus(ctx context.Context, id string, status domain.ThreadStatus, by string, at time.Time) error
+	// SetAddressedBy records the follow-up subtask that takes the thread on.
+	SetAddressedBy(ctx context.Context, id, taskID string, at time.Time) error
 }

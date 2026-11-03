@@ -14,7 +14,7 @@ import (
 // Escalation decisions for a task whose reviewers kept rejecting it.
 const (
 	EscalationAccept = "accept" // integrate (child) or go to human approval (root)
-	EscalationRetry  = "retry"  // one more round, with the human's guidance
+	EscalationRetry  = "retry"  // one more round, with the human's guidance (a parent: a head engineer follow-up)
 	EscalationReject = "reject"
 )
 
@@ -33,9 +33,6 @@ func validateEscalation(task *domain.Task, req escalationRequest) (status int, m
 	switch req.Decision {
 	case EscalationAccept, EscalationReject:
 	case EscalationRetry:
-		if isParentReview(task) {
-			return http.StatusConflict, "a parent's combined change has no implementer to send back to; accept or reject it"
-		}
 	default:
 		return http.StatusBadRequest, "decision must be accept, retry or reject"
 	}
@@ -70,6 +67,10 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 	}
 	if code, msg := validateEscalation(task, req); code != 0 {
 		http.Error(w, msg, code)
+		return
+	}
+	if req.Decision == EscalationRetry && isParentReview(task) && !h.followUpAllowed(task) {
+		http.Error(w, h.budgetSpent(task), http.StatusConflict)
 		return
 	}
 	run, err := h.Runs.Get(ctx, escalatedRunID(task))
@@ -117,6 +118,15 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if isParentReview(task) {
+			// The combined change has no single implementer: the head
+			// engineer plans the follow-up work, as for requested changes.
+			if _, code, err := h.startFollowUp(bg, task, domain.FollowUpEscalationRetry, req.Reviewer, req.Guidance, "# Final review (escalated)\n\n"+rejectionFeedback(roundOf(ctx, h, run))); err != nil {
+				http.Error(w, err.Error(), code)
+				return
+			}
+			break
+		}
 		if err := h.SM.Transition(ctx, task, domain.StatusRunning, reason); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -133,6 +143,18 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 		status = latest.Status
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"taskId": task.ID, "decision": req.Decision, "status": string(status)})
+}
+
+// roundOf is the escalated run's last review round.
+func roundOf(ctx context.Context, h *Handlers, run *domain.WorkflowRun) []*domain.Review {
+	all, _ := h.Reviews.ListByRun(ctx, run.ID)
+	var round []*domain.Review
+	for _, rv := range all {
+		if rv.Round == run.ReviewRound+1 {
+			round = append(round, rv)
+		}
+	}
+	return round
 }
 
 // escalationFeedback is the escalated round's rejections plus the human's

@@ -77,13 +77,29 @@ func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (pr
 
 // finalReviewRunID is the final review of the revision being prepared, the
 // one after the last recorded. Revision 1 keeps the IDs used before
-// revisions existed, so older tasks still read.
+// revisions existed, so older tasks still read. A revision whose final
+// review was escalated and sent back gets another attempt: -a2, -a3, ….
 func finalReviewRunID(parent *domain.Task) string {
-	return revisionID("run-"+parent.ID+"-final-review", len(parent.Revisions)+1)
+	return revisionID("run-"+parent.ID+"-final-review", len(parent.Revisions)+1) + attemptSuffix(parent)
 }
 
 func combinedVerificationID(parent *domain.Task) string {
-	return revisionID("vr-"+parent.ID+"-combined", len(parent.Revisions)+1)
+	return revisionID("vr-"+parent.ID+"-combined", len(parent.Revisions)+1) + attemptSuffix(parent)
+}
+
+// attemptSuffix counts the escalations of the revision being prepared that
+// a human sent back to the head engineer.
+func attemptSuffix(parent *domain.Task) string {
+	retries := 0
+	for _, f := range parent.FollowUps {
+		if f.Kind == domain.FollowUpEscalationRetry && f.Revision == len(parent.Revisions) {
+			retries++
+		}
+	}
+	if retries == 0 {
+		return ""
+	}
+	return fmt.Sprintf("-a%d", retries+1)
 }
 
 func revisionID(base string, n int) string {

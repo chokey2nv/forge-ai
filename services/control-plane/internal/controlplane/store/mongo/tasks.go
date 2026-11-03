@@ -135,3 +135,17 @@ func (r *TaskRepo) AddRevision(ctx context.Context, id string, rev domain.Revisi
 		bson.M{"$push": bson.M{"revisions": rev}, "$set": bson.M{"updatedAt": at}})
 	return err
 }
+
+func (r *TaskRepo) AddFollowUp(ctx context.Context, id string, f domain.FollowUp, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx,
+		bson.M{"_id": id, "followUps.n": bson.M{"$ne": f.N}},
+		bson.M{"$push": bson.M{"followUps": f}, "$set": bson.M{"updatedAt": at}})
+	return err
+}
+
+func (r *TaskRepo) SetFollowUpOutcome(ctx context.Context, id string, n int, outcome string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx,
+		bson.M{"_id": id, "followUps.n": n},
+		bson.M{"$set": bson.M{"followUps.$.outcome": outcome, "updatedAt": at}})
+	return err
+}

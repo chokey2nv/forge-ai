@@ -374,6 +374,12 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const reloadThreads = () => { api.listThreads(id).then(setThreads).catch((e) => setErr(String(e))); };
   const unresolved = (threads?.threads ?? []).filter((t) => t.status !== "resolved").length;
 
+  const [sendingBack, setSendingBack] = useState(false);
+  const requestChanges = async () => {
+    setSendingBack(true);
+    try { await api.requestChanges(id, reviewer, rationale); setRationale(""); await reload(); } catch (e) { setErr(String(e)); } finally { setSendingBack(false); }
+  };
+
   const decide = async (action: "approve" | "reject") => {
     try {
       if (action === "approve") await api.approve(id, reviewer, rationale);
@@ -431,17 +437,16 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="your name" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (recorded with the decision)" />
-          {!isParent(task) && (
-            <textarea value={guidance} onChange={(e) => setGuidance(e.target.value)} placeholder="guidance for the implementer (used by Send back)" />
-          )}
+          <textarea value={guidance} onChange={(e) => setGuidance(e.target.value)}
+            placeholder={`guidance for the ${isParent(task) ? "head engineer" : "implementer"} (used by Send back)`} />
           <div>
             <button className="approve" onClick={() => decideEscalation("accept")}>
               {task.parentId ? "Accept and integrate" : "Accept"}
             </button>
-            {!isParent(task) && <button className="neutral" onClick={() => decideEscalation("retry")}>Send back</button>}
+            <button className="neutral" onClick={() => decideEscalation("retry")}>Send back</button>
             <button className="reject" onClick={() => decideEscalation("reject")}>Reject</button>
           </div>
-          {isParent(task) && <p className="hint">A combined change has no implementer to send back to: accept or reject it.</p>}
+          {isParent(task) && <p className="hint">Send back asks the head engineer to plan follow-up work from the change as it stands, with your guidance, the reviewers' findings and any open threads.</p>}
         </section>
       )}
 
@@ -476,7 +481,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           <h3>Decision</h3>
           {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision only."}</p>}
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
-          <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (optional)" />
+          <textarea value={rationale} onChange={(e) => setRationale(e.target.value)}
+            placeholder={isParent(task) ? "rationale (optional); for Request changes, what to change beyond the threads" : "rationale (optional)"} />
           {unresolved > 0 && (
             <p className="warning">
               {unresolved} unresolved thread{unresolved === 1 ? "" : "s"} on this change. Approving leaves {unresolved === 1 ? "it" : "them"} open:
@@ -485,8 +491,17 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           )}
           <div>
             <button className="approve" onClick={() => decide("approve")}>{unresolved > 0 ? `Approve with ${unresolved} open` : "Approve"}</button>
+            {isParent(task) && (
+              <button className="neutral" disabled={sendingBack || (!unresolved && !rationale.trim())} onClick={requestChanges}
+                title={!unresolved && !rationale.trim() ? "Comment on the change, or say what to change above" : undefined}>
+                {sendingBack ? "Starting the head engineer…" : `Request changes${unresolved ? ` (${unresolved} thread${unresolved === 1 ? "" : "s"})` : ""}`}
+              </button>
+            )}
             <button className="reject"  onClick={() => decide("reject")}>Reject</button>
           </div>
+          {isParent(task) && (
+            <p className="hint">Request changes sends the open threads and your note to the head engineer, who plans follow-up subtasks; the change comes back as revision {(task.revisions?.length ?? 0) + 1}.</p>
+          )}
         </section>
       )}
 
@@ -516,6 +531,22 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
+      {(task.followUps?.length ?? 0) > 0 && (
+        <section>
+          <h3>Follow-ups</h3>
+          <ul className="followups">{task.followUps!.map((f) => (
+            <li key={f.n}>
+              <strong>{f.kind === "request_changes" ? `Changes requested on r${f.revision}` : "Escalation sent back"}</strong> by {f.reviewer}
+              <span className="version"> · {new Date(f.at).toLocaleString()}</span>
+              {f.summary && <> — {f.summary}</>}
+              <div className={f.outcome?.startsWith("refused") ? "error" : "hint"}>
+                {f.outcome === "planned" ? "The head engineer planned follow-up subtasks." : f.outcome ?? "The head engineer is planning…"}
+              </div>
+            </li>
+          ))}</ul>
+        </section>
+      )}
+
       <DiffView task={task} feedback={isParent(task) ? { threads, author: reviewer, onChange: reloadThreads } : undefined} />
 
       <section>
@@ -540,7 +571,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
               {a.rationale ? ` — ${a.rationale}` : ""}
               {a.unresolvedThreads?.length ? (
                 <ul className="files">{a.unresolvedThreads.map((t) => (
-                  <li key={t.id}>left {t.status}: <code>{t.where}</code> — {t.comment} ({t.author})</li>
+                  <li key={t.id}>{a.action === "request_changes" ? "" : "left "}{t.status}: <code>{t.where}</code> — {t.comment} ({t.author})</li>
                 ))}</ul>
               ) : null}
             </li>

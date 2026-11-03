@@ -222,6 +222,7 @@ function ThreadIndex({ task, feedback, revision, canComment, notes }: {
               <span className={`thread-status ${t.status}`}>{t.status}</span> <code>{threadWhere(t)}</code>
               <span className="version"> r{t.revision}</span> — {t.comments[0]?.body.slice(0, 100)}
               <span className="version"> ({t.comments[0]?.author}{t.comments.length > 1 ? `, ${t.comments.length - 1} repl${t.comments.length === 2 ? "y" : "ies"}` : ""})</span>
+              {t.addressedBy && t.status !== "resolved" && <span className="version"> · taken on by a follow-up subtask</span>}
             </li>
           ))}
         </ul>
@@ -254,6 +255,7 @@ function ThreadView({ thread: t, ctx }: { thread: Thread; ctx: FileCtx }) {
       <div className="thread-head">
         <span className={`thread-status ${t.status}`}>{t.status}</span> <code>{threadWhere(t)}</code>
         {t.resolvedBy && <span className="version"> resolved by {t.resolvedBy}</span>}
+        {t.addressedBy && !t.resolvedBy && <span className="version"> · taken on by follow-up subtask <code>{t.addressedBy}</code></span>}
       </div>
       {t.comments.map((c, i) => (
         <div key={i} className={`comment comment-${c.kind}`}>

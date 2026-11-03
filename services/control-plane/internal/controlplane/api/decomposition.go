@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -27,15 +28,27 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			DependsOn     []string `json:"dependsOn"`
 			DiffScope     []string `json:"diffScope,omitempty"`
 			Rationale     string   `json:"rationale,omitempty"`
+			Addresses     []string `json:"addresses,omitempty"` // follow-up: review threads it handles
 		} `json:"tasks"`
-		Notes string `json:"notes,omitempty"`
+		Responses []graphResponse `json:"responses,omitempty"` // follow-up: threads answered without code
+		Notes     string          `json:"notes,omitempty"`
+	}
+	// A follow-up (Phase 12) that cannot be used goes back to the human's
+	// decision; a first decomposition that cannot be used blocks the task.
+	followUp := currentFollowUp(task, run.ID)
+	fail := func(reason string) {
+		if followUp != nil {
+			h.refuseFollowUp(ctx, task, followUp, reason)
+			return
+		}
+		h.failDecomposition(task, reason)
 	}
 	if err := json.Unmarshal(submission, &sub); err != nil {
-		h.failDecomposition(task, "invalid task graph JSON: "+err.Error())
+		fail("invalid task graph JSON: " + err.Error())
 		return
 	}
 	if len(sub.Tasks) == 0 {
-		h.failDecomposition(task, "head engineer produced no tasks: "+sub.Notes)
+		fail("head engineer produced no tasks: " + sub.Notes)
 		return
 	}
 
@@ -43,20 +56,20 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 	idToTask := map[string]struct{}{}
 	for _, t := range sub.Tasks {
 		if t.ID == "" || t.Title == "" || t.AssignedAgent == "" || len(t.Acceptance) == 0 {
-			h.failDecomposition(task, "task missing required fields: "+t.ID)
+			fail("task missing required fields: " + t.ID)
 			return
 		}
 		if _, exists := idToTask[t.ID]; exists {
-			h.failDecomposition(task, "duplicate task ID: "+t.ID)
+			fail("duplicate task ID: " + t.ID)
 			return
 		}
 		idToTask[t.ID] = struct{}{}
 		if _, ok := h.Registry.GetAgent(t.AssignedAgent); !ok {
-			h.failDecomposition(task, fmt.Sprintf("task %q assigned to unknown agent %q", t.ID, t.AssignedAgent))
+			fail(fmt.Sprintf("task %q assigned to unknown agent %q", t.ID, t.AssignedAgent))
 			return
 		}
 		if kind := h.completionKindOf(t.AssignedAgent); kind != kindWork {
-			h.failDecomposition(task, fmt.Sprintf(
+			fail(fmt.Sprintf(
 				"task %q assigned to %q, a %s agent; subtasks must change code (reviews run automatically after each one)",
 				t.ID, t.AssignedAgent, kind))
 			return
@@ -65,7 +78,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 	for _, t := range sub.Tasks {
 		for _, dep := range t.DependsOn {
 			if _, ok := idToTask[dep]; !ok {
-				h.failDecomposition(task, fmt.Sprintf("task %q depends on unknown ID %q", t.ID, dep))
+				fail(fmt.Sprintf("task %q depends on unknown ID %q", t.ID, dep))
 				return
 			}
 		}
@@ -75,12 +88,31 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		graph[i] = graphTask{ID: t.ID, DependsOn: t.DependsOn, Scope: t.DiffScope}
 	}
 	if cycle := findCycle(graph); cycle != nil {
-		h.failDecomposition(task, "dependency cycle: "+strings.Join(cycle, " -> "))
+		fail("dependency cycle: " + strings.Join(cycle, " -> "))
 		return
 	}
 	// Independent tasks whose scopes overlap (or are undeclared) run one after
 	// another; only provably disjoint work runs in parallel.
 	implicit := serializeOverlaps(graph)
+
+	// A follow-up must handle every open review thread.
+	var threads []*domain.Thread
+	var addressedBy map[string][]string
+	var answers map[string]string
+	if followUp != nil {
+		threads = h.openThreads(ctx, task.ID)
+		addresses := map[string][]string{}
+		for _, t := range sub.Tasks {
+			if len(t.Addresses) > 0 {
+				addresses[t.ID] = t.Addresses
+			}
+		}
+		var err error
+		if addressedBy, answers, err = followUpGraph(threads, addresses, sub.Responses); err != nil {
+			fail(err.Error())
+			return
+		}
+	}
 
 	// The parent branch was created with the task (Phase 11); tasks from
 	// before that get one named after their ID here.
@@ -89,7 +121,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		integrationBranch = fmt.Sprintf("forge/%s", task.ID)
 	}
 	if err := h.prepareIntegrationBranch(task, integrationBranch); err != nil {
-		h.failDecomposition(task, "prepare integration branch: "+err.Error())
+		fail("prepare integration branch: " + err.Error())
 		return
 	}
 	_ = h.Tasks.UpdateIntegration(ctx, task.ID, task.IntegrationWorktree, integrationBranch, task.IntegrationBaseCommit, time.Now().UTC())
@@ -101,12 +133,22 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		subIDToTaskID[t.ID] = childID
 	}
 	usedBranch := map[string]bool{}
+	if followUp != nil {
+		existing, _ := h.Tasks.ListChildren(ctx, task.ID)
+		for _, c := range existing {
+			usedBranch[c.Branch] = true
+		}
+	}
 	for i, t := range sub.Tasks {
 		// Each subtask works on its own branch off the parent branch, created
 		// when it is dispatched and merged back into the parent branch.
 		branch := delivery.SubtaskBranchName(integrationBranch, t.Title)
 		if usedBranch[branch] {
 			branch += "-" + delivery.Slug(t.ID)
+		}
+		// A follow-up's subtask may share a title with an earlier one.
+		for n, b := 2, branch; usedBranch[branch]; n++ {
+			branch = fmt.Sprintf("%s-%d", b, n)
 		}
 		usedBranch[branch] = true
 
@@ -128,7 +170,8 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			ParentID:          task.ID,
 			Title:             t.Title,
 			AssignedAgent:     t.AssignedAgent,
-			Requirement:       t.Title + "\n\n" + t.Rationale,
+			Requirement:       t.Title + "\n\n" + t.Rationale + threadBrief(threads, addressedBy[t.ID]),
+			Addresses:         addressedBy[t.ID],
 			Acceptance:        t.Acceptance,
 			RepoPath:          task.RepoPath,
 			BaseCommit:        integrationBranch, // children work off the integration branch
@@ -142,7 +185,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			UpdatedAt:         time.Now().UTC(),
 		}
 		if err := h.Tasks.Create(ctx, child); err != nil {
-			h.failDecomposition(task, "create child: "+err.Error())
+			fail("create child: " + err.Error())
 			return
 		}
 		_ = h.Events.Append(ctx, &domain.Event{
@@ -158,8 +201,16 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 		}
 	}
 
+	reason := fmt.Sprintf("%d children materialized", len(sub.Tasks))
+	if followUp != nil {
+		h.applyThreadHandling(ctx, run, subIDToTaskID, addressedBy, answers)
+		_ = h.Tasks.SetFollowUpOutcome(ctx, task.ID, followUp.N, "planned", time.Now().UTC())
+		reason = fmt.Sprintf("follow-up %d: %d subtask(s) planned, %d thread(s) addressed, %d answered",
+			followUp.N, len(sub.Tasks), countAddressed(addressedBy), len(answers))
+	}
+
 	// Parent is now DISPATCHED; children will be picked up by the scheduler.
-	if err := h.SM.Transition(ctx, task, domain.StatusDispatched, fmt.Sprintf("%d children materialized", len(sub.Tasks))); err != nil {
+	if err := h.SM.Transition(ctx, task, domain.StatusDispatched, reason); err != nil {
 		log.Printf("parent transition to DISPATCHED failed: %v", err)
 	}
 	_ = h.Events.Append(ctx, &domain.Event{
@@ -172,6 +223,12 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 
 // prepareIntegrationBranch creates the parent's integration worktree and branch.
 func (h *Handlers) prepareIntegrationBranch(task *domain.Task, branch string) error {
+	// A follow-up keeps working in the worktree the first round made.
+	if task.IntegrationWorktree != "" && task.IntegrationBranch == branch {
+		if _, err := os.Stat(task.IntegrationWorktree); err == nil {
+			return nil
+		}
+	}
 	// A branch created with the task already exists at its pinned base:
 	// check it out as it is.
 	if task.IntegrationBranch == branch && task.IntegrationBaseCommit != "" {
@@ -203,4 +260,30 @@ func (h *Handlers) failDecomposition(task *domain.Task, reason string) {
 	ctx := context.Background()
 	log.Printf("decomposition failed for task %s: %s", task.ID, reason)
 	_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "decomposition: "+reason)
+}
+
+// applyThreadHandling records which follow-up subtask takes each thread on,
+// and posts the head engineer's direct answers as agent replies.
+func (h *Handlers) applyThreadHandling(ctx context.Context, run *domain.WorkflowRun, subIDToTaskID map[string]string, addressedBy map[string][]string, answers map[string]string) {
+	now := time.Now().UTC()
+	for subID, ids := range addressedBy {
+		for _, id := range ids {
+			_ = h.Threads.SetAddressedBy(ctx, id, subIDToTaskID[subID], now)
+		}
+	}
+	for id, body := range answers {
+		_ = h.Threads.AddComment(ctx, id, domain.Comment{Author: "head-engineer", Kind: domain.CommentAgent, Body: body, At: now})
+		_ = h.Threads.SetStatus(ctx, id, domain.ThreadAddressed, "", now)
+		_ = h.Events.Append(ctx, &domain.Event{TaskID: run.TaskID, RunID: run.ID, Type: "thread.answered", Reason: id + " by head-engineer", At: now})
+	}
+}
+
+func countAddressed(byTask map[string][]string) int {
+	seen := map[string]bool{}
+	for _, ids := range byTask {
+		for _, id := range ids {
+			seen[id] = true
+		}
+	}
+	return len(seen)
 }

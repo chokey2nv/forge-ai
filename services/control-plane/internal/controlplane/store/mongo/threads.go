@@ -71,3 +71,8 @@ func (r *ThreadRepo) SetStatus(ctx context.Context, id string, status domain.Thr
 	}
 	return err
 }
+
+func (r *ThreadRepo) SetAddressedBy(ctx context.Context, id, taskID string, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"addressedBy": taskID, "updatedAt": at}})
+	return err
+}

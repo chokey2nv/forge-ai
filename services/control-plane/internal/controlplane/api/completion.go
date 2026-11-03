@@ -81,6 +81,10 @@ func (h *Handlers) handleDecompositionDone(ctx context.Context, run *domain.Work
 	}, task.RepoPath)
 	if body.Status != "complete" || body.Submission == nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
+		if f := currentFollowUp(task, run.ID); f != nil {
+			h.refuseFollowUp(context.Background(), task, f, "the head engineer submitted no graph: "+body.FinalMessage)
+			return
+		}
 		_ = h.SM.Transition(context.Background(), task, domain.StatusBlocked, "decomposition failed: "+body.FinalMessage)
 		return
 	}

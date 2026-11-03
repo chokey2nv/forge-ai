@@ -1,0 +1,190 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "Fix applyDiscount",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "applyDiscount(200, 10) returns 180",
+                  "applyDiscount(19.99, 25) returns 14.99",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js"
+                ],
+                "rationale": "Single file fix."
+              }
+            ],
+            "notes": "One subtask."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "f1",
+                "title": "Remove the debug log",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "applyDiscount logs nothing",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js"
+                ],
+                "rationale": "The final review rejected the debug log; the human asked to remove it."
+              }
+            ],
+            "notes": "Follow-up."
+          }
+        }
+      ]
+    }
+  ],
+  "implementer": [
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nfunction applyDiscount(price, percent) {\n  console.log('discount rate', percent);\n  return Math.round(price * (1 - percent / 100) * 100) / 100;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Fixed applyDiscount."
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * 100) / 100;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Removed the debug log."
+    }
+  ],
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "fail",
+              "summary": "The combined change logs the discount rate.",
+              "defects": [
+                {
+                  "severity": "major",
+                  "description": "Remove the debug log of the discount rate",
+                  "location": "src/price.js:3"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

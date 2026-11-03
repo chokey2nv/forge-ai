@@ -159,3 +159,9 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .composer button.approve { background: #2e8b2e; color: #fff; border-color: #2e8b2e; font-weight: 600; }
 .composer button:disabled { opacity: 0.5; cursor: default; }
 .version { color: #6e7781; font-size: 12px; font-weight: normal; }
+
+/* Phase 12.3: request changes and follow-ups */
+.approval button:disabled { opacity: 0.5; cursor: default; }
+.followups { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+.followups li { padding: 6px 0; border-bottom: 1px dashed #eee; overflow-wrap: anywhere; }
+.followups .hint, .followups .error { font-size: 13px; margin-top: 2px; }

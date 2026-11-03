@@ -34,6 +34,10 @@ type Budget struct {
 	MaxSteps    int `bson:"maxSteps" json:"maxSteps"`
 	MaxRetries  int `bson:"maxRetries" json:"maxRetries"`
 	WallClockMS int `bson:"wallClockMs" json:"wallClockMs"`
+	// MaxRevisions caps how many revisions of a parent's combined change a
+	// human can be shown (Phase 12): asking for changes once that many have
+	// been prepared is refused. 0 uses the control plane's default.
+	MaxRevisions int `bson:"maxRevisions,omitempty" json:"maxRevisions,omitempty"`
 }
 
 type Provenance struct {
@@ -85,6 +89,33 @@ type Task struct {
 	// review (Phase 12), the parent branch's tip is recorded, so every
 	// review round can be shown and compared later.
 	Revisions []Revision `bson:"revisions,omitempty" json:"revisions,omitempty"`
+	// FollowUps: each time a human sent the combined change back to the head
+	// engineer, by requesting changes or retrying an escalation.
+	FollowUps []FollowUp `bson:"followUps,omitempty" json:"followUps,omitempty"`
+
+	// Child task only: the review threads this follow-up subtask addresses.
+	Addresses []string `bson:"addresses,omitempty" json:"addresses,omitempty"`
+}
+
+// Follow-up kinds.
+const (
+	FollowUpRequestChanges  = "request_changes"
+	FollowUpEscalationRetry = "escalation_retry"
+)
+
+// FollowUp is one round of the head engineer planning more work on a
+// parent's combined change after a human's feedback.
+type FollowUp struct {
+	N        int    `bson:"n" json:"n"` // 1-based
+	Kind     string `bson:"kind" json:"kind"`
+	Revision int    `bson:"revision" json:"revision"` // the latest revision when it was asked for (0: none yet)
+	Reviewer string `bson:"reviewer" json:"reviewer"`
+	Summary  string `bson:"summary,omitempty" json:"summary,omitempty"`
+	RunID    string `bson:"runId" json:"runId"` // the head engineer's follow-up run
+	// Outcome: "planned" once its subtasks exist, "refused: …" when the
+	// head engineer's graph was not accepted.
+	Outcome string    `bson:"outcome,omitempty" json:"outcome,omitempty"`
+	At      time.Time `bson:"at" json:"at"`
 }
 
 // Revision is one version of a parent's combined change put up for human

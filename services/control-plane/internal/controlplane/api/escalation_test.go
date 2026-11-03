@@ -23,7 +23,7 @@ func TestValidateEscalation(t *testing.T) {
 		{"retry child", child, escalationRequest{Decision: "retry", Reviewer: "ana", Guidance: "inline it"}, 0},
 		{"reject child", child, escalationRequest{Decision: "reject", Reviewer: "ana"}, 0},
 		{"accept parent", parent, escalationRequest{Decision: "accept", Reviewer: "ana"}, 0},
-		{"retry parent has no implementer", parent, escalationRequest{Decision: "retry", Reviewer: "ana"}, http.StatusConflict},
+		{"retry parent: a head engineer follow-up", parent, escalationRequest{Decision: "retry", Reviewer: "ana"}, 0},
 		{"reviewer required", child, escalationRequest{Decision: "accept"}, http.StatusBadRequest},
 		{"unknown decision", child, escalationRequest{Decision: "approve", Reviewer: "ana"}, http.StatusBadRequest},
 		{"not escalated", running, escalationRequest{Decision: "accept", Reviewer: "ana"}, http.StatusConflict},

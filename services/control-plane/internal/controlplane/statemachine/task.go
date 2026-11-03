@@ -25,6 +25,8 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusDispatched, // graph materialized
 		domain.StatusBlocked,    // decomposition failed
 		domain.StatusRejected,
+		domain.StatusReviewPending, // follow-up graph refused: back to the human's decision (Phase 12)
+		domain.StatusEscalated,     // same, for a retried escalation
 	},
 	domain.StatusPlanned: {
 		domain.StatusDispatched,
@@ -60,6 +62,7 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusIntegrated,    // child accepted
 		domain.StatusReviewPending, // root accepted
 		domain.StatusRunning,       // sent back with guidance
+		domain.StatusDecomposing,   // parent sent back: head engineer follow-up (Phase 12)
 		domain.StatusRejected,
 		domain.StatusBlocked, // accepted, but the diff no longer applies
 	},
@@ -70,6 +73,7 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.StatusReviewPending: {
 		domain.StatusApproved,
 		domain.StatusRejected,
+		domain.StatusDecomposing, // changes requested: head engineer follow-up (Phase 12)
 	},
 	domain.StatusApproved: {
 		domain.StatusDelivering, // Phase 11: approval delivers
