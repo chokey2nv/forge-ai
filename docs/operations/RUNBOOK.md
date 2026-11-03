@@ -796,6 +796,8 @@ mongosh --quiet forge_ai --eval '
 
 Non-empty output means the watcher hasn't caught them yet — check the CP log.
 
+A run with no heartbeat for `STALE_AFTER` is marked `RESUMABLE`, and so is its task. If the agent was in fact finishing (a slow diff capture under load can leave no heartbeat for a while), its completion may arrive moments later. It is then used: the task goes `RESUMABLE → RUNNING → VERIFYING` with a `run.revived` event. If the reaper has already released the run's workspace, the task stays `RESUMABLE`; `POST /runs/<runId>/resume` rebuilds the workspace from the checkpoint the completion saved.
+
 ---
 
 ## 7. Troubleshooting

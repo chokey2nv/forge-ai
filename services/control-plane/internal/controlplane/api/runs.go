@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
 
@@ -121,13 +123,44 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 		return
 	}
 
-	_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunVerifying, "", time.Now().UTC())
-	if err := h.SM.Transition(ctx, task, domain.StatusVerifying, "agent reported complete"); err != nil {
-		log.Printf("transition to VERIFYING failed: %v", err)
+	if !h.startVerifying(ctx, run, task) {
 		return
 	}
 	// Detach from the callback request: its context ends when we return 204.
 	go h.runVerificationAndReview(context.WithoutCancel(ctx), run, task)
+}
+
+// startVerifying moves a task whose agent reported complete to VERIFYING.
+// The stale-run watcher may have marked it RESUMABLE moments before the
+// completion arrived (no heartbeat for STALE_AFTER while the agent was in
+// fact finishing). The agent did finish, so its work is used, unless the
+// reaper has already released its workspace: then the task stays RESUMABLE
+// and a resume rebuilds the workspace from the checkpoint just saved.
+func (h *Handlers) startVerifying(ctx context.Context, run *domain.WorkflowRun, task *domain.Task) bool {
+	now := time.Now().UTC()
+	_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunVerifying, "", now)
+	err := h.SM.Transition(ctx, task, domain.StatusVerifying, "agent reported complete")
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, statemachine.ErrStaleTransition) {
+		fresh, terr := h.Tasks.Get(ctx, task.ID)
+		latest, rerr := h.Runs.Get(ctx, run.ID)
+		if terr == nil && fresh.Status == domain.StatusResumable {
+			if rerr == nil && latest.WorkspaceReleasedAt == nil {
+				*task = *fresh
+				if h.SM.Transition(ctx, task, domain.StatusRunning, "the agent finished just after its run was marked stale; its completion is used") == nil &&
+					h.SM.Transition(ctx, task, domain.StatusVerifying, "agent reported complete") == nil {
+					_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, RunID: run.ID, Type: "run.revived",
+						Reason: "completion arrived after the watcher marked the run stale", At: now})
+					return true
+				}
+			}
+			_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunResumable, "completion arrived after the run was marked stale and its workspace released; resume it", now)
+		}
+	}
+	log.Printf("transition to VERIFYING failed: %v", err)
+	return false
 }
 func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.WorkflowRun, task *domain.Task) {
 	defer func() {
