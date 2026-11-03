@@ -123,3 +123,39 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .diff-table tr.del td.ln { background: #ffd7d5; }
 .diff-table tr.hunk td { background: #ddf4ff; color: #57606a; padding: 2px 8px; }
 .diff-table tr.note td.code { color: #6e7781; font-style: italic; }
+
+/* Phase 12.2: review threads and reviewer notes */
+.diff-table td.ln.commentable { cursor: pointer; }
+.diff-table td.ln.commentable:hover { background: #0969da; color: #fff; }
+.diff-table tr.selected td { box-shadow: inset 0 0 0 9999px rgba(9, 105, 218, 0.08); }
+.diff-table tr.inline-threads td { white-space: normal; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; padding: 6px 10px 8px; background: #f6f8fa; border-top: 1px solid #d0d7de; border-bottom: 1px solid #d0d7de; }
+.diff-file .file-threads { font-size: 12px; color: #0969da; white-space: nowrap; }
+.diff-file .file-threads.note { color: #8250df; }
+.thread-index { border: 1px solid #d0d7de; border-radius: 6px; padding: 8px 12px; margin: 8px 0; background: #fbfcfd; font-size: 13px; }
+.thread-index h4 { margin: 4px 0 6px; font-size: 14px; }
+.thread-list { list-style: none; padding: 0; margin: 0 0 8px; }
+.thread-list li { padding: 3px 0; overflow-wrap: anywhere; }
+.thread { border: 1px solid #d0d7de; border-left: 4px solid #0969da; border-radius: 6px; background: #fff; padding: 6px 10px; margin: 6px 0; max-width: 820px; }
+.thread-resolved { border-left-color: #8c959f; opacity: 0.85; }
+.thread-addressed { border-left-color: #1a7f37; }
+.thread-outdated { border-left-color: #9a6700; }
+.thread-head { font-size: 12px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.thread-status { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; padding: 0 6px; border-radius: 10px; background: #ddf4ff; color: #0969da; }
+.thread-status.resolved { background: #eaeef2; color: #57606a; }
+.thread-status.addressed { background: #dafbe1; color: #1a7f37; }
+.thread-status.outdated { background: #fff8c5; color: #9a6700; }
+.comment { padding: 4px 0; border-top: 1px dashed #eaeef2; }
+.comment:first-of-type { border-top: none; }
+.comment p { margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-agent { background: #f6fff8; }
+.thread-actions { display: flex; gap: 12px; margin-top: 4px; }
+.reviewer-note { border: 1px dashed #c297ff; border-left: 4px solid #8250df; border-radius: 6px; background: #fbf8ff; padding: 6px 10px; margin: 6px 0; max-width: 820px; }
+.reviewer-note p { margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-tag { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; padding: 0 6px; border-radius: 10px; background: #fbefff; color: #8250df; }
+.severity-critical .note-tag, .severity-major .note-tag { background: #ffebe9; color: #cf222e; }
+.composer { max-width: 820px; margin: 6px 0; }
+.composer textarea { display: block; width: 100%; min-height: 64px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+.composer button { margin: 6px 8px 0 0; padding: 4px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font: inherit; }
+.composer button.approve { background: #2e8b2e; color: #fff; border-color: #2e8b2e; font-weight: 600; }
+.composer button:disabled { opacity: 0.5; cursor: default; }
+.version { color: #6e7781; font-size: 12px; font-weight: normal; }

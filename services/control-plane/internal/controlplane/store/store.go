@@ -88,3 +88,14 @@ type EvalResultRepo interface {
 	List(ctx context.Context, model string, limit int) ([]*domain.EvalResult, error)
 	Get(ctx context.Context, id string) (*domain.EvalResult, error)
 }
+
+// ThreadRepo holds human review threads on a parent's combined change.
+type ThreadRepo interface {
+	Create(ctx context.Context, t *domain.Thread) error
+	Get(ctx context.Context, id string) (*domain.Thread, error)
+	// ListByTask returns a task's threads, oldest first.
+	ListByTask(ctx context.Context, taskID string) ([]*domain.Thread, error)
+	AddComment(ctx context.Context, id string, c domain.Comment) error
+	// SetStatus records a status change; by is who resolved it (empty otherwise).
+	SetStatus(ctx context.Context, id string, status domain.ThreadStatus, by string, at time.Time) error
+}

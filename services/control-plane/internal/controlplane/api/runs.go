@@ -250,7 +250,7 @@ func buildReviewerPrompt(task *domain.Task, diff string, vr *domain.Verification
 		b.WriteString("\n")
 		b.WriteString(verificationForReview(vr))
 	}
-	b.WriteString("\nReview the diff against every acceptance criterion. Call submit_review when done.")
+	b.WriteString("\nReview the diff against every acceptance criterion. Give each defect's location as path:line on the new side of the diff (for example src/price.js:12), or just the path when no line fits. Call submit_review when done.")
 	return b.String()
 }
 

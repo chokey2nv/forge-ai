@@ -301,6 +301,12 @@ func (h *Handlers) pullRequestBody(ctx context.Context, task *domain.Task) strin
 			fmt.Fprintf(&b, "- **%s**: %s\n", rv.Reviewer, rv.Verdict)
 		}
 	}
+	if open := h.unresolvedThreads(ctx, task.ID); len(open) > 0 {
+		b.WriteString("\n## Unresolved review threads\n\nApproved with these threads still open in Forge:\n\n")
+		for _, t := range open {
+			fmt.Fprintf(&b, "- `%s` (%s, %s): %s\n", t.Where, t.Status, t.Author, firstLine(t.Comment, 120))
+		}
+	}
 	fmt.Fprintf(&b, "\n---\nOpened by Forge for task `%s` after human approval.\n", task.ID)
 	return b.String()
 }

@@ -22,6 +22,7 @@ type Handlers struct {
 	Reviews          store.ReviewRepo
 	Delivery         *delivery.Inspector
 	Approvals        store.ApprovalRepo
+	Threads          store.ThreadRepo // Phase 12: human review threads
 	EvalResults      store.EvalResultRepo
 	SM               *statemachine.Service
 	Adapter          *adapter.Client

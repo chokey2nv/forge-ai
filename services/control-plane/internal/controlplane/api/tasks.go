@@ -287,13 +287,16 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 		return
 	}
 
+	// Approving with open threads is allowed; the record keeps what was left.
+	unresolved := h.unresolvedThreads(ctx, taskID)
 	_ = h.Approvals.Create(ctx, &domain.Approval{
-		TaskID:    taskID,
-		RunID:     task.LatestRunID,
-		Action:    action,
-		Reviewer:  body.Reviewer,
-		Rationale: body.Rationale,
-		DecidedAt: time.Now().UTC(),
+		TaskID:            taskID,
+		RunID:             task.LatestRunID,
+		Action:            action,
+		Reviewer:          body.Reviewer,
+		Rationale:         body.Rationale,
+		UnresolvedThreads: unresolved,
+		DecidedAt:         time.Now().UTC(),
 	})
 	_ = h.Events.Append(ctx, &domain.Event{
 		RunID: task.LatestRunID, TaskID: taskID,
@@ -311,7 +314,7 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"taskId": taskID, "status": string(to)})
+	writeJSON(w, http.StatusOK, map[string]any{"taskId": taskID, "status": string(to), "unresolvedThreads": len(unresolved)})
 }
 
 func (h *Handlers) ListApprovals(w http.ResponseWriter, r *http.Request) {

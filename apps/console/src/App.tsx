@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   api, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
-  type EscalationDecision, type DeliveryPreview, type RepoInspection, type Config, AgentDefinition, Skill,
+  type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
 import { DiffView } from "./DiffView";
 
@@ -326,6 +326,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [events, setEvents] = useState<Event[]>([]);
   const [verification, setVerification] = useState<VerificationRun | null>(null);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [threads, setThreads] = useState<ThreadList | null>(null);
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
   const [reviewer, setReviewer] = useState("human");
   const [rationale, setRationale] = useState("");
@@ -356,6 +357,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         setVerification(await api.getVerification(rid));
       }
       setApprovals(await api.listApprovals(id));
+      setThreads(isParent(t) ? await api.listThreads(id).catch(() => null) : null);
       setDelivery(!t.parentId ? await api.getDelivery(id).catch(() => null) : null);
       setErr("");
     } catch (e) { setErr(String(e)); }
@@ -368,6 +370,9 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
     const t = setInterval(reload, 3000);
     return () => clearInterval(t);
   }, [id, task?.status]);
+
+  const reloadThreads = () => { api.listThreads(id).then(setThreads).catch((e) => setErr(String(e))); };
+  const unresolved = (threads?.threads ?? []).filter((t) => t.status !== "resolved").length;
 
   const decide = async (action: "approve" | "reject") => {
     try {
@@ -472,8 +477,14 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision only."}</p>}
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (optional)" />
+          {unresolved > 0 && (
+            <p className="warning">
+              {unresolved} unresolved thread{unresolved === 1 ? "" : "s"} on this change. Approving leaves {unresolved === 1 ? "it" : "them"} open:
+              {" "}{unresolved === 1 ? "it is" : "they are"} listed in the approval record{delivery?.mode === "pull_request" ? " and the pull request description" : ""}.
+            </p>
+          )}
           <div>
-            <button className="approve" onClick={() => decide("approve")}>Approve</button>
+            <button className="approve" onClick={() => decide("approve")}>{unresolved > 0 ? `Approve with ${unresolved} open` : "Approve"}</button>
             <button className="reject"  onClick={() => decide("reject")}>Reject</button>
           </div>
         </section>
@@ -505,7 +516,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
-      <DiffView task={task} />
+      <DiffView task={task} feedback={isParent(task) ? { threads, author: reviewer, onChange: reloadThreads } : undefined} />
 
       <section>
         <h3>Events</h3>
@@ -527,6 +538,11 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
             <li key={a.id}>
               <strong>{a.action}</strong> by {a.reviewer} at {new Date(a.decidedAt).toLocaleString()}
               {a.rationale ? ` — ${a.rationale}` : ""}
+              {a.unresolvedThreads?.length ? (
+                <ul className="files">{a.unresolvedThreads.map((t) => (
+                  <li key={t.id}>left {t.status}: <code>{t.where}</code> — {t.comment} ({t.author})</li>
+                ))}</ul>
+              ) : null}
             </li>
           ))}</ul>
         </section>

@@ -75,6 +75,63 @@ export interface TaskDiff {
   diff: string;
 }
 
+/** Phase 12.2: a human's comment thread on a revision of a combined change. */
+export type ThreadStatus = "open" | "addressed" | "resolved" | "outdated";
+
+export interface Anchor {
+  path: string;
+  side: "old" | "new";
+  line: number;
+  lineText: string;
+  before?: string[];
+  after?: string[];
+}
+
+export interface ThreadComment {
+  author: string;
+  kind: "human" | "agent" | "reviewer";
+  body: string;
+  revision: number;
+  at: string;
+}
+
+export interface Thread {
+  id: string;
+  taskId: string;
+  revision: number;
+  commit: string;
+  anchor?: Anchor;
+  status: ThreadStatus;
+  comments: ThreadComment[];
+  addressedBy?: string;
+  resolvedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A final reviewer's finding, read-only; path and line when its location names them. */
+export interface ReviewerNote {
+  revision: number;
+  reviewer: string;
+  verdict: string;
+  severity: string;
+  description: string;
+  location?: string;
+  path?: string;
+  line?: number;
+}
+
+export interface ThreadList {
+  threads: Thread[];
+  notes: ReviewerNote[];
+}
+
+/** Threads and replies are accepted only while a human is looking at the change. */
+export const FEEDBACK_OPEN = new Set<TaskStatus>(["REVIEW_PENDING", "ESCALATED"]);
+
+export const threadWhere = (t: Thread) =>
+  t.anchor ? `${t.anchor.path}:${t.anchor.line}${t.anchor.side === "old" ? " (old)" : ""}` : "general";
+
 export interface Delivery {
   mode: "pull_request" | "local_merge" | "unavailable";
   targetBranch: string;
@@ -199,6 +256,7 @@ export interface Approval {
   action: string;
   reviewer: string;
   rationale?: string;
+  unresolvedThreads?: { id: string; where: string; status: ThreadStatus; author: string; comment: string }[];
   decidedAt: string;
 }
 
@@ -277,6 +335,17 @@ export const api = {
       if (since) q.set("since", String(since));
       return j<TaskDiff>(`/tasks/${taskId}/diff${q.size ? `?${q}` : ""}`);
     },
+    listThreads: (taskId: string) => j<ThreadList>(`/tasks/${taskId}/threads`),
+    createThread: (taskId: string, t: { author: string; body: string; revision?: number; anchor?: { path: string; side: "old" | "new"; line: number } }) =>
+        j<Thread>(`/tasks/${taskId}/threads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }),
+    replyThread: (taskId: string, threadId: string, author: string, body: string) =>
+        j<Thread>(`/tasks/${taskId}/threads/${threadId}/comments`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, body }),
+        }),
+    setThreadStatus: (taskId: string, threadId: string, action: "resolve" | "reopen", author: string) =>
+        j<Thread>(`/tasks/${taskId}/threads/${threadId}/${action}`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }),
+        }),
     rollback: (taskId: string, reviewer: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/rollback`, {
             method: "POST",

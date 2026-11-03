@@ -106,6 +106,7 @@ func main() {
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
 	h.Reviews = reviewRepo
+	h.Threads = mongo_store.NewThreadRepo(db)
 	h.Delivery = delivery.NewInspector(envOr("FORGE_GH", "gh"))
 	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
 	h.PlannerMaxSteps = parseInt(envOr("PLANNER_MAX_STEPS", "10"), 10)
@@ -169,6 +170,11 @@ func main() {
 	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
 	mux.HandleFunc("GET /tasks/{id}/delivery", h.GetDelivery)
 	mux.HandleFunc("GET /tasks/{id}/diff", h.GetTaskDiff)
+	mux.HandleFunc("GET /tasks/{id}/threads", h.ListThreads)
+	mux.HandleFunc("POST /tasks/{id}/threads", h.CreateThread)
+	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/comments", h.AddThreadComment)
+	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/resolve", h.ResolveThread)
+	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/reopen", h.ReopenThread)
 	mux.HandleFunc("POST /tasks/{id}/deliver", h.RetryDelivery)
 	mux.HandleFunc("POST /tasks/{id}/rollback", h.RollbackTask)
 

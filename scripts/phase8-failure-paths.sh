@@ -201,6 +201,22 @@ run_scenario() {
         "$(curl -sf "$CP/tasks/$task/diff" | jq -e --arg base "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)" \
           '.revision == 1 and .from == $base and (.diff | contains("diff --git a/src/price.js b/src/price.js") and contains("Math.round"))' >/dev/null; echo $?)"
       check "an unknown revision is 404" "$([ "$(curl -s -o /dev/null -w '%{http_code}' "$CP/tasks/$task/diff?revision=2")" = 404 ]; echo $?)"
+
+      # Phase 12.2: threads on r1.
+      local line thr
+      line=$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -n Math.round | head -1 | cut -d: -f1)
+      thr=$(post_thread "$task" "{\"author\":\"dana\",\"body\":\"Why divide by 100 here?\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$line}}")
+      check "a thread opens on the Math.round line of r1 (HTTP $(head -c3 <<<"$thr"))" \
+        "$(tail -c +4 <<<"$thr" | jq -e --arg l "$line" '.revision == 1 and .status == "open" and .anchor.side == "new" and .anchor.line == ($l|tonumber) and (.anchor.lineText | contains("Math.round"))' >/dev/null; echo $?)"
+      local tid; tid=$(tail -c +4 <<<"$thr" | jq -r .id)
+      check "a line the diff does not show is refused (400)" \
+        "$([ "$(post_thread "$task" '{"author":"dana","body":"x","anchor":{"path":"src/price.js","line":999}}' | head -c3)" = 400 ]; echo $?)"
+      check "a general thread opens" "$([ "$(post_thread "$task" '{"author":"dana","body":"Please add a test for 0%."}' | head -c3)" = 201 ]; echo $?)"
+      check "a human replies" "$([ "$(thread_post "$task" "$tid/comments" '{"author":"lee","body":"Cents."}')" = 200 ]; echo $?)"
+      check "an agent cannot resolve (403)" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"reviewer"}')" = 403 ]; echo $?)"
+      check "a human resolves" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"dana"}')" = 200 ]; echo $?)"
+      check "GET threads: one resolved with two comments, one open general" \
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$tid" '(.threads | length == 2) and (.threads[] | select(.id == $t) | .status == "resolved" and .resolvedBy == "dana" and (.comments | length == 2)) and ([.threads[] | select(.anchor == null and .status == "open")] | length == 1) and (.notes | type == "array")' >/dev/null; echo $?)"
       ;;
     parallel-reviewers)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
@@ -462,6 +478,14 @@ run_parallel() { # siblings | diamond | cap
     "$(cd "$(curl -sf "$CP/tasks/$task" | jq -r .integrationWorktree)" && node --test >/dev/null 2>&1; echo $?)"
 }
 
+post_thread() { # task json -> HTTP code followed by the body
+  local code; code=$(curl -s -o "$WORK/thread.out" -w '%{http_code}' -X POST "$CP/tasks/$1/threads" -H 'Content-Type: application/json' -d "$2")
+  echo "$code$(cat "$WORK/thread.out")"
+}
+thread_post() { # task "tid/action" json -> HTTP code
+  curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$1/threads/$2" -H 'Content-Type: application/json' -d "$3"
+}
+
 approve() { # task -> HTTP code
   curl -s -o "$WORK/approve.out" -w '%{http_code}' -X POST "$CP/tasks/$1/approve" -H 'Content-Type: application/json' \
     -d "{\"reviewer\":\"harness\",\"rationale\":\"scenario $SC\"}"
@@ -506,6 +530,7 @@ run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
     dirty) echo "// my edit" >>"$repo/src/price.js" ;;
   esac
   local before; before=$(git -C "$repo" rev-parse "$target")
+  [[ "$1" == pr ]] && post_thread "$task" '{"author":"dana","body":"Follow up on rounding mode later."}' >/dev/null
 
   check "approval answers DELIVERING" "$([ "$(approve "$task")" = 200 ] && jq -e '.status == "DELIVERING"' "$WORK/approve.out" >/dev/null; echo $?)"
   final=$(wait_status "$task" "MERGED|PR_OPEN|BLOCKED|REJECTED" 180) || true
@@ -521,6 +546,7 @@ run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
       check "the checked-out target has the fix and is clean" \
         "$(grep -q Math.round "$repo/src/price.js" && [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; echo $?)"
       check "tests pass on the target" "$(cd "$repo" && node --test >/dev/null 2>&1; echo $?)"
+      check "no threads once the task is MERGED (409)" "$([ "$(post_thread "$task" '{"author":"dana","body":"late"}' | head -c3)" = 409 ]; echo $?)"
       check "the integration worktree is removed" "$([ ! -e "$wt" ] && [ "$(curl -sf "$CP/tasks/$task" | jq -r '.integrationWorktree // ""')" = "" ]; echo $?)"
       if [ "$1" = moved ]; then
         check "the moved target was merged in and verified again" \
@@ -549,6 +575,12 @@ run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
         "$(grep -qF "gh pr create --base $target --head $branch --title Fix applyDiscount" "$GH_LOG" && grep -qF -- "--repo github.com/example/app" "$GH_LOG"; echo $?)"
       check "the PR body lists the acceptance criteria and the final review" \
         "$(grep -A30 "gh pr create" "$GH_LOG" | grep -qF "applyDiscount(200, 10) returns 180" && grep -qF "**security-reviewer**: pass" "$GH_LOG"; echo $?)"
+      if [ "$1" = pr ]; then
+        check "approving with an open thread: the approval record lists it" \
+          "$(jq -e '.unresolvedThreads == 1' "$WORK/approve.out" >/dev/null && curl -sf "$CP/tasks/$task/approvals" | jq -e '.[0].action == "approve" and (.[0].unresolvedThreads | length == 1) and .[0].unresolvedThreads[0].where == "general" and (.[0].unresolvedThreads[0].comment | contains("rounding mode"))' >/dev/null; echo $?)"
+        check "the PR body lists the unresolved thread" \
+          "$(grep -qF "## Unresolved review threads" "$GH_LOG" && grep -qF 'Follow up on rounding mode later.' "$GH_LOG"; echo $?)"
+      fi
       check "the delivery records the PR" "$(echo "$d" | jq -e '.mode == "pull_request" and .prUrl == "https://github.com/example/app/pull/7" and .prNumber == 7' >/dev/null; echo $?)"
       check "the target branch did not move locally" "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ]; echo $?)"
       if [ "$1" = pr ]; then

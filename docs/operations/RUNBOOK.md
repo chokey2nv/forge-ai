@@ -260,7 +260,7 @@ cd apps/console && VITE_API_URL=http://localhost:8080 npx vite --port 5174
 
 `VITE_API_URL` must point at the control plane (Vite reads `apps/console/.env*`, not the repo-root `.env`; without it the console assumes `http://localhost:8080`). **New task** creates work: give the repository's path (on the control plane's machine), pick the target branch, write the requirement and acceptance criteria (one per line). Before anything is created the form shows the branch the task will get and what approving it will do — a pull request when the repository has a remote, otherwise a local merge — with any `gh` warnings. *Create and start* creates the task (and its branch) and hands it to the head engineer; starting waits for the workspace to come up, so it can take a little while. Provider, model and budget are under *Model and budget* (defaults from `DEFAULT_PROVIDER` / `DEFAULT_MODEL`). The same can be done with the API: `POST /tasks`, then `POST /tasks/{id}/runs`; `GET /repos/inspect?path=…&targetBranch=…&requirement=…` is the form's preview.
 
-The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and its combined change (by file, with line numbers; pick a revision, or compare one with an earlier one — §6.5), and to approve, reject, decide an escalation, retry a blocked delivery or roll back a merged one.
+The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and its combined change (by file, with line numbers; pick a revision, or compare one with an earlier one — §6.5), comment on its lines (§6.5.2), and to approve, reject, decide an escalation, retry a blocked delivery or roll back a merged one.
 
 ### 4.5 Startup checklist
 
@@ -718,6 +718,21 @@ curl -s localhost:8080/tasks/<taskId> | jq .delivery.rollback
 
 A rollback that cannot finish returns the task to `MERGED` with `rollback.error`; fix the cause and roll back again. The console shows a *Roll back* form on a merged task.
 
+### 6.5.2 Review threads
+
+While a parent task is `REVIEW_PENDING` or `ESCALATED`, a human can comment on lines of its combined change. In the console, click a line number in the combined change to open a thread on that line, or use *Comment on the whole change*; replies, *Resolve* and *Reopen* are on each thread. The name in the Decision box is the author. The final reviewers' findings appear as read-only notes on the line their location names (`path:line`), or in a list when the location is not a line of that diff. The same over HTTP:
+
+```bash
+curl -s localhost:8080/tasks/<taskId>/threads | jq               # {threads, notes}
+curl -s -X POST localhost:8080/tasks/<taskId>/threads -H 'Content-Type: application/json' \
+  -d '{"author":"dana","body":"Why divide here?","anchor":{"path":"src/price.js","side":"new","line":3}}'
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/comments -H 'Content-Type: application/json' -d '{"author":"dana","body":"…"}'
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/resolve  -H 'Content-Type: application/json' -d '{"author":"dana"}'
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/reopen   -H 'Content-Type: application/json' -d '{"author":"dana"}'
+```
+
+A thread is on the latest revision unless the request gives `"revision"`. The anchor must be a line that revision's diff shows (`side` `new` for added or unchanged lines, `old` for deleted ones), or the request answers 400. Outside `REVIEW_PENDING`/`ESCALATED` every change answers 409. Only humans write here: an author that is a registered agent's name, or `"kind":"agent"`, answers 403 (agents will reply through their work in 12.4). Approving with unresolved threads is allowed; the console warns first, the approval record lists them (`unresolvedThreads`), and so does the pull request description.
+
 ### 6.6 Escalated tasks
 
 A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row; a parent goes `ESCALATED` as soon as its final review rejects the combined change. A parent waits on an escalated child; nothing proceeds until a human decides.
@@ -890,7 +905,7 @@ rm -rf .forge
 | 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 | 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
-| 12. Human feedback | In progress (12.1) | Revisions of the combined change and a diff viewer; then line comments, request changes and agent replies | 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane |
+| 12. Human feedback | In progress (12.2) | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; then request changes and agent replies | 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane |
 
 Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a delivery interrupted by a control-plane restart. The Phase 6 eval harness has not been re-run.
 
