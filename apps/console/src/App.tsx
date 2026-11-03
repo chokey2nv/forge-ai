@@ -4,6 +4,7 @@ import {
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
   type EscalationDecision, type DeliveryPreview, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
+import { DiffView } from "./DiffView";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" };
 
@@ -504,12 +505,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
-      {run?.lastCheckpoint?.workspaceDiff && (
-        <section>
-          <h3>Diff</h3>
-          <pre className="diff">{run.lastCheckpoint.workspaceDiff}</pre>
-        </section>
-      )}
+      <DiffView task={task} />
 
       <section>
         <h3>Events</h3>

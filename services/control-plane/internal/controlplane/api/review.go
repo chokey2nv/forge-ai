@@ -347,7 +347,9 @@ func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRu
 		if len(round) > 0 {
 			reason += " (" + roundSummary(round) + ")"
 		}
-		_ = h.SM.Transition(ctx, task, domain.StatusReviewPending, reason)
+		if err := h.SM.Transition(ctx, task, domain.StatusReviewPending, reason); err == nil && isParentReview(task) {
+			h.recordRevision(ctx, task, run.ID)
+		}
 		workspace.Cleanup(ctx, reviewWS, task.RepoPath)
 		return
 	}

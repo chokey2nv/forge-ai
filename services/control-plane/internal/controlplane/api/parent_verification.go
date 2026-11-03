@@ -27,7 +27,7 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 	}
 
 	vr := h.Verifier.Run(ctx, ws.ContainerName, ws.WorktreePath, nil)
-	vr.ID = fmt.Sprintf("vr-%s-combined", parent.ID)
+	vr.ID = combinedVerificationID(parent)
 	vr.RunID = finalReviewRunID(parent) // so the final reviewers are shown these results
 	vr.TaskID = parent.ID
 	vr.Attempt = 1
@@ -75,4 +75,29 @@ func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (pr
 	return "", ""
 }
 
-func finalReviewRunID(parent *domain.Task) string { return "run-" + parent.ID + "-final-review" }
+// finalReviewRunID is the final review of the revision being prepared, the
+// one after the last recorded. Revision 1 keeps the IDs used before
+// revisions existed, so older tasks still read.
+func finalReviewRunID(parent *domain.Task) string {
+	return revisionID("run-"+parent.ID+"-final-review", len(parent.Revisions)+1)
+}
+
+func combinedVerificationID(parent *domain.Task) string {
+	return revisionID("vr-"+parent.ID+"-combined", len(parent.Revisions)+1)
+}
+
+func revisionID(base string, n int) string {
+	if n <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-r%d", base, n)
+}
+
+// approvedReviewRunID is the final review of the latest revision put up for
+// human review: the one an approval approves.
+func approvedReviewRunID(task *domain.Task) string {
+	if n := len(task.Revisions); n > 0 {
+		return task.Revisions[n-1].FinalReviewRunID
+	}
+	return finalReviewRunID(task)
+}

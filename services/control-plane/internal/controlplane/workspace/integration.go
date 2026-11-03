@@ -128,6 +128,16 @@ func DiffFromBase(worktree, base string) (string, error) {
 	return string(out), nil
 }
 
+// DiffCommits is the change from one commit to another in repo, with renames
+// detected.
+func DiffCommits(repo, from, to string) (string, error) {
+	out, err := exec.Command("git", "-C", repo, "diff", "--no-color", "--no-ext-diff", "-M", from, to).Output()
+	if err != nil {
+		return "", fmt.Errorf("git diff %s %s: %w", from, to, err)
+	}
+	return string(out), nil
+}
+
 // CommitAll stages everything and commits, used by the Integrator.
 func CommitAll(worktree, message string) error {
 	if out, err := exec.Command("git", "-C", worktree, "add", "-A").CombinedOutput(); err != nil {

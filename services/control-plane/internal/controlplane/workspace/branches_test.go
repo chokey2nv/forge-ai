@@ -121,3 +121,20 @@ func write(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDiffCommitsDetectsRenames(t *testing.T) {
+	repo := newRepo(t)
+	from := git(t, repo, "rev-parse", "HEAD")
+	git(t, repo, "mv", "a.txt", "b.txt")
+	git(t, repo, "commit", "-q", "-m", "rename")
+	diff, err := DiffCommits(repo, from, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "rename from a.txt") || !strings.Contains(diff, "rename to b.txt") {
+		t.Errorf("rename not detected:\n%s", diff)
+	}
+	if _, err := DiffCommits(repo, from, "no-such-ref"); err == nil {
+		t.Error("an unknown commit should fail")
+	}
+}

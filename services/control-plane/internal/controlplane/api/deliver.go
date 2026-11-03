@@ -152,7 +152,7 @@ func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task) (moved 
 	defer workspace.Cleanup(ctx, &workspace.Workspace{ContainerName: ws.ContainerName}, task.RepoPath)
 	vr := h.Verifier.Run(ctx, ws.ContainerName, wt, nil)
 	vr.ID = fmt.Sprintf("vr-%s-delivery-%d", task.ID, time.Now().UnixMilli())
-	vr.RunID, vr.TaskID = finalReviewRunID(task), task.ID
+	vr.RunID, vr.TaskID = approvedReviewRunID(task), task.ID
 	_ = h.Verifications.Create(ctx, vr)
 	if !vr.Passed {
 		return true, fmt.Errorf("verification failed after merging %s:\n%s", task.TargetBranch, h.Verifier.SummaryText(vr))
@@ -295,7 +295,7 @@ func (h *Handlers) pullRequestBody(ctx context.Context, task *domain.Task) strin
 			fmt.Fprintf(&b, "- %s (`%s`, %s)\n", c.Title, c.AssignedAgent, c.Branch)
 		}
 	}
-	if reviews, err := h.Reviews.ListByRun(ctx, finalReviewRunID(task)); err == nil && len(reviews) > 0 {
+	if reviews, err := h.Reviews.ListByRun(ctx, approvedReviewRunID(task)); err == nil && len(reviews) > 0 {
 		b.WriteString("\n## Final review\n\n")
 		for _, rv := range reviews {
 			fmt.Fprintf(&b, "- **%s**: %s\n", rv.Reviewer, rv.Verdict)

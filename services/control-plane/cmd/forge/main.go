@@ -168,6 +168,7 @@ func main() {
 	mux.HandleFunc("GET /tasks/{id}/children", h.ListTaskChildren)
 	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
 	mux.HandleFunc("GET /tasks/{id}/delivery", h.GetDelivery)
+	mux.HandleFunc("GET /tasks/{id}/diff", h.GetTaskDiff)
 	mux.HandleFunc("POST /tasks/{id}/deliver", h.RetryDelivery)
 	mux.HandleFunc("POST /tasks/{id}/rollback", h.RollbackTask)
 

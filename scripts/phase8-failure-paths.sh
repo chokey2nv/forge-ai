@@ -193,6 +193,14 @@ run_scenario() {
       check "the subtask's work is on its own branch, merged into the parent branch" \
         "$(cb=$(curl -sf "$CP/tasks/$child" | jq -r .branch); git -C "$repo" show "$cb:src/price.js" | grep -q Math.round && git -C "$repo" merge-base --is-ancestor "$cb" "$(branch_of "$task")"; echo $?)"
       check "integrated fix rounds to cents" "$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q Math.round; echo $?)"
+
+      check "revision r1 recorded at the parent branch tip, with its final review" \
+        "$(curl -sf "$CP/tasks/$task" | jq -e --arg tip "$(git -C "$repo" rev-parse "$(branch_of "$task")")" --arg run "run-$task-final-review" \
+          '.revisions | length == 1 and .[0].n == 1 and .[0].commit == $tip and .[0].finalReviewRunId == $run' >/dev/null; echo $?)"
+      check "GET /tasks/{id}/diff serves r1's combined change" \
+        "$(curl -sf "$CP/tasks/$task/diff" | jq -e --arg base "$(curl -sf "$CP/tasks/$task" | jq -r .integrationBaseCommit)" \
+          '.revision == 1 and .from == $base and (.diff | contains("diff --git a/src/price.js b/src/price.js") and contains("Math.round"))' >/dev/null; echo $?)"
+      check "an unknown revision is 404" "$([ "$(curl -s -o /dev/null -w '%{http_code}' "$CP/tasks/$task/diff?revision=2")" = 404 ]; echo $?)"
       ;;
     parallel-reviewers)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
@@ -372,6 +380,8 @@ run_final_review_escalates() {
   final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 60) || true
   stop_adapter
   check "parent reaches REVIEW_PENDING after accept ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  check "accepting the escalation records r1 with the escalated final review" \
+    "$(curl -sf "$CP/tasks/$task" | jq -e --arg run "run-$task-final-review" '.revisions | length == 1 and .[0].finalReviewRunId == $run' >/dev/null; echo $?)"
   # Reviewers cannot run tests; the platform's gate results must be in their prompt.
   check "child reviewers were shown the gate results and test output" \
     "$(jq -e -s '[.[] | select(.role == "reviewer" and (.task | contains("Task requirement:\nFix applyDiscount\n")))] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed") and contains("# pass 3"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"

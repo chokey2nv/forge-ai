@@ -80,6 +80,21 @@ type Task struct {
 	IntegrationWorktree   string    `bson:"integrationWorktree,omitempty" json:"integrationWorktree,omitempty"`
 	IntegrationBranch     string    `bson:"integrationBranch,omitempty" json:"integrationBranch,omitempty"`
 	IntegrationBaseCommit string    `bson:"integrationBaseCommit,omitempty" json:"integrationBaseCommit,omitempty"`
+
+	// Revisions: each time the combined change is handed to a human for
+	// review (Phase 12), the parent branch's tip is recorded, so every
+	// review round can be shown and compared later.
+	Revisions []Revision `bson:"revisions,omitempty" json:"revisions,omitempty"`
+}
+
+// Revision is one version of a parent's combined change put up for human
+// review: the diff BaseCommit..Commit.
+type Revision struct {
+	N                int       `bson:"n" json:"n"` // 1-based
+	Commit           string    `bson:"commit" json:"commit"`
+	BaseCommit       string    `bson:"baseCommit" json:"baseCommit"`
+	FinalReviewRunID string    `bson:"finalReviewRunId" json:"finalReviewRunId"`
+	At               time.Time `bson:"at" json:"at"`
 }
 
 // Delivery records how an approved task reached (or failed to reach) its

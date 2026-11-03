@@ -52,6 +52,27 @@ export interface Task {
   targetBranch?: string;
   /** Phase 11.3: what approval did (set once delivery starts). */
   delivery?: Delivery;
+  /** Phase 12: each version of a parent's combined change put up for human review. */
+  revisions?: Revision[];
+}
+
+export interface Revision {
+  n: number;
+  commit: string;
+  baseCommit: string;
+  finalReviewRunId: string;
+  at: string;
+}
+
+/** GET /tasks/{id}/diff: revision 0 is the work in progress. */
+export interface TaskDiff {
+  taskId: string;
+  revisions: Revision[];
+  revision: number;
+  since?: number;
+  from: string;
+  to: string;
+  diff: string;
 }
 
 export interface Delivery {
@@ -85,8 +106,22 @@ export interface Rollback {
 /** A decomposed parent: its own review covers the combined change. */
 export const isParent = (t: Task) => !t.parentId && !!t.integrationBranch;
 
-/** The run whose reviews decide the task: a parent's final review, otherwise its latest run. */
-export const reviewRunId = (t: Task) => (isParent(t) ? `run-${t.id}-final-review` : t.latestRunId);
+// A parent being worked on again after a revision was recorded: its next
+// final review is the one in progress.
+const REWORKING = new Set<TaskStatus>(["DECOMPOSING", "DISPATCHED", "RUNNING", "INTEGRATING", "VERIFYING", "AGENT_REVIEW", "ESCALATED"]);
+
+/**
+ * The run whose reviews decide the task: a parent's final review (of the
+ * latest revision, or of the one being prepared), otherwise its latest run.
+ * Revision 1 keeps the ID used before revisions existed.
+ */
+export const reviewRunId = (t: Task) => {
+  if (!isParent(t)) return t.latestRunId;
+  const revs = t.revisions ?? [];
+  if (revs.length && !REWORKING.has(t.status)) return revs[revs.length - 1].finalReviewRunId;
+  const n = revs.length + 1;
+  return n === 1 ? `run-${t.id}-final-review` : `run-${t.id}-final-review-r${n}`;
+};
 
 export interface Run {
   id: string;
@@ -236,6 +271,12 @@ export const api = {
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
     getDelivery: (taskId: string) => j<DeliveryPreview>(`/tasks/${taskId}/delivery`),
+    getTaskDiff: (taskId: string, revision?: number, since?: number) => {
+      const q = new URLSearchParams();
+      if (revision !== undefined) q.set("revision", String(revision));
+      if (since) q.set("since", String(since));
+      return j<TaskDiff>(`/tasks/${taskId}/diff${q.size ? `?${q}` : ""}`);
+    },
     rollback: (taskId: string, reviewer: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/rollback`, {
             method: "POST",

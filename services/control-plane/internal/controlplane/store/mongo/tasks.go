@@ -128,3 +128,10 @@ func (r *TaskRepo) UpdateDelivery(ctx context.Context, id string, d *domain.Deli
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"delivery": d, "updatedAt": at}})
 	return err
 }
+
+func (r *TaskRepo) AddRevision(ctx context.Context, id string, rev domain.Revision, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx,
+		bson.M{"_id": id, "revisions.n": bson.M{"$ne": rev.N}},
+		bson.M{"$push": bson.M{"revisions": rev}, "$set": bson.M{"updatedAt": at}})
+	return err
+}

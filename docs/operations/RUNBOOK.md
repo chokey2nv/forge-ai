@@ -260,7 +260,7 @@ cd apps/console && VITE_API_URL=http://localhost:8080 npx vite --port 5174
 
 `VITE_API_URL` must point at the control plane (Vite reads `apps/console/.env*`, not the repo-root `.env`; without it the console assumes `http://localhost:8080`). **New task** creates work: give the repository's path (on the control plane's machine), pick the target branch, write the requirement and acceptance criteria (one per line). Before anything is created the form shows the branch the task will get and what approving it will do — a pull request when the repository has a remote, otherwise a local merge — with any `gh` warnings. *Create and start* creates the task (and its branch) and hands it to the head engineer; starting waits for the workspace to come up, so it can take a little while. Provider, model and budget are under *Model and budget* (defaults from `DEFAULT_PROVIDER` / `DEFAULT_MODEL`). The same can be done with the API: `POST /tasks`, then `POST /tasks/{id}/runs`; `GET /repos/inspect?path=…&targetBranch=…&requirement=…` is the form's preview.
 
-The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and diff, and to approve, reject, decide an escalation, retry a blocked delivery or roll back a merged one.
+The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and its combined change (by file, with line numbers; pick a revision, or compare one with an earlier one — §6.5), and to approve, reject, decide an escalation, retry a blocked delivery or roll back a merged one.
 
 ### 4.5 Startup checklist
 
@@ -671,6 +671,18 @@ curl -s localhost:8080/runs/<runId> | jq '.lastCheckpoint.usage'
 curl -s localhost:8080/runs/<runId>/diff | jq -r .diff
 ```
 
+A decomposed task's combined change, by revision. A revision is recorded each time the change is put up for human review (the final review passed, or an escalation was accepted), at the parent branch's tip:
+
+```bash
+curl -s localhost:8080/tasks/<taskId>/diff | jq -r .diff                       # latest revision
+curl -s 'localhost:8080/tasks/<taskId>/diff?revision=1' | jq -r .diff           # a given revision
+curl -s 'localhost:8080/tasks/<taskId>/diff?revision=2&since=1' | jq -r .diff   # changes since r1
+curl -s 'localhost:8080/tasks/<taskId>/diff?revision=0' | jq -r .diff           # work in progress (branch tip)
+curl -s localhost:8080/tasks/<taskId> | jq .revisions
+```
+
+The console shows the same as a diff by file and hunk, with line numbers, a revision picker and "compare with" (§4.4). For a task that was not decomposed, `/tasks/<taskId>/diff` serves its latest run's diff.
+
 ### 6.5.1 Branches and delivery preview
 
 Creating a task creates its parent branch right away, at the tip of its target branch: `forge/<first words of the requirement>-<task id>`. Each subtask gets its own branch off it when dispatched, `<parent branch>-<first words of the subtask title>`; after review its work is committed there and merged into the parent branch (`integrate(<subtask id>): <title>`). `git log --graph <parent branch>` shows one merge per subtask. The target is `targetBranch` if given, else the branch `baseCommit` names, else the repository's checked-out branch; a detached HEAD or a SHA base needs `targetBranch` (the API answers 400).
@@ -878,6 +890,7 @@ rm -rf .forge
 | 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 | 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
+| 12. Human feedback | In progress (12.1) | Revisions of the combined change and a diff viewer; then line comments, request changes and agent replies | 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane |
 
 Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a delivery interrupted by a control-plane restart. The Phase 6 eval harness has not been re-run.
 

@@ -100,6 +100,8 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 		} else if err := h.SM.Transition(ctx, task, domain.StatusReviewPending, reason); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
+		} else if isParentReview(task) {
+			h.recordRevision(bg, task, run.ID)
 		}
 
 	case EscalationReject:

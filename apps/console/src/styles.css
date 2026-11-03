@@ -97,3 +97,29 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .new-task label.inline { font-weight: normal; }
 .new-task .row { display: flex; gap: 12px; }
 .new-task .row label { flex: 1; }
+
+/* Phase 12.1: diff viewer */
+.diff-view .diff-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; justify-content: space-between; }
+.diff-view .diff-pickers { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; }
+.diff-view select { font: inherit; max-width: 100%; }
+.diff-view .hint { overflow-wrap: anywhere; }
+.diff-view .adds { color: #1a7f37; font-weight: 600; }
+.diff-view .dels { color: #cf222e; font-weight: 600; }
+.diff-file { border: 1px solid #d0d7de; border-radius: 6px; margin: 8px 0; overflow: hidden; }
+.diff-file > summary { cursor: pointer; padding: 6px 10px; background: #f6f8fa; display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.diff-file > summary code { overflow-wrap: anywhere; }
+.diff-file .file-counts { margin-left: auto; white-space: nowrap; }
+.diff-file .file-status { font-size: 11px; text-transform: uppercase; padding: 1px 6px; border-radius: 10px; background: #ddf4ff; color: #0969da; }
+.diff-file .file-status.deleted { background: #ffebe9; color: #cf222e; }
+.diff-file .file-status.added { background: #dafbe1; color: #1a7f37; }
+.diff-file .hint { padding: 6px 10px; margin: 0; }
+.diff-table { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; display: block; overflow-x: auto; }
+.diff-table td { padding: 0 8px; vertical-align: top; }
+.diff-table td.ln { width: 1%; min-width: 3ch; text-align: right; color: #6e7781; user-select: none; }
+.diff-table td.code { white-space: pre; width: 100%; }
+.diff-table tr.add { background: #e6ffec; }
+.diff-table tr.add td.ln { background: #ccffd8; }
+.diff-table tr.del { background: #ffebe9; }
+.diff-table tr.del td.ln { background: #ffd7d5; }
+.diff-table tr.hunk td { background: #ddf4ff; color: #57606a; padding: 2px 8px; }
+.diff-table tr.note td.code { color: #6e7781; font-style: italic; }

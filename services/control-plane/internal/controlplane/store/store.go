@@ -23,6 +23,8 @@ type TaskRepo interface {
 	ListChildren(ctx context.Context, parentID string) ([]*domain.Task, error)
 	UpdateIntegration(ctx context.Context, id, worktree, branch, baseCommit string, at time.Time) error
 	UpdateDelivery(ctx context.Context, id string, d *domain.Delivery, at time.Time) error
+	// AddRevision appends rev unless a revision with its number exists.
+	AddRevision(ctx context.Context, id string, rev domain.Revision, at time.Time) error
 }
 
 type RunRepo interface {
