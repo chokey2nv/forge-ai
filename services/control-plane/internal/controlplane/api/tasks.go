@@ -353,6 +353,42 @@ func shortSHA(sha string) string {
 
 // GetDelivery previews what approving the task will do: open a pull request
 // with gh when the repository has a remote, otherwise merge locally.
+// InspectRepo: GET /repos/inspect?path=&targetBranch=&requirement= — what
+// creating a task there would do, before it exists: the repository's
+// branches, the target the task would get, the parent branch it would
+// create, and what approving it would do (the same preview as a task's).
+func (h *Handlers) InspectRepo(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+	resp := map[string]any{}
+	repo, err := delivery.InspectRepo(ctx, q.Get("path"))
+	if err != nil {
+		resp["error"] = err.Error()
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp["repo"] = repo
+	target, _, err := delivery.ResolveTarget(ctx, repo.Path, q.Get("targetBranch"), "HEAD")
+	if err != nil {
+		resp["error"] = err.Error()
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	// The real name ends in the task's ID, which does not exist yet.
+	branch := strings.TrimSuffix(delivery.ParentBranchName("task-x", q.Get("requirement")), "x") + "<task id>"
+	resp["delivery"] = h.Delivery.Preview(ctx, &domain.Task{RepoPath: repo.Path, TargetBranch: target, IntegrationBranch: branch})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetConfig: GET /config — what the console needs to start work.
+func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"providers":       h.AllowedProviders,
+		"defaultProvider": h.DefaultProvider,
+		"defaultModel":    h.DefaultModel,
+	})
+}
+
 func (h *Handlers) GetDelivery(w http.ResponseWriter, r *http.Request) {
 	task, err := h.Tasks.Get(r.Context(), r.PathValue("id"))
 	if err != nil {

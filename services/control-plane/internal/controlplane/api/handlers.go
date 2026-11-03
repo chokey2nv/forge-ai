@@ -15,32 +15,34 @@ import (
 )
 
 type Handlers struct {
-	Tasks                   store.TaskRepo
-	Runs                    store.RunRepo
-	Events                  store.EventRepo
-	Verifications           store.VerificationRepo
-	Reviews                 store.ReviewRepo
-	Delivery                *delivery.Inspector
-	Approvals               store.ApprovalRepo
-	EvalResults             store.EvalResultRepo
-	SM                      *statemachine.Service
-	Adapter                 *adapter.Client
-	Verifier                *verification.Runner
-	Registry                *agent.Registry
-	Integrator              *orchestration.Integrator // Phase 8
-	WorkerImage             string
-	SelfURL                 string
-	SystemPrompt            string
-	AllowedProviders        []string
-	MaxVerificationAttempts int // consecutive verification failures before blocking
-	MaxReviewRounds         int // reviewer rejections before blocking
-	SetupTimeout            time.Duration
-	PlannerEnabled          bool
-	ReviewerEnabled         bool
-	PlannerMaxSteps         int
-	PlannerWallClockMS      int
-	ReviewerMaxSteps        int
-	ReviewerWallClockMS     int
+	Tasks            store.TaskRepo
+	Runs             store.RunRepo
+	Events           store.EventRepo
+	Verifications    store.VerificationRepo
+	Reviews          store.ReviewRepo
+	Delivery         *delivery.Inspector
+	Approvals        store.ApprovalRepo
+	EvalResults      store.EvalResultRepo
+	SM               *statemachine.Service
+	Adapter          *adapter.Client
+	Verifier         *verification.Runner
+	Registry         *agent.Registry
+	Integrator       *orchestration.Integrator // Phase 8
+	WorkerImage      string
+	SelfURL          string
+	SystemPrompt     string
+	AllowedProviders []string
+	// What the console offers when starting work (GET /config).
+	DefaultProvider, DefaultModel string
+	MaxVerificationAttempts       int // consecutive verification failures before blocking
+	MaxReviewRounds               int // reviewer rejections before blocking
+	SetupTimeout                  time.Duration
+	PlannerEnabled                bool
+	ReviewerEnabled               bool
+	PlannerMaxSteps               int
+	PlannerWallClockMS            int
+	ReviewerMaxSteps              int
+	ReviewerWallClockMS           int
 }
 
 func NewHandlers(

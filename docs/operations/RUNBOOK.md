@@ -258,7 +258,9 @@ make console-install    # once
 cd apps/console && VITE_API_URL=http://localhost:8080 npx vite --port 5174
 ```
 
-`VITE_API_URL` must point at the control plane (Vite reads `apps/console/.env*`, not the repo-root `.env`; without it the console assumes `http://localhost:8080`). The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and diff, and to approve, reject or decide an escalation.
+`VITE_API_URL` must point at the control plane (Vite reads `apps/console/.env*`, not the repo-root `.env`; without it the console assumes `http://localhost:8080`). **New task** creates work: give the repository's path (on the control plane's machine), pick the target branch, write the requirement and acceptance criteria (one per line). Before anything is created the form shows the branch the task will get and what approving it will do — a pull request when the repository has a remote, otherwise a local merge — with any `gh` warnings. *Create and start* creates the task (and its branch) and hands it to the head engineer; starting waits for the workspace to come up, so it can take a little while. Provider, model and budget are under *Model and budget* (defaults from `DEFAULT_PROVIDER` / `DEFAULT_MODEL`). The same can be done with the API: `POST /tasks`, then `POST /tasks/{id}/runs`; `GET /repos/inspect?path=…&targetBranch=…&requirement=…` is the form's preview.
+
+The Tasks view lists top-level tasks and any escalated subtask; open a parent to see its subtasks, each reviewer's verdict per round, verification and diff, and to approve, reject, decide an escalation, retry a blocked delivery or roll back a merged one.
 
 ### 4.5 Startup checklist
 

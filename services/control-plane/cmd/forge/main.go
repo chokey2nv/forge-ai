@@ -137,6 +137,7 @@ func main() {
 		MaxConcurrentRuns:   parseInt(envOr("MAX_CONCURRENT_RUNS", "3"), 3),
 	}
 	go scheduler.Run(ctx)
+	h.DefaultProvider, h.DefaultModel = scheduler.DefaultProvider, scheduler.DefaultModel
 
 	mux := http.NewServeMux()
 
@@ -154,6 +155,8 @@ func main() {
 	mux.HandleFunc("GET  /skills/{name}", h.GetSkill)
 
 	mux.HandleFunc("POST /tasks", h.CreateTask)
+	mux.HandleFunc("GET /repos/inspect", h.InspectRepo)
+	mux.HandleFunc("GET /config", h.GetConfig)
 	mux.HandleFunc("GET /tasks/{id}", h.GetTask)
 	mux.HandleFunc("POST /tasks/{id}/runs", h.DispatchRun)
 	mux.HandleFunc("GET  /tasks", h.ListTasks)

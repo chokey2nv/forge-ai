@@ -92,3 +92,8 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .badge-rolled_back { background: #e3e5e8; color: #555; }
 .rollback { margin-top: 12px; border-top: 1px dashed #ccc; padding-top: 8px; }
 .rollback textarea { display: block; width: 100%; margin: 6px 0; }
+.new-task label { display: block; margin: 8px 0; font-weight: 600; font-size: 13px; }
+.new-task label input:not([type=checkbox]), .new-task label select, .new-task label textarea { display: block; width: 100%; margin-top: 4px; font-weight: normal; box-sizing: border-box; }
+.new-task label.inline { font-weight: normal; }
+.new-task .row { display: flex; gap: 12px; }
+.new-task .row label { flex: 1; }

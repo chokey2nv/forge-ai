@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import {
   api, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
-  type EscalationDecision, type DeliveryPreview, AgentDefinition, Skill,
+  type EscalationDecision, type DeliveryPreview, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
 
-type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" };
+type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" };
 
 export default function App() {
   const [view, setView] = useState<View>({ kind: "tasks" });
@@ -14,6 +14,7 @@ export default function App() {
       <header>
         <h1>Forge</h1>
         <nav>
+          <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>
           <button className={view.kind === "tasks" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Tasks</button>
           <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
         </nav>
@@ -24,7 +25,147 @@ export default function App() {
           <TaskDetail key={view.id} id={view.id} onOpen={(id) => setView({ kind: "task", id })} onBack={() => setView({ kind: "tasks" })} />
         )}
         {view.kind === "evals" && <Evals />}
+        {view.kind === "new" && <NewTaskForm onCreated={(id) => setView({ kind: "task", id })} onCancel={() => setView({ kind: "tasks" })} />}
       </main>
+    </div>
+  );
+}
+
+const LAST_REPO = "forge.newTask.repoPath";
+const remembered = (k: string) => { try { return localStorage.getItem(k) ?? ""; } catch { return ""; } };
+const remember = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+
+/**
+ * Drop a task on the board: where it runs, what it must do, and — before
+ * anything is created — which branch it will get and what approving it will
+ * do. Creating it creates its branch; starting it hands it to the head engineer.
+ */
+function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+  const [repoPath, setRepoPath] = useState(remembered(LAST_REPO));
+  const [target, setTarget] = useState("");
+  const [requirement, setRequirement] = useState("");
+  const [acceptance, setAcceptance] = useState("");
+  const [config, setConfig] = useState<Config | null>(null);
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [maxSteps, setMaxSteps] = useState(30);
+  const [maxRetries, setMaxRetries] = useState(2);
+  const [minutes, setMinutes] = useState(30);
+  const [startNow, setStartNow] = useState(true);
+  const [inspection, setInspection] = useState<RepoInspection | null>(null);
+  const [busy, setBusy] = useState<"" | "creating" | "starting">("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api.getConfig().then((c) => { setConfig(c); setProvider(c.defaultProvider); setModel(c.defaultModel); })
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  // Re-inspect as the path, target or wording change (debounced): the
+  // branch name comes from the requirement's first words.
+  useEffect(() => {
+    if (!repoPath.trim()) { setInspection(null); return; }
+    const t = setTimeout(() => {
+      api.inspectRepo(repoPath.trim(), target, requirement).then(setInspection).catch((e) => setInspection({ error: String(e) }));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [repoPath, target, requirement]);
+
+  const repo = inspection?.repo;
+  const d = inspection?.delivery;
+  const criteria = acceptance.split("\n").map((l) => l.replace(/^\s*[-*\d.)]+\s*/, "").trim()).filter(Boolean);
+  const ready = !!repo && !inspection?.error && requirement.trim() !== "" && criteria.length > 0 && !busy;
+
+  const submit = async () => {
+    setBusy("creating"); setErr("");
+    try {
+      const task = await api.createTask({
+        requirement: requirement.trim(), acceptance: criteria, repoPath: repo!.path,
+        targetBranch: target || undefined,
+        budget: { maxSteps, maxRetries, wallClockMs: minutes * 60_000 },
+      });
+      remember(LAST_REPO, repoPath.trim());
+      if (startNow) {
+        setBusy("starting");
+        // Returns once the head engineer's workspace is up (a container and
+        // the repository's setup), so this can take a while.
+        // If it fails, the task exists anyway and its page shows why (BLOCKED).
+        await api.startTask(task.id, provider, model).catch(() => {});
+      }
+      onCreated(task.id);
+    } catch (e) { setErr(String(e)); setBusy(""); }
+  };
+
+  return (
+    <div className="detail new-task">
+      <h2>New task</h2>
+      {err && <p className="error">{err}</p>}
+
+      <section>
+        <label>Repository (a path on the control plane's machine)
+          <input value={repoPath} onChange={(e) => { setRepoPath(e.target.value); setTarget(""); }} placeholder="/Users/you/code/app" />
+        </label>
+        {inspection?.error && <p className="error">{inspection.error}</p>}
+        {repo && (
+          <label>Target branch (where the work is delivered)
+            <select value={target || repo.currentBranch || ""} onChange={(e) => setTarget(e.target.value)}>
+              {repo.branches.map((b) => <option key={b} value={b}>{b}{b === repo.currentBranch ? " (checked out)" : ""}</option>)}
+            </select>
+          </label>
+        )}
+      </section>
+
+      <section>
+        <label>Requirement
+          <textarea rows={4} value={requirement} onChange={(e) => setRequirement(e.target.value)}
+            placeholder="What should change, and why. The head engineer splits it into subtasks." />
+        </label>
+        <label>Acceptance criteria (one per line)
+          <textarea rows={4} value={acceptance} onChange={(e) => setAcceptance(e.target.value)}
+            placeholder={"applyDiscount(200, 10) returns 180\nnpm test passes"} />
+        </label>
+      </section>
+
+      {d && repo && (
+        <section className={`delivery delivery-${d.mode}`}>
+          <h3>What happens</h3>
+          <ol>
+            <li>Creating the task creates branch <code>{d.branch}</code> from <code>{d.targetBranch}</code>; each subtask branches off it and is merged back after review.</li>
+            <li>{d.action}</li>
+          </ol>
+          <p className="hint">
+            {d.remote
+              ? <>Remote <code>{d.remote.name}</code> found ({d.remote.host ? `${d.remote.host}/${d.remote.repo}` : d.remote.url}): approval opens a pull request.</>
+              : <>No remote: approval merges into <code>{d.targetBranch}</code> in this repository.</>}
+          </p>
+          {d.warnings.map((w, i) => <p key={i} className="warning">⚠ {w}</p>)}
+        </section>
+      )}
+
+      <section>
+        <details>
+          <summary>Model and budget</summary>
+          <div className="row">
+            <label>Provider
+              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+                {(config?.providers ?? []).map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label>Model <input value={model} onChange={(e) => setModel(e.target.value)} /></label>
+          </div>
+          <div className="row">
+            <label>Max steps <input type="number" min={1} value={maxSteps} onChange={(e) => setMaxSteps(+e.target.value)} /></label>
+            <label>Max retries <input type="number" min={0} value={maxRetries} onChange={(e) => setMaxRetries(+e.target.value)} /></label>
+            <label>Time limit (minutes) <input type="number" min={1} value={minutes} onChange={(e) => setMinutes(+e.target.value)} /></label>
+          </div>
+        </details>
+        <label className="inline"><input type="checkbox" checked={startNow} onChange={(e) => setStartNow(e.target.checked)} /> Start now (hand it to the head engineer)</label>
+      </section>
+
+      <div>
+        <button className="approve" disabled={!ready} onClick={submit}>{busy === "creating" ? "Creating…" : busy === "starting" ? "Starting… (preparing the workspace)" : startNow ? "Create and start" : "Create"}</button>
+        <button className="neutral" onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -327,7 +468,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {task.status === "REVIEW_PENDING" && (
         <section className="approval">
           <h3>Decision</h3>
-          {delivery && <p className="hint">{delivery.deliversOnApproval ? `Approving: ${delivery.action}` : "Approval records the decision only."}</p>}
+          {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision only."}</p>}
           <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (optional)" />
           <div>

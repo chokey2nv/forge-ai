@@ -167,6 +167,27 @@ export interface Approval {
   decidedAt: string;
 }
 
+/** GET /repos/inspect: what creating a task in a repository would do. */
+export interface RepoInspection {
+  repo?: { path: string; branches: string[]; currentBranch?: string };
+  delivery?: DeliveryPreview;
+  error?: string;
+}
+
+export interface Config {
+  providers: string[];
+  defaultProvider: string;
+  defaultModel: string;
+}
+
+export interface NewTask {
+  requirement: string;
+  acceptance: string[];
+  repoPath: string;
+  targetBranch?: string;
+  budget: { maxSteps: number; maxRetries: number; wallClockMs: number };
+}
+
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, init);
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status} — ${await res.text().catch(() => "")}`);
@@ -174,6 +195,15 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+    getConfig: () => j<Config>("/config"),
+    inspectRepo: (path: string, targetBranch: string, requirement: string) =>
+        j<RepoInspection>(`/repos/inspect?${new URLSearchParams({ path, targetBranch, requirement })}`),
+    createTask: (t: NewTask) =>
+        j<Task>("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }),
+    startTask: (taskId: string, provider: string, model: string) =>
+        j<{ runId: string }>(`/tasks/${taskId}/runs`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, model }),
+        }),
     listAgents: () => j<AgentDefinition[]>("/agents"),
     getAgent: (name: string) => j<AgentDefinition>(`/agents/${name}`),
     reloadAgents: () => j<Record<string, unknown>>("/agents/reload", { method: "POST" }),
