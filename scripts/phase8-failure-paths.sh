@@ -750,8 +750,8 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
       # Phase 12.4: the subtask's reply, and the threads placed on r2 (just
       # after the revision is recorded).
       for _ in $(seq 1 20); do has_event "$task" thread.moved "$t3" && break; sleep 0.5; done
-      check "the follow-up subtask was told to reply on T1" \
-        "$(curl -sf "$CP/tasks/$f" | jq -e '.requirement | contains("- T1: src/price.js:") and contains("reply_to_thread")' >/dev/null; echo $?)"
+      check "the follow-up implementer was told to reply on T1; its reviewers were told the replies are not theirs" \
+        "$(curl -sf "$CP/tasks/$f" | jq -e '.requirement | contains("- T1: src/price.js:") and (contains("reply_to_thread") | not)' >/dev/null && jq -e -s '(any(.[]; .role == "implementer" and (.task | startswith("Name the cents factor") and contains("reply on each review comment listed in the requirement with reply_to_thread")))) and ([.[] | select(.role == "reviewer" and (.task | contains("Task requirement:\nName the cents factor")))] | length == 2 and all(.task | contains("judge only the code change")))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
       check "its reply is on T1 as an agent comment on r2, and T1 is addressed" \
         "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$t1" '.threads[] | select(.id == $t) | .status == "addressed" and (.comments | length == 2) and .comments[1].author == "implementer" and .comments[1].kind == "agent" and .comments[1].body == "Named it CENTS." and .comments[1].revision == 2' >/dev/null; echo $?)"
       check "T1's line was rewritten in r2: outdated, still shown on r1" \

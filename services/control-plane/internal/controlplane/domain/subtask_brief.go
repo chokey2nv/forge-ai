@@ -47,5 +47,13 @@ func SubtaskBrief(task *Task, siblings []*Task, forReviewer bool) string {
 	} else {
 		b.WriteString("\nDo not change files outside this subtask's scope; work a sibling owns will be done there.\n")
 	}
+	// A follow-up subtask answers the review threads it addresses (Phase 12.4).
+	if len(task.Addresses) > 0 {
+		if forReviewer {
+			b.WriteString("\nThe review comments in the requirement are answered by the implementer separately, with a tool reviewers do not have; judge only the code change.\n")
+		} else {
+			b.WriteString("\nWhen your change is done, reply on each review comment listed in the requirement with reply_to_thread (thread T1, T2, …): what you changed, or why you did not.\n")
+		}
+	}
 	return b.String()
 }

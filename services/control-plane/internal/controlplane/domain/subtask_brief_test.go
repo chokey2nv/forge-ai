@@ -35,3 +35,17 @@ func TestSubtaskBrief(t *testing.T) {
 		t.Error("a subtask without a scope must say so")
 	}
 }
+
+func TestSubtaskBriefThreadReplies(t *testing.T) {
+	task := &Task{ID: "c", ParentID: "p", Addresses: []string{"thr-a"}}
+	if b := SubtaskBrief(task, nil, false); !strings.Contains(b, "reply on each review comment listed in the requirement with reply_to_thread") {
+		t.Errorf("implementer brief: %s", b)
+	}
+	if b := SubtaskBrief(task, nil, true); !strings.Contains(b, "judge only the code change") || strings.Contains(b, "reply on each") {
+		t.Errorf("reviewer brief: %s", b)
+	}
+	task.Addresses = nil
+	if b := SubtaskBrief(task, nil, false); strings.Contains(b, "reply_to_thread") {
+		t.Errorf("a subtask without threads is told to reply: %s", b)
+	}
+}

@@ -3,7 +3,7 @@
 Setup, startup, and validation for the platform at its current build state (Phases 1–10). Phase 11+ features are not covered.
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 3 Nov 2026 (Phases 8–11 verified end to end; see §5.7–§5.11 and §9).
+**Last updated:** 3 Nov 2026 (Phases 8–12 verified end to end; see §5.7–§5.12 and §9).
 
 ---
 
@@ -176,7 +176,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `OPENAI_API_KEY` | *(unset)* | Adapter | Required only when `MODEL_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Adapter | Override for compatible proxies |
 | `ANTHROPIC_API_KEY` | *(unset)* | Adapter | Required only when `MODEL_PROVIDER=claude` |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Adapter | Override for compatible proxies |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Adapter | Override for compatible proxies; accepted with or without the trailing `/v1` (the Anthropic SDKs' form, without it, works too). A value already exported in the adapter's shell wins over `.env` |
 | `FORGE_ALLOWED_PROVIDERS` | `ollama` | Adapter + CP | Comma-separated allow-list; enabling `openai` / `claude` requires opt-in |
 | `MONGODB_URI` | `mongodb://127.0.0.1:27017` | Control plane | Mongo connection |
 | `MONGODB_DATABASE` | `forge_ai` | Control plane | Database name |
@@ -622,6 +622,19 @@ Copies the `cart-pricing` fixture into a fresh repo with no remote, on `main`. C
 
 **Pass criteria:** `MERGED` with `main` a merge of its old tip and the parent branch, the checkout clean, `node --test` passing; after the rollback `ROLLED_BACK`, with `main` one revert commit on top of the merge and its tree identical to the fixture's original.
 
+### 5.12 Phase 12 — Feedback with a real model
+
+```bash
+make phase12-feedback-slice
+# overrides: CP=… PROVIDER=claude MODEL=claude-haiku-5-5
+```
+
+Copies the `cart-pricing` fixture into a fresh repo with no remote, on `main`, with `budget.maxRevisions: 2`. Runs the fix to `REVIEW_PENDING` as r1; opens a thread on its `return` line asking for an exported `CENTS = 100` constant with a test; requests changes. The head engineer plans a follow-up subtask for the thread, which makes the change and replies with `reply_to_thread`; the task comes back as r2. The slice then resolves the thread and approves.
+
+**Pass criteria:** r2 recorded after a `planned` follow-up; a follow-up subtask that addresses the thread is `INTEGRATED`; r2's parent branch exports `CENTS === 100` and passes `node --test`; r2's changes since r1 introduce `CENTS`; the thread has an agent reply on r2 and is *addressed*, and is shown on r2 or outdated there; after approval `MERGED` with no open thread in the approval, and `main` clean, exporting `CENTS` and passing its tests. If a subtask is escalated or blocked on the way, the slice stops and names it rather than waiting out its timeout.
+
+The same flow from the console: *New task* → wait for review → click the `return` line's number, comment, *Request changes* → when r2 is back, the thread shows the implementer's reply → *Resolve* → *Approve*.
+
 ---
 
 ## 6. Observing state
@@ -929,7 +942,7 @@ rm -rf .forge
 | 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 | 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
-| 12. Human feedback | In progress (12.4) | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; request changes through a head engineer follow-up; agent replies and threads carried across revisions; then the Claude slice | 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane. 12.3: unit tests (thread handling in a follow-up graph, final review IDs after escalation retries, revision budget, follow-up prompt, new state edges); §5.9 `feedback-request-changes`, `feedback-unhandled-thread`, `feedback-escalated-parent-retry`, `feedback-budget` (§6.5.3); console request changes against a live control plane. 12.4: unit tests (line relocation through a diff, reply parsing, re-anchoring on a real repo); `feedback-request-changes` also checks the implementer's reply on T1, T1 outdated in r2 and T3 moved two lines; console against a live control plane |
+| 12. Human feedback | Verified | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; request changes through a head engineer follow-up; agent replies and threads carried across revisions | §5.12 with Claude (comment → request changes → the agent changes it and replies → r2 → resolve → approve → `MERGED`), and the same flow from the console. 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane. 12.3: unit tests (thread handling in a follow-up graph, final review IDs after escalation retries, revision budget, follow-up prompt, new state edges); §5.9 `feedback-request-changes`, `feedback-unhandled-thread`, `feedback-escalated-parent-retry`, `feedback-budget` (§6.5.3); console request changes against a live control plane. 12.4: unit tests (line relocation through a diff, reply parsing, re-anchoring on a real repo); `feedback-request-changes` also checks the implementer's reply on T1, T1 outdated in r2 and T3 moved two lines; console against a live control plane. 12.5: §5.12 slice and console run with `claude-haiku-5-5` |
 
 Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a delivery interrupted by a control-plane restart. The Phase 6 eval harness has not been re-run.
 

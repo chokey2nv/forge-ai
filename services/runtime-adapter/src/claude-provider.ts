@@ -20,6 +20,16 @@ export interface ClaudeProviderConfig {
 
 const DEFAULT_ANTHROPIC_VERSION = "2026-10-21";
 
+/**
+ * The API root requests go to, ending in /v1. ANTHROPIC_BASE_URL is
+ * accepted with or without /v1: the Anthropic SDKs use it without, so a
+ * shell that exports it for them must not send this adapter to /messages.
+ */
+export function claudeBaseUrl(configured?: string): string {
+  const url = (configured ?? "").trim().replace(/\/+$/, "") || "https://api.anthropic.com";
+  return url.endsWith("/v1") ? url : `${url}/v1`;
+}
+
 type AnthropicTextBlock = { type: "text"; text: string };
 type AnthropicToolUseBlock = { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
 type AnthropicToolResultBlock = { type: "tool_result"; tool_use_id: string; content: string };
@@ -54,7 +64,7 @@ export class ClaudeProvider implements ModelProvider {
   }
 
   private get baseUrl(): string {
-    return (this.cfg.baseUrl ?? "https://api.anthropic.com/v1").replace(/\/+$/, "");
+    return claudeBaseUrl(this.cfg.baseUrl);
   }
 
   private get version(): string {

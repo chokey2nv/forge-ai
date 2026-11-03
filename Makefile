@@ -69,6 +69,12 @@ phase10-parallel-slice:
 phase11-delivery-slice:
 	bash scripts/phase11-delivery-slice.sh
 
+.PHONY: phase12-feedback-slice
+
+# A line comment, request changes, the agent fixes it and replies, approve (real model).
+phase12-feedback-slice:
+	bash scripts/phase12-feedback-slice.sh
+
 .PHONY: eval console-install console-dev
 
 eval:

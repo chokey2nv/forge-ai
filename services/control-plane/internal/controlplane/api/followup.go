@@ -326,6 +326,5 @@ func threadBrief(threads []*domain.Thread, ids []string) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\nWhen your change is done, reply on each of these threads with reply_to_thread (thread T1, T2, …): what you changed, or why you did not.\n")
 	return b.String()
 }
