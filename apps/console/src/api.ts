@@ -3,11 +3,11 @@ const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 export type TaskStatus =
   | "CREATED" | "PLANNED" | "DECOMPOSING" | "DISPATCHED" | "RUNNING" | "VERIFYING"
   | "AGENT_REVIEW" | "ESCALATED" | "REVIEW_PENDING" | "INTEGRATING" | "INTEGRATED"
-  | "APPROVED" | "DELIVERING" | "PR_OPEN" | "MERGED" | "BLOCKED" | "RESUMABLE" | "REJECTED";
+  | "APPROVED" | "DELIVERING" | "PR_OPEN" | "MERGED" | "ROLLING_BACK" | "REVERT_PR_OPEN" | "ROLLED_BACK" | "BLOCKED" | "RESUMABLE" | "REJECTED";
 
 export const TASK_STATUSES: TaskStatus[] = [
   "CREATED", "DECOMPOSING", "DISPATCHED", "RUNNING", "VERIFYING", "AGENT_REVIEW", "ESCALATED",
-  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "DELIVERING", "PR_OPEN", "MERGED", "BLOCKED", "RESUMABLE", "REJECTED",
+  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "DELIVERING", "PR_OPEN", "MERGED", "ROLLING_BACK", "REVERT_PR_OPEN", "ROLLED_BACK", "BLOCKED", "RESUMABLE", "REJECTED",
 ];
 
 
@@ -61,6 +61,20 @@ export interface Delivery {
   remote?: string;
   targetMoved?: boolean;
   mergeCommit?: string;
+  prUrl?: string;
+  prNumber?: number;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+  rollback?: Rollback;
+}
+
+/** Phase 11.4: undoing a delivery by revert (a commit, or a revert PR). */
+export interface Rollback {
+  reviewer: string;
+  rationale?: string;
+  revertCommit?: string;
+  branch?: string;
   prUrl?: string;
   prNumber?: number;
   error?: string;
@@ -192,6 +206,12 @@ export const api = {
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
     getDelivery: (taskId: string) => j<DeliveryPreview>(`/tasks/${taskId}/delivery`),
+    rollback: (taskId: string, reviewer: string, rationale: string) =>
+        j<{ status: string }>(`/tasks/${taskId}/rollback`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reviewer, rationale }),
+        }),
     retryDelivery: (taskId: string) => j<{ status: string }>(`/tasks/${taskId}/deliver`, { method: "POST" }),
     decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {

@@ -167,7 +167,7 @@ function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-const TERMINAL = new Set(["MERGED", "REJECTED", "INTEGRATED"]);
+const TERMINAL = new Set(["MERGED", "REJECTED", "INTEGRATED", "ROLLED_BACK"]);
 
 const PRE_FINAL_REVIEW = new Set(["CREATED", "DECOMPOSING", "DISPATCHED", "INTEGRATING"]);
 
@@ -235,6 +235,10 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
     } catch (e) { setErr(String(e)); }
   };
 
+  const rollback = async (why: string) => {
+    try { await api.rollback(id, reviewer, why); await reload(); } catch (e) { setErr(String(e)); }
+  };
+
   const retryDelivery = async () => {
     try { await api.retryDelivery(id); await reload(); } catch (e) { setErr(String(e)); }
   };
@@ -272,7 +276,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
 
-      {task.delivery ? <DeliveryRecord task={task} onRetry={retryDelivery} /> : delivery && <DeliveryHint preview={delivery} />}
+      {task.delivery ? <DeliveryRecord task={task} onRetry={retryDelivery} onRollback={rollback} /> : delivery && <DeliveryHint preview={delivery} />}
 
       {task.status === "ESCALATED" && (
         <section className="approval escalation">
@@ -503,9 +507,11 @@ function DeliveryHint({ preview: p }: { preview: DeliveryPreview }) {
 }
 
 /** What approval did: the merge commit or pull request, or why it stopped. */
-function DeliveryRecord({ task, onRetry }: { task: Task; onRetry: () => void }) {
+function DeliveryRecord({ task, onRetry, onRollback }: { task: Task; onRetry: () => void; onRollback: (why: string) => void }) {
   const d = task.delivery!;
+  const rb = d.rollback;
   const blocked = task.status === "BLOCKED" && !!d.error;
+  const [why, setWhy] = useState("");
   return (
     <section className={`delivery delivery-${d.mode}`}>
       <h3>Delivery <StatusBadge status={task.status} /></h3>
@@ -523,6 +529,27 @@ function DeliveryRecord({ task, onRetry }: { task: Task; onRetry: () => void }) 
           <pre className="error">{d.error}</pre>
           <button className="neutral" onClick={onRetry}>Retry delivery</button>
         </>
+      )}
+      {rb && (
+        <div className="rollback">
+          <h4>Rollback <span className="version">by {rb.reviewer}{rb.rationale ? `: ${rb.rationale}` : ""}</span></h4>
+          {task.status === "ROLLING_BACK" && <p className="hint">Rolling back…</p>}
+          {rb.prUrl && <p>Revert pull request <a href={rb.prUrl} target="_blank" rel="noreferrer">#{rb.prNumber}</a>
+            {task.status === "REVERT_PR_OPEN" && " — waiting for it to be merged on the forge"}</p>}
+          {rb.revertCommit && task.status === "ROLLED_BACK" && <p>Revert commit <code>{rb.revertCommit.slice(0, 12)}</code> on <code>{d.targetBranch}</code></p>}
+          {rb.error && task.status === "MERGED" && <pre className="error">{rb.error}</pre>}
+        </div>
+      )}
+      {task.status === "MERGED" && d.mergeCommit && (
+        <div className="rollback">
+          <p className="hint">
+            {d.mode === "pull_request"
+              ? <>Roll back → push a branch reverting <code>{d.mergeCommit.slice(0, 12)}</code> and open a revert pull request into <code>{d.targetBranch}</code>.</>
+              : <>Roll back → add a commit on <code>{d.targetBranch}</code> reverting <code>{d.mergeCommit.slice(0, 12)}</code>. History is not rewritten.</>}
+          </p>
+          <textarea value={why} onChange={(e) => setWhy(e.target.value)} placeholder="why (recorded with the rollback)" />
+          <button className="reject" onClick={() => onRollback(why)}>Roll back</button>
+        </div>
       )}
     </section>
   );

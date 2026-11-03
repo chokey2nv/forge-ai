@@ -18,12 +18,15 @@ const (
 	StatusRejected      TaskStatus = "REJECTED"
 	StatusAgentReview   TaskStatus = "AGENT_REVIEW"
 
-	StatusDecomposing TaskStatus = "DECOMPOSING" // head-engineer is running
-	StatusIntegrating TaskStatus = "INTEGRATING" // applying child diffs to parent
-	StatusIntegrated  TaskStatus = "INTEGRATED"  // child terminal: merged into parent
-	StatusEscalated   TaskStatus = "ESCALATED"   // reviewers kept rejecting; a human decides (Phase 9)
-	StatusDelivering  TaskStatus = "DELIVERING"  // approved; merging or opening the PR (Phase 11)
-	StatusPROpen      TaskStatus = "PR_OPEN"     // pull request opened; a human merges it on the forge
+	StatusDecomposing  TaskStatus = "DECOMPOSING"    // head-engineer is running
+	StatusIntegrating  TaskStatus = "INTEGRATING"    // applying child diffs to parent
+	StatusIntegrated   TaskStatus = "INTEGRATED"     // child terminal: merged into parent
+	StatusEscalated    TaskStatus = "ESCALATED"      // reviewers kept rejecting; a human decides (Phase 9)
+	StatusDelivering   TaskStatus = "DELIVERING"     // approved; merging or opening the PR (Phase 11)
+	StatusPROpen       TaskStatus = "PR_OPEN"        // pull request opened; a human merges it on the forge
+	StatusRollingBack  TaskStatus = "ROLLING_BACK"   // a human asked to undo a delivery
+	StatusRevertPROpen TaskStatus = "REVERT_PR_OPEN" // revert pull request opened; merged on the forge -> ROLLED_BACK
+	StatusRolledBack   TaskStatus = "ROLLED_BACK"    // the delivery was reverted on the target
 
 )
 
@@ -95,4 +98,19 @@ type Delivery struct {
 	Error       string    `bson:"error,omitempty" json:"error,omitempty"`
 	StartedAt   time.Time `bson:"startedAt" json:"startedAt"`
 	FinishedAt  time.Time `bson:"finishedAt,omitempty" json:"finishedAt,omitzero"`
+	Rollback    *Rollback `bson:"rollback,omitempty" json:"rollback,omitempty"`
+}
+
+// Rollback undoes a delivery by reverting it (never by rewriting history):
+// a revert commit on the target, or a revert pull request.
+type Rollback struct {
+	Reviewer     string    `bson:"reviewer" json:"reviewer"`
+	Rationale    string    `bson:"rationale,omitempty" json:"rationale,omitempty"`
+	RevertCommit string    `bson:"revertCommit,omitempty" json:"revertCommit,omitempty"`
+	Branch       string    `bson:"branch,omitempty" json:"branch,omitempty"` // the revert PR's branch
+	PRURL        string    `bson:"prUrl,omitempty" json:"prUrl,omitempty"`
+	PRNumber     int       `bson:"prNumber,omitempty" json:"prNumber,omitempty"`
+	Error        string    `bson:"error,omitempty" json:"error,omitempty"`
+	StartedAt    time.Time `bson:"startedAt" json:"startedAt"`
+	FinishedAt   time.Time `bson:"finishedAt,omitempty" json:"finishedAt,omitzero"`
 }

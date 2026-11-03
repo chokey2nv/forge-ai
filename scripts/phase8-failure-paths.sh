@@ -27,6 +27,8 @@
 #   deliver-dirty      the target is checked out with edits: blocked; clean it, retry -> merged
 #   deliver-pr         a remote: approval pushes and opens a PR; merged on the forge -> MERGED
 #   deliver-pr-closed  the PR is closed without merging -> REJECTED
+#   rollback-local     a delivered local merge is reverted by a commit on the target (Phase 11.4)
+#   rollback-pr        a merged PR is reverted by a revert PR; merged on the forge -> ROLLED_BACK
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -40,7 +42,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -64,12 +66,14 @@ case "$1 $2" in
   "pr create") echo "https://github.com/example/app/pull/7"; exit 0 ;;
   # The harness plays the forge: it writes OPEN, MERGED or CLOSED to $GH_PR_STATE.
   "pr view") s=$(cat "$GH_PR_STATE" 2>/dev/null || echo OPEN)
-    echo "{\"state\":\"$s\",\"mergeCommit\":$([ "$s" = MERGED ] && echo '{"oid":"f0f0f0f0"}' || echo null)}"; exit 0 ;;
+    # ...and, once it has merged the PR into the bare origin, the merge commit to $GH_PR_MERGE.
+    m=$(cat "$GH_PR_MERGE" 2>/dev/null || echo f0f0f0f0)
+    echo "{\"state\":\"$s\",\"mergeCommit\":$([ "$s" = MERGED ] && echo "{\"oid\":\"$m\"}" || echo null)}"; exit 0 ;;
 esac
 echo "stub gh: unsupported: $*" >&2; exit 1
 GH
 chmod +x "$WORK/bin/gh"
-export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log" GH_PR_STATE="$WORK/pr-state" PR_POLL_INTERVAL=2s
+export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log" GH_PR_STATE="$WORK/pr-state" GH_PR_MERGE="$WORK/pr-merge" PR_POLL_INTERVAL=2s
 
 # A private copy of the agent definitions: add-agent writes to it, never to agents/.
 cp -R "$ROOT/agents" "$WORK/agents"
@@ -108,6 +112,9 @@ stop_adapter() { # npx does not always pass the signal on to node, so stop whate
   lsof -ti "tcp:$AD_PORT" -sTCP:LISTEN | xargs kill 2>/dev/null || true
   wait "$AD_PID" 2>/dev/null || true
   AD_PID=""
+  # The next adapter's health check must not reach this one while it exits.
+  for _ in $(seq 1 30); do lsof -ti "tcp:$AD_PORT" -sTCP:LISTEN >/dev/null 2>&1 || return 0; sleep 0.5; done
+  lsof -ti "tcp:$AD_PORT" -sTCP:LISTEN | xargs kill -9 2>/dev/null || true
 }
 
 new_repo() { # [fixture name] (default cart-pricing)
@@ -454,16 +461,26 @@ delivery_verifications() { # task -> passed verification runs made during delive
 }
 delivery_of() { curl -sf "$CP/tasks/$1" | jq -c '.delivery // {}'; }
 
-run_delivery() { # local | moved | dirty | pr | pr-closed
+# Plays the forge merging a PR: merge --no-ff head into base in the bare origin.
+forge_merge() { # origin base head -> merge commit
+  local c; c=$(mktemp -d "$WORK/forge.XXXXXX")
+  git clone -q -b "$2" "$1" "$c" && git -C "$c" fetch -q origin "$3"
+  git -C "$c" -c user.name=github -c user.email=gh@localhost merge -q --no-ff -m "Merge pull request #7" FETCH_HEAD
+  git -C "$c" push -q origin "$2" && git -C "$c" rev-parse HEAD
+}
+
+run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
   local repo task final target branch wt d origin
   repo=$(new_repo)
   target=$(git -C "$repo" symbolic-ref --short HEAD)
   if [[ "$1" == pr* ]]; then
-    # A GitHub-looking remote whose pushes land in a local bare repository.
+    # A GitHub-looking remote whose git traffic (fetch and push) goes to a
+    # local bare repository: nothing reaches github.com.
     origin="$WORK/origin-$RANDOM.git"; git init -q --bare "$origin"
     git -C "$repo" remote add origin https://github.com/example/app.git
-    git -C "$repo" config "url.$origin.pushInsteadOf" https://github.com/example/app.git
-    echo OPEN >"$GH_PR_STATE"; : >"$GH_LOG"
+    git -C "$repo" config "url.$origin.insteadOf" https://github.com/example/app.git
+    git -C "$repo" push -q origin "$(git -C "$repo" symbolic-ref --short HEAD)"
+    echo OPEN >"$GH_PR_STATE"; : >"$GH_LOG"; rm -f "$GH_PR_MERGE"
   fi
   start_adapter "$SCEN/two-reviewers-pass.json"
   task=$(create_and_dispatch "$repo")
@@ -525,10 +542,11 @@ run_delivery() { # local | moved | dirty | pr | pr-closed
       check "the delivery records the PR" "$(echo "$d" | jq -e '.mode == "pull_request" and .prUrl == "https://github.com/example/app/pull/7" and .prNumber == 7' >/dev/null; echo $?)"
       check "the target branch did not move locally" "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ]; echo $?)"
       if [ "$1" = pr ]; then
+        forge_merge "$origin" "$target" "$branch" >"$GH_PR_MERGE" || true
         echo MERGED >"$GH_PR_STATE"
         final=$(wait_status "$task" "MERGED|REJECTED" 30) || true
-        check "merged on the forge -> MERGED ($final)" \
-          "$([ "$final" = MERGED ] && delivery_of "$task" | jq -e '.mergeCommit == "f0f0f0f0"' >/dev/null; echo $?)"
+        check "merged on the forge -> MERGED with the forge's merge commit ($final)" \
+          "$([ "$final" = MERGED ] && delivery_of "$task" | jq -e --arg m "$(cat "$GH_PR_MERGE")" '.mergeCommit == $m' >/dev/null; echo $?)"
       else
         echo CLOSED >"$GH_PR_STATE"
         final=$(wait_status "$task" "MERGED|REJECTED" 30) || true
@@ -536,6 +554,62 @@ run_delivery() { # local | moved | dirty | pr | pr-closed
       fi
       ;;
   esac
+  [ "${2:-}" = rollback ] && rollback_delivery "$1"
+  return 0
+}
+
+rollback() { # task -> HTTP code
+  curl -s -o "$WORK/rollback.out" -w '%{http_code}' -X POST "$CP/tasks/$1/rollback" -H 'Content-Type: application/json' \
+    -d '{"reviewer":"harness","rationale":"broke checkout"}'
+}
+
+rollback_decisions() { # task -> number of recorded rollback decisions
+  mongosh --quiet "$DB" --eval "$(printf 'print(db.approvals.countDocuments({taskId: "%s", action: "rollback"}))' "$1")"
+}
+
+rollback_delivery() { # local | pr  (task, repo, target, branch, origin from run_delivery)
+  local merge code fixed_before
+  merge=$(delivery_of "$task" | jq -r .mergeCommit)
+  local other; other=$(curl -s -X POST "$CP/tasks" -H 'Content-Type: application/json' \
+    -d "{\"requirement\":\"noop\",\"acceptance\":[\"x\"],\"repoPath\":\"$repo\",\"baseCommit\":\"HEAD\"}")
+  check "a task that is not delivered cannot be rolled back ($(echo "$other" | head -c 120))" \
+    "$([ "$(rollback "$(echo "$other" | jq -r .id)")" = 409 ]; echo $?)"
+  if [ "$1" = local ]; then
+    # Unrelated work lands on the target after the delivery; the rollback must keep it.
+    echo "# Notes" >"$repo/NOTES.md"; git -C "$repo" add NOTES.md
+    git -C "$repo" -c user.name=someone -c user.email=s@localhost commit -q -m "notes"
+    local before; before=$(git -C "$repo" rev-parse "$target")
+    code=$(rollback "$task")
+    final=$(wait_status "$task" "ROLLED_BACK|MERGED" 60) || true
+    d=$(delivery_of "$task"); echo "  rollback: $(echo "$d" | jq -c .rollback)"
+    check "rollback answers 202 and the task is ROLLED_BACK ($code, $final)" "$([ "$code" = 202 ] && [ "$final" = ROLLED_BACK ]; echo $?)"
+    check "the target's tip is one revert commit on top of its old tip" \
+      "$(t=$(git -C "$repo" rev-parse "$target"); [ "$(git -C "$repo" rev-parse "$t^")" = "$before" ] && echo "$d" | jq -e --arg t "$t" '.rollback.revertCommit == $t' >/dev/null && git -C "$repo" log -1 --format=%B "$t" | grep -q "This reverts $merge"; echo $?)"
+    check "the fix is gone from the checkout, the later work stays, the checkout is clean" \
+      "$(! grep -q Math.round "$repo/src/price.js" && [ -f "$repo/NOTES.md" ] && [ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; echo $?)"
+    check "history is not rewritten: the delivery merge is still on the target" "$(git -C "$repo" merge-base --is-ancestor "$merge" "$target"; echo $?)"
+  else
+    echo OPEN >"$GH_PR_STATE"; : >"$GH_LOG"
+    code=$(rollback "$task")
+    final=$(wait_status "$task" "REVERT_PR_OPEN|MERGED|ROLLED_BACK" 60) || true
+    d=$(delivery_of "$task"); echo "  rollback: $(echo "$d" | jq -c .rollback)"
+    check "rollback answers 202 and opens a revert PR ($code, $final)" "$([ "$code" = 202 ] && [ "$final" = REVERT_PR_OPEN ]; echo $?)"
+    local rbb; rbb=$(echo "$d" | jq -r .rollback.branch)
+    check "the revert branch is pushed: one commit on top of the forge's merge" \
+      "$([ "$rbb" = "$branch-revert" ] && [ "$(git -C "$origin" rev-parse "$rbb^")" = "$merge" ] && ! git -C "$origin" show "$rbb:src/price.js" | grep -q Math.round; echo $?)"
+    check "gh opened the revert PR into the target" \
+      "$(grep -qF "gh pr create --base $target --head $rbb --title Revert: Fix applyDiscount" "$GH_LOG"; echo $?)"
+    check "the target did not move on the forge or locally" \
+      "$([ "$(git -C "$origin" rev-parse "$target")" = "$merge" ]; echo $?)"
+    forge_merge "$origin" "$target" "$rbb" >"$GH_PR_MERGE" || true
+    echo MERGED >"$GH_PR_STATE"
+    final=$(wait_status "$task" "ROLLED_BACK|MERGED" 30) || true
+    check "revert merged on the forge -> ROLLED_BACK ($final)" "$([ "$final" = ROLLED_BACK ] && has_reason "$task" "revert pull request merged"; echo $?)"
+  fi
+  check "the rollback is recorded as a decision" \
+    "$([ "$(rollback_decisions "$task")" = 1 ]; echo $?)"
+  code=$(rollback "$task")
+  check "a rolled-back task cannot be rolled back again (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
 }
 
 for SC in "${SCENARIOS[@]}"; do
@@ -551,6 +625,7 @@ for SC in "${SCENARIOS[@]}"; do
     concurrency-cap) stop_cp; start_cp MAX_CONCURRENT_RUNS=1; run_parallel cap; stop_cp; start_cp ;;
     overlap-serialized) run_parallel serialized ;;
     deliver-target-moved) run_delivery moved ;;
+    rollback-*) run_delivery "${SC#rollback-}" rollback ;;
     deliver-*) run_delivery "${SC#deliver-}" ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")

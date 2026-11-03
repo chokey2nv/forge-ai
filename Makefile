@@ -63,6 +63,12 @@ phase8-failure-paths:
 phase10-parallel-slice:
 	bash scripts/phase10-parallel-slice.sh
 
+.PHONY: phase11-delivery-slice
+
+# Approve -> merged into main locally, then rolled back (real model).
+phase11-delivery-slice:
+	bash scripts/phase11-delivery-slice.sh
+
 .PHONY: eval console-install console-dev
 
 eval:

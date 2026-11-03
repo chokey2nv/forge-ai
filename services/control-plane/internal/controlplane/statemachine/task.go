@@ -84,12 +84,22 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusMerged,   // merged on the forge
 		domain.StatusRejected, // closed without merging
 	},
+	domain.StatusMerged: {domain.StatusRollingBack},
+	domain.StatusRollingBack: {
+		domain.StatusRolledBack,   // reverted locally
+		domain.StatusRevertPROpen, // revert pull request opened
+		domain.StatusMerged,       // rollback failed: the delivery stands
+	},
+	domain.StatusRevertPROpen: {
+		domain.StatusRolledBack, // revert merged on the forge
+		domain.StatusMerged,     // revert closed without merging: the delivery stands
+	},
 	domain.StatusBlocked: {
 		domain.StatusRunning,
 		domain.StatusDelivering, // delivery retried after fixing what blocked it
 	},
 	domain.StatusResumable: {domain.StatusRunning},
-	// Integrated, Merged, Rejected terminal
+	// Integrated, Rejected, RolledBack terminal
 }
 
 func CanTransition(from, to domain.TaskStatus) bool {

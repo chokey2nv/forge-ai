@@ -88,3 +88,7 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .delivery .warning, .warning { color: #9a5b00; }
 .badge-delivering { background: #fff4c2; }
 .badge-pr_open { background: #e2d6ff; }
+.badge-rolling_back, .badge-revert_pr_open { background: #ffd8a8; color: #7a3e00; }
+.badge-rolled_back { background: #e3e5e8; color: #555; }
+.rollback { margin-top: 12px; border-top: 1px dashed #ccc; padding-top: 8px; }
+.rollback textarea { display: block; width: 100%; margin: 6px 0; }

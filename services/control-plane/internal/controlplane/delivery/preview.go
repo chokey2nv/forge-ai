@@ -131,7 +131,10 @@ func FindRemote(ctx context.Context, repoPath string) (*Remote, error) {
 			name = n
 		}
 	}
-	url, err := git(ctx, repoPath, "remote", "get-url", name)
+	// The configured URL, not get-url's insteadOf-rewritten one: it names
+	// the forge gh talks to even when git traffic is redirected (a mirror,
+	// or the test harness's local bare repository).
+	url, err := git(ctx, repoPath, "config", "--get", "remote."+name+".url")
 	if err != nil {
 		return nil, fmt.Errorf("remote %s: %w", name, err)
 	}

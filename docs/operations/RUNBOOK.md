@@ -3,7 +3,7 @@
 Setup, startup, and validation for the platform at its current build state (Phases 1–10). Phase 11+ features are not covered.
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 2 Nov 2026 (Phases 8–10 verified end to end; see §5.7–§5.10 and §9).
+**Last updated:** 3 Nov 2026 (Phases 8–11 verified end to end; see §5.7–§5.11 and §9).
 
 ---
 
@@ -581,6 +581,8 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
 | `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
+| `rollback-local` | A delivered local merge, then an unrelated commit on the target, then `POST /tasks/{id}/rollback` | `ROLLED_BACK`; the target is one revert commit on top ("This reverts <merge>"); the fix is gone, the later work stays, the merge is still in history; recorded in `approvals`; a second rollback → 409 |
+| `rollback-pr` | A PR merged on the forge (the harness merges it into the bare origin), then a rollback | `REVERT_PR_OPEN`; `<parent>-revert` pushed as one commit on top of the forge's merge; `gh pr create --head <parent>-revert --title Revert: …`; revert merged → `ROLLED_BACK` |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
@@ -601,6 +603,17 @@ Copies `tests/evaluations/fixtures/parallel-features` (suite green at the start)
 **Pass criteria:** parent `REVIEW_PENDING`; at least 3 subtasks, all `INTEGRATED`; at least two ran at the same time (if not, the script prints the `child.serialized` reasons); wall time below the summed subtask time; one merge commit per subtask; `node --test` passes on the integrated branch. First run with Claude: 178s wall for 267s of subtask work (1.5x).
 
 The console's task page shows the same as a timeline: one bar per subtask from claim to integration.
+
+### 5.11 Phase 11 — Delivery and rollback with a real model
+
+```bash
+make phase11-delivery-slice
+# overrides: CP=… PROVIDER=claude MODEL=claude-haiku-5-5
+```
+
+Copies the `cart-pricing` fixture into a fresh repo with no remote, on `main`. Checks the parent branch exists as soon as the task is created and the delivery hint says approval merges locally into `main`; runs the task to `REVIEW_PENDING` (`main` unmoved); approves; then rolls back.
+
+**Pass criteria:** `MERGED` with `main` a merge of its old tip and the parent branch, the checkout clean, `node --test` passing; after the rollback `ROLLED_BACK`, with `main` one revert commit on top of the merge and its tree identical to the fixture's original.
 
 ---
 
@@ -678,6 +691,19 @@ curl -s localhost:8080/tasks/<taskId> | jq .delivery      # what happened
 curl -s -X POST localhost:8080/tasks/<taskId>/deliver     # retry (202); the console has a Retry delivery button
 ```
 
+A delivered (`MERGED`) task can be rolled back. Rollback reverts; it never rewrites history:
+
+```bash
+curl -s -X POST localhost:8080/tasks/<taskId>/rollback -H 'Content-Type: application/json' \
+  -d '{"reviewer":"you","rationale":"why"}'               # 202, ROLLING_BACK
+curl -s localhost:8080/tasks/<taskId> | jq .delivery.rollback
+```
+
+- **Local:** a commit undoing the delivery merge lands on the target the same way the merge did (a dirty checkout is refused). → `ROLLED_BACK`, `rollback.revertCommit`. Later commits on the target are kept.
+- **Pull request:** a branch `<parent branch>-revert` is built on the remote's target, pushed, and a revert PR opened. → `REVERT_PR_OPEN`; merged on the forge → `ROLLED_BACK`, closed → back to `MERGED`.
+
+A rollback that cannot finish returns the task to `MERGED` with `rollback.error`; fix the cause and roll back again. The console shows a *Roll back* form on a merged task.
+
 ### 6.6 Escalated tasks
 
 A task goes `ESCALATED` when its reviewers reject `MAX_REVIEW_ROUNDS` rounds in a row; a parent goes `ESCALATED` as soon as its final review rejects the combined change. A parent waits on an escalated child; nothing proceeds until a human decides.
@@ -744,6 +770,8 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 | Delivery `BLOCKED`: "… moved since the work started and conflicts with it" | The target changed the same lines. Merge the target into the parent branch yourself, resolve, commit, then retry |
 | Delivery `BLOCKED`: "verification failed after merging …" | The target's new commits break the combined change; fix on the parent branch and retry |
 | Delivery `BLOCKED`: "push … rejected" / "gh pr create: …" | The remote branch has commits Forge did not make (it never forces), or `gh` is not logged in / cannot see the repo. Check the hint's warnings |
+| Rollback fails: "the revert conflicts with later changes on the target" | Later commits changed the same lines. Revert by hand (`git revert -m 1 <mergeCommit>`), resolving the conflict |
+| Rollback fails: "… is not on <target>" | The delivery's merge commit is not on the target (it was rewritten or reset there); nothing to revert |
 | Task stays `DELIVERING` after a control-plane restart | Not resumed yet (Phase 11 gap): set it to `BLOCKED` in Mongo and retry delivery |
 | Creating a task answers 400 "detached HEAD" / "is not a branch" / "does not exist" | The target branch could not be resolved. Pass `targetBranch` explicitly |
 | Parent `BLOCKED`: "decomposition: dependency cycle: …" | The head engineer's `dependsOn` edges form a loop; re-dispatch |
@@ -847,8 +875,9 @@ rm -rf .forge
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
 | 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
+| 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
 
-Not covered yet: approval changes the state only; nothing merges the integration branch (Phase 11). The Phase 6 eval harness has not been re-run.
+Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a delivery interrupted by a control-plane restart. The Phase 6 eval harness has not been re-run.
 
 ---
 

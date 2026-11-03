@@ -177,35 +177,64 @@ func (h *Handlers) openPullRequest(ctx context.Context, task *domain.Task, previ
 	h.removeIntegrationWorktree(ctx, task)
 }
 
-// PollPullRequests follows open pull requests: merged on the forge → MERGED,
-// closed unmerged → REJECTED. Called periodically.
+// PollPullRequests follows open pull requests. A delivery PR merged on the
+// forge -> MERGED, closed -> REJECTED; a revert PR merged -> ROLLED_BACK,
+// closed -> MERGED (the delivery stands). Called periodically.
 func (h *Handlers) PollPullRequests(ctx context.Context) {
-	tasks, err := h.Tasks.ListByStatus(ctx, domain.StatusPROpen, 0)
-	if err != nil {
-		log.Printf("pr watcher: %v", err)
+	for _, status := range []domain.TaskStatus{domain.StatusPROpen, domain.StatusRevertPROpen} {
+		tasks, err := h.Tasks.ListByStatus(ctx, status, 0)
+		if err != nil {
+			log.Printf("pr watcher: %v", err)
+			return
+		}
+		for _, task := range tasks {
+			h.pollPullRequest(ctx, task)
+		}
+	}
+}
+
+func (h *Handlers) pollPullRequest(ctx context.Context, task *domain.Task) {
+	d := task.Delivery
+	if d == nil {
 		return
 	}
-	for _, task := range tasks {
-		d := task.Delivery
-		if d == nil || d.PRURL == "" {
-			continue
+	url := d.PRURL
+	if task.Status == domain.StatusRevertPROpen {
+		if d.Rollback == nil {
+			return
 		}
-		state, merge, err := delivery.PRState(ctx, h.Delivery.GH, task.RepoPath, d.PRURL)
-		if err != nil {
-			log.Printf("pr watcher %s: %v", task.ID, err)
-			continue
-		}
-		switch state {
-		case "MERGED":
-			d.MergeCommit, d.FinishedAt = merge, time.Now().UTC()
-			_ = h.Tasks.UpdateDelivery(ctx, task.ID, d, time.Now().UTC())
-			_ = h.SM.Transition(ctx, task, domain.StatusMerged, "pull request merged: "+d.PRURL)
-		case "CLOSED":
-			d.FinishedAt = time.Now().UTC()
-			_ = h.Tasks.UpdateDelivery(ctx, task.ID, d, time.Now().UTC())
-			_ = h.SM.Transition(ctx, task, domain.StatusRejected, "pull request closed without merging: "+d.PRURL)
-		}
+		url = d.Rollback.PRURL
 	}
+	if url == "" {
+		return
+	}
+	state, merge, err := delivery.PRState(ctx, h.Delivery.GH, task.RepoPath, url)
+	if err != nil {
+		log.Printf("pr watcher %s: %v", task.ID, err)
+		return
+	}
+	if state != "MERGED" && state != "CLOSED" {
+		return
+	}
+	now := time.Now().UTC()
+	var to domain.TaskStatus
+	var reason string
+	switch {
+	case task.Status == domain.StatusPROpen && state == "MERGED":
+		d.MergeCommit, d.FinishedAt = merge, now
+		to, reason = domain.StatusMerged, "pull request merged: "+url
+	case task.Status == domain.StatusPROpen:
+		d.FinishedAt = now
+		to, reason = domain.StatusRejected, "pull request closed without merging: "+url
+	case state == "MERGED":
+		d.Rollback.RevertCommit, d.Rollback.FinishedAt = merge, now
+		to, reason = domain.StatusRolledBack, "revert pull request merged: "+url
+	default:
+		d.Rollback.Error, d.Rollback.FinishedAt = "revert pull request closed without merging", now
+		to, reason = domain.StatusMerged, "revert pull request closed without merging: "+url
+	}
+	_ = h.Tasks.UpdateDelivery(ctx, task.ID, d, now)
+	_ = h.SM.Transition(ctx, task, to, reason)
 }
 
 // RetryDelivery re-runs a delivery that was blocked (dirty checkout,

@@ -70,6 +70,24 @@ func MergeLocally(ctx context.Context, repoPath, target, branch, message string)
 		return "", ErrTargetMoved
 	}
 
+	wt, err := cleanCheckout(ctx, repoPath, target)
+	if err != nil {
+		return "", err
+	}
+	tree, err := git(ctx, repoPath, "rev-parse", b+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	merge, err := commitTree(ctx, repoPath, tree, message, t, b)
+	if err != nil {
+		return "", fmt.Errorf("create merge commit: %w", err)
+	}
+	return merge, advance(ctx, repoPath, wt, target, t, merge, message)
+}
+
+// cleanCheckout returns the worktree that has target checked out ("" for
+// none), refusing one with uncommitted changes.
+func cleanCheckout(ctx context.Context, repoPath, target string) (string, error) {
 	wt, dirty, err := TargetCheckout(ctx, repoPath, target)
 	if err != nil {
 		return "", err
@@ -77,31 +95,38 @@ func MergeLocally(ctx context.Context, repoPath, target, branch, message string)
 	if dirty {
 		return "", fmt.Errorf("%w (%s)", ErrTargetDirty, wt)
 	}
+	return wt, nil
+}
 
-	tree, err := git(ctx, repoPath, "rev-parse", b+"^{tree}")
+func commitTree(ctx context.Context, repoPath, tree, message string, parents ...string) (string, error) {
+	args := []string{"-C", repoPath, "commit-tree", tree}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	cmd := exec.CommandContext(ctx, "git", append(args, "-m", message)...)
+	cmd.Env = identityEnv(ctx, repoPath)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-	commit := exec.CommandContext(ctx, "git", "-C", repoPath, "commit-tree", tree, "-p", t, "-p", b, "-m", message)
-	commit.Env = identityEnv(ctx, repoPath)
-	out, err := commit.Output()
-	if err != nil {
-		return "", fmt.Errorf("create merge commit: %w", err)
-	}
-	merge := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
+}
 
+// advance moves target from old to commit (a descendant of old). A clean
+// checkout wt is fast-forwarded, so the branch and the files the user sees
+// move together; otherwise the ref moves by compare-and-swap. Either fails
+// with ErrTargetMoved if the branch moved meanwhile.
+func advance(ctx context.Context, repoPath, wt, target, old, commit, message string) error {
 	if wt != "" {
-		// Moves the branch and the files the user sees together; fails if
-		// the branch moved meanwhile.
-		if _, err := git(ctx, wt, "merge", "--ff-only", "-q", merge); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrTargetMoved, err)
+		if _, err := git(ctx, wt, "merge", "--ff-only", "-q", commit); err != nil {
+			return fmt.Errorf("%w: %v", ErrTargetMoved, err)
 		}
-		return merge, nil
+		return nil
 	}
-	if _, err := git(ctx, repoPath, "update-ref", "-m", "forge: "+message, "refs/heads/"+target, merge, t); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrTargetMoved, err)
+	if _, err := git(ctx, repoPath, "update-ref", "-m", "forge: "+message, "refs/heads/"+target, commit, old); err != nil {
+		return fmt.Errorf("%w: %v", ErrTargetMoved, err)
 	}
-	return merge, nil
+	return nil
 }
 
 // Push publishes branch to remote. It never forces.
