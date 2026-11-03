@@ -290,7 +290,7 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	t := &domain.Thread{
-		TaskID: task.ID, Revision: n, Commit: commit, Status: domain.ThreadOpen,
+		TaskID: task.ID, Revision: n, ShownOn: n, Commit: commit, Status: domain.ThreadOpen,
 		Comments:  []domain.Comment{{Author: body.Author, Kind: domain.CommentHuman, Body: body.Body, Revision: n, At: now}},
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -299,6 +299,8 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "anchor: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		origin := *t.Anchor
+		t.Origin = &origin
 	}
 	if err := h.Threads.Create(ctx, t); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

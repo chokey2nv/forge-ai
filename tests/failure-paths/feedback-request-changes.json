@@ -56,6 +56,10 @@
               {
                 "thread": "T2",
                 "body": "The existing suite already covers 0%: applyDiscount(50, 0) returns 50."
+              },
+              {
+                "thread": "T3",
+                "body": "The exports stay as they are."
               }
             ]
           }
@@ -85,6 +89,13 @@
           "arguments": {
             "path": "src/price.js",
             "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nconst CENTS = 100;\n\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * CENTS) / CENTS;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        },
+        {
+          "name": "reply_to_thread",
+          "arguments": {
+            "thread": "T1",
+            "body": "Named it CENTS."
           }
         }
       ]

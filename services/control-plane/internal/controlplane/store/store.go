@@ -103,4 +103,7 @@ type ThreadRepo interface {
 	SetStatus(ctx context.Context, id string, status domain.ThreadStatus, by string, at time.Time) error
 	// SetAddressedBy records the follow-up subtask that takes the thread on.
 	SetAddressedBy(ctx context.Context, id, taskID string, at time.Time) error
+	// SavePlacement records where a thread sits on a new revision: moved to
+	// anchor on shownOn at commit, or outdated on revision outdatedOn.
+	SavePlacement(ctx context.Context, id string, anchor *domain.Anchor, shownOn int, commit string, outdatedOn int, at time.Time) error
 }

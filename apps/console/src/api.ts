@@ -114,9 +114,17 @@ export interface ThreadComment {
 export interface Thread {
   id: string;
   taskId: string;
+  /** The revision it was opened on. */
   revision: number;
+  /** The revision it is placed on now: later revisions that keep its line carry it along (12.4). */
+  shownOn?: number;
   commit: string;
   anchor?: Anchor;
+  /** The anchor as opened, before any move. */
+  origin?: Anchor;
+  /** A later revision (outdatedOn) changed or removed its line; anchor keeps its last place. */
+  outdated?: boolean;
+  outdatedOn?: number;
   status: ThreadStatus;
   comments: ThreadComment[];
   addressedBy?: string;
@@ -144,6 +152,9 @@ export interface ThreadList {
 
 /** Threads and replies are accepted only while a human is looking at the change. */
 export const FEEDBACK_OPEN = new Set<TaskStatus>(["REVIEW_PENDING", "ESCALATED"]);
+
+/** The revision a thread is placed on (threads from before 12.4 have no shownOn). */
+export const shownOn = (t: Thread) => t.shownOn || t.revision;
 
 export const threadWhere = (t: Thread) =>
   t.anchor ? `${t.anchor.path}:${t.anchor.line}${t.anchor.side === "old" ? " (old)" : ""}` : "general";

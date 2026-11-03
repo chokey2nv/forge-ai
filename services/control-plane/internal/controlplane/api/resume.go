@@ -27,7 +27,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, _ := h.Tasks.Get(ctx, run.TaskID)
-	def, sysPrompt, tools, err := h.composeImplementer(run)
+	def, sysPrompt, tools, err := h.composeImplementer(run, task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

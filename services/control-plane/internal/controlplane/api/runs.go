@@ -192,6 +192,8 @@ func (h *Handlers) integrateChild(ctx context.Context, run *domain.WorkflowRun, 
 		if err := h.Integrator.Integrate(ctx, task, latest.BaseCommit, diff); err != nil {
 			log.Printf("integration failed for child %s: %v", task.ID, err)
 			// Integrator already transitioned child and parent to BLOCKED.
+		} else {
+			h.postThreadReplies(ctx, task, latest)
 		}
 	}
 	workspace.Cleanup(ctx, &workspace.Workspace{
@@ -202,7 +204,7 @@ func (h *Handlers) integrateChild(ctx context.Context, run *domain.WorkflowRun, 
 
 // composeImplementer resolves the agent that produced run (e.g. a child's
 // assigned agent), falling back to the stock implementer.
-func (h *Handlers) composeImplementer(run *domain.WorkflowRun) (*agent.AgentDefinition, string, []agent.ToolSchema, error) {
+func (h *Handlers) composeImplementer(run *domain.WorkflowRun, task *domain.Task) (*agent.AgentDefinition, string, []agent.ToolSchema, error) {
 	def, ok := h.Registry.GetAgent(agentNameOf(run))
 	if !ok {
 		def, ok = h.Registry.GetAgent("implementer")
@@ -214,7 +216,7 @@ func (h *Handlers) composeImplementer(run *domain.WorkflowRun) (*agent.AgentDefi
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("compose %s: %w", def.Name, err)
 	}
-	return def, sysPrompt, tools, nil
+	return def, sysPrompt, agent.WithThreadReplies(tools, len(task.Addresses) > 0), nil
 }
 
 func bulletList(ss []string) string {
@@ -327,7 +329,7 @@ func (h *Handlers) handlePlannerDone(run *domain.WorkflowRun, task *domain.Task,
 
 func (h *Handlers) invokeImplementer(run *domain.WorkflowRun, task *domain.Task, taskPrompt string) {
 	ctx := context.Background()
-	def, sysPrompt, tools, err := h.composeImplementer(run)
+	def, sysPrompt, tools, err := h.composeImplementer(run, task)
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())
@@ -365,7 +367,7 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 		return
 	}
 
-	def, sysPrompt, tools, err := h.composeImplementer(latest)
+	def, sysPrompt, tools, err := h.composeImplementer(latest, task)
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, err.Error())

@@ -165,3 +165,9 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .followups { list-style: none; padding: 0; margin: 0; font-size: 14px; }
 .followups li { padding: 6px 0; border-bottom: 1px dashed #eee; overflow-wrap: anywhere; }
 .followups .hint, .followups .error { font-size: 13px; margin-top: 2px; }
+
+/* Phase 12.4: threads across revisions */
+.thread-context { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 6px 8px; margin: 4px 0; font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+.thread-context mark { background: #fff8c5; display: inline-block; min-width: 100%; }
+.off-diff { margin: 6px 0; }
+.off-diff > summary { cursor: pointer; font-size: 13px; color: #57606a; }

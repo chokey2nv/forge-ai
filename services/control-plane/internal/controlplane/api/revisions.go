@@ -31,6 +31,7 @@ func (h *Handlers) recordRevision(ctx context.Context, task *domain.Task, review
 		return
 	}
 	task.Revisions = append(task.Revisions, rev)
+	h.reanchorThreads(ctx, task, rev)
 	_ = h.Events.Append(ctx, &domain.Event{
 		TaskID: task.ID, Type: "revision.recorded",
 		Reason: "r" + strconv.Itoa(rev.N) + " at " + shortSHA(commit), At: rev.At,

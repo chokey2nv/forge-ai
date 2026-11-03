@@ -50,6 +50,19 @@ var ToolCatalog = map[string]ToolSchema{
 			"required": []string{"tasks"},
 		},
 	},
+	// Given only to follow-up subtasks that address review threads (Phase 12.4).
+	"reply_to_thread": {
+		Name:        "reply_to_thread",
+		Description: "Reply to a review thread your task addresses: say what you changed, or why not. The reply is posted on the thread once your change is integrated.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"thread": map[string]any{"type": "string", "description": "The thread as your task lists it (T1, T2, …)"},
+				"body":   map[string]any{"type": "string"},
+			},
+			"required": []string{"thread", "body"},
+		},
+	},
 	"submit_plan": {
 		Name:        "submit_plan",
 		Description: "Submit the implementation plan. Call this when you have enough information about the codebase to describe the fix.",
@@ -193,4 +206,18 @@ func ResolveTools(names []string) ([]ToolSchema, []string) {
 		}
 	}
 	return out, missing
+}
+
+// WithThreadReplies adds reply_to_thread for a follow-up subtask that
+// addresses review threads (Phase 12.4); other agents never get it.
+func WithThreadReplies(tools []ToolSchema, addresses bool) []ToolSchema {
+	if !addresses {
+		return tools
+	}
+	for _, t := range tools {
+		if t.Name == "reply_to_thread" {
+			return tools
+		}
+	}
+	return append(tools, ToolCatalog["reply_to_thread"])
 }

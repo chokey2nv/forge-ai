@@ -312,12 +312,12 @@ func threadBrief(threads []*domain.Thread, ids []string) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n\nReview comments this subtask addresses:\n")
-	for _, id := range ids {
+	for i, id := range ids {
 		t := byID[id]
 		if t == nil {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s", t.Where())
+		fmt.Fprintf(&b, "- T%d: %s", i+1, t.Where())
 		if t.Anchor != nil {
 			fmt.Fprintf(&b, " (`%s`)", strings.TrimSpace(t.Anchor.LineText))
 		}
@@ -326,5 +326,6 @@ func threadBrief(threads []*domain.Thread, ids []string) string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("\nWhen your change is done, reply on each of these threads with reply_to_thread (thread T1, T2, …): what you changed, or why you did not.\n")
 	return b.String()
 }

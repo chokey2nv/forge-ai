@@ -76,3 +76,14 @@ func (r *ThreadRepo) SetAddressedBy(ctx context.Context, id, taskID string, at t
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"addressedBy": taskID, "updatedAt": at}})
 	return err
 }
+
+func (r *ThreadRepo) SavePlacement(ctx context.Context, id string, anchor *domain.Anchor, shownOn int, commit string, outdatedOn int, at time.Time) error {
+	set := bson.M{"updatedAt": at}
+	if outdatedOn > 0 {
+		set["outdated"], set["outdatedOn"] = true, outdatedOn
+	} else {
+		set["anchor"], set["shownOn"], set["commit"] = anchor, shownOn, commit
+	}
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
+	return err
+}

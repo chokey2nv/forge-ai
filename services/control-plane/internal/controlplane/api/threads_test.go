@@ -160,6 +160,16 @@ func (s *memThreads) SetAddressedBy(_ context.Context, id, taskID string, _ time
 	return nil
 }
 
+func (s *memThreads) SavePlacement(_ context.Context, id string, a *domain.Anchor, shownOn int, commit string, outdatedOn int, _ time.Time) error {
+	t := s.m[id]
+	if outdatedOn > 0 {
+		t.Outdated, t.OutdatedOn = true, outdatedOn
+	} else {
+		t.Anchor, t.ShownOn, t.Commit = a, shownOn, commit
+	}
+	return nil
+}
+
 type noEvents struct{ store.EventRepo }
 
 func (noEvents) Append(context.Context, *domain.Event) error { return nil }

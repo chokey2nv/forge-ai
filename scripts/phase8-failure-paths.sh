@@ -661,10 +661,11 @@ rollback_delivery() { # local | pr  (task, repo, target, branch, origin from run
 request_changes() { # task json -> HTTP code (body in $WORK/rc.out)
   curl -s -o "$WORK/rc.out" -w '%{http_code}' -X POST "$CP/tasks/$1/request-changes" -H 'Content-Type: application/json' -d "$2"
 }
+has_event() { [ "$(event_count "$1" "$2" "$3")" -ge 1 ]; } # task type reason-substring
 thread_ids() { curl -sf "$CP/tasks/$1/threads" | jq -r '.threads[].id'; }
 
 run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry | budget
-  local repo task final code line t1 t2 first r1
+  local repo task final code line t1 t2 t3 first r1
   repo=$(new_repo)
   : >"$WORK/prompts.jsonl"
   case "$1" in
@@ -701,7 +702,8 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
   line=$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -n Math.round | head -1 | cut -d: -f1)
   post_thread "$task" "{\"author\":\"dana\",\"body\":\"Name the 100.\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$line}}" >/dev/null
   post_thread "$task" '{"author":"dana","body":"Is 0% covered by a test?"}' >/dev/null
-  t1=$(thread_ids "$task" | sed -n 1p); t2=$(thread_ids "$task" | sed -n 2p)
+  [ "$1" = request-changes ] && post_thread "$task" "{\"author\":\"dana\",\"body\":\"Export a default too?\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$((line + 3))}}" >/dev/null
+  t1=$(thread_ids "$task" | sed -n 1p); t2=$(thread_ids "$task" | sed -n 2p); t3=$(thread_ids "$task" | sed -n 3p)
 
   case "$1" in
     budget)
@@ -727,7 +729,7 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
     request-changes)
       code=$(request_changes "$task" '{"reviewer":"dana"}')
       check "request changes answers DECOMPOSING with follow-up 1" \
-        "$(jq -e '.status == "DECOMPOSING" and .followUp == 1 and .openThreads == 2' "$WORK/rc.out" >/dev/null; echo $?)"
+        "$(jq -e '.status == "DECOMPOSING" and .followUp == 1 and .openThreads == 3' "$WORK/rc.out" >/dev/null; echo $?)"
       check "threads cannot change while the follow-up runs (409)" \
         "$([ "$(post_thread "$task" '{"author":"dana","body":"late"}' | head -c3)" = 409 ]; echo $?)"
       final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED|ESCALATED" 300) || true
@@ -743,8 +745,19 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
         "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t1 "$t1" --arg t2 "$t2" --arg f "$f" '(.threads[] | select(.id == $t1) | .addressedBy == $f) and (.threads[] | select(.id == $t2) | .status == "addressed" and .comments[1].author == "head-engineer" and .comments[1].kind == "agent" and (.comments[1].body | contains("already covers 0%")))' >/dev/null; echo $?)"
       check "r2's changes since r1 are just the named constant" \
         "$(curl -sf "$CP/tasks/$task/diff?revision=2&since=1" | jq -r .diff | grep -q '^+const CENTS = 100;' && [ "$(curl -sf "$CP/tasks/$task/diff?revision=2&since=1" | jq -r .diff | grep -c '^diff --git')" = 1 ]; echo $?)"
-      check "the request is recorded as a decision with both threads" \
-        "$(curl -sf "$CP/tasks/$task/approvals" | jq -e '[.[] | select(.action == "request_changes")] | length == 1 and (.[0].unresolvedThreads | length == 2)' >/dev/null; echo $?)"
+      check "the request is recorded as a decision with the three threads" \
+        "$(curl -sf "$CP/tasks/$task/approvals" | jq -e '[.[] | select(.action == "request_changes")] | length == 1 and (.[0].unresolvedThreads | length == 3)' >/dev/null; echo $?)"
+      # Phase 12.4: the subtask's reply, and the threads placed on r2 (just
+      # after the revision is recorded).
+      for _ in $(seq 1 20); do has_event "$task" thread.moved "$t3" && break; sleep 0.5; done
+      check "the follow-up subtask was told to reply on T1" \
+        "$(curl -sf "$CP/tasks/$f" | jq -e '.requirement | contains("- T1: src/price.js:") and contains("reply_to_thread")' >/dev/null; echo $?)"
+      check "its reply is on T1 as an agent comment on r2, and T1 is addressed" \
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$t1" '.threads[] | select(.id == $t) | .status == "addressed" and (.comments | length == 2) and .comments[1].author == "implementer" and .comments[1].kind == "agent" and .comments[1].body == "Named it CENTS." and .comments[1].revision == 2' >/dev/null; echo $?)"
+      check "T1's line was rewritten in r2: outdated, still shown on r1" \
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$t1" --arg l "$line" '.threads[] | select(.id == $t) | .outdated and .outdatedOn == 2 and .shownOn == 1 and .anchor.line == ($l|tonumber)' >/dev/null && has_event "$task" thread.outdated "$t1"; echo $?)"
+      check "T3's line is unchanged: moved down two lines onto r2" \
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$t3" --arg l "$line" '.threads[] | select(.id == $t) | (.outdated | not) and .shownOn == 2 and .anchor.line == ($l|tonumber) + 5 and .origin.line == ($l|tonumber) + 3 and (.anchor.lineText | startswith("module.exports"))' >/dev/null && has_event "$task" thread.moved "$t3"; echo $?)"
       code=$(request_changes "$task" '{"reviewer":"dana","summary":"once more"}')
       check "a budget of two revisions allows no second follow-up (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
       check "approving r2 delivers it -> MERGED" \

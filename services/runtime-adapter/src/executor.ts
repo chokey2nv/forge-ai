@@ -116,6 +116,16 @@ export async function executeToolCall(
         return { ok: true, output: r.stdout || "(clean)" };
       }
 
+      case "reply_to_thread": {
+        // Phase 12.4: a follow-up subtask answers a human's review thread.
+        // Nothing happens in the workspace; the control plane reads the call
+        // from the conversation and posts the reply once the work integrates.
+        const thread = String(call.arguments.thread ?? "").trim();
+        const body = String(call.arguments.body ?? "").trim();
+        if (!thread || !body) return { ok: false, output: "reply_to_thread needs a thread and a body" };
+        return { ok: true, output: `Noted. Your reply on ${thread} is posted when your change is integrated.` };
+      }
+
       default:
         return { ok: false, output: `unknown tool: ${call.name}` };
     }

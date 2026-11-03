@@ -7,13 +7,14 @@ import (
 
 // ThreadStatus is where a review thread stands. Agents can only move a
 // thread to addressed (by replying); resolving and reopening are human.
+// Whether its line still exists is separate: see Thread.Outdated.
 type ThreadStatus string
 
 const (
 	ThreadOpen      ThreadStatus = "open"
 	ThreadAddressed ThreadStatus = "addressed"
 	ThreadResolved  ThreadStatus = "resolved"
-	ThreadOutdated  ThreadStatus = "outdated"
+	ThreadOutdated  ThreadStatus = "outdated" // unused since 12.4: see Thread.Outdated
 )
 
 // Who wrote a comment.
@@ -29,9 +30,17 @@ type Thread struct {
 	ID       string `bson:"_id" json:"id"`
 	TaskID   string `bson:"taskId" json:"taskId"`
 	Revision int    `bson:"revision" json:"revision"` // 0: the work in progress, before any revision
-	// Commit is the parent branch tip the anchor refers to.
-	Commit      string       `bson:"commit" json:"commit"`
-	Anchor      *Anchor      `bson:"anchor,omitempty" json:"anchor,omitempty"`
+	// Commit is the parent branch tip the anchor refers to: the revision the
+	// thread is shown on (ShownOn), which moves as new revisions keep its line.
+	Commit  string  `bson:"commit" json:"commit"`
+	ShownOn int     `bson:"shownOn" json:"shownOn"`
+	Anchor  *Anchor `bson:"anchor,omitempty" json:"anchor,omitempty"`
+	// Origin is the anchor as the thread was opened, before any move.
+	Origin *Anchor `bson:"origin,omitempty" json:"origin,omitempty"`
+	// Outdated: a later revision (OutdatedOn) changed or removed the line.
+	// The thread keeps its last place and context.
+	Outdated    bool         `bson:"outdated,omitempty" json:"outdated,omitempty"`
+	OutdatedOn  int          `bson:"outdatedOn,omitempty" json:"outdatedOn,omitempty"`
 	Status      ThreadStatus `bson:"status" json:"status"`
 	Comments    []Comment    `bson:"comments" json:"comments"`
 	AddressedBy string       `bson:"addressedBy,omitempty" json:"addressedBy,omitempty"` // subtask id
@@ -58,6 +67,15 @@ type Comment struct {
 	Body     string    `bson:"body" json:"body"`
 	Revision int       `bson:"revision" json:"revision"`
 	At       time.Time `bson:"at" json:"at"`
+}
+
+// Shown is the revision the thread is placed on; threads from before
+// ShownOn existed are on the revision they were opened on.
+func (t *Thread) Shown() int {
+	if t.ShownOn == 0 {
+		return t.Revision
+	}
+	return t.ShownOn
 }
 
 // Unresolved reports whether the thread still needs a human's attention.

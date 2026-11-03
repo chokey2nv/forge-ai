@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  api, FEEDBACK_OPEN, isParent, threadWhere,
+  api, FEEDBACK_OPEN, isParent, shownOn, threadWhere,
   type ReviewerNote, type Task, type TaskDiff, type Thread, type ThreadList,
 } from "./api";
 import { parseDiff, filePath, type DiffFile, type DiffLine } from "./diff";
@@ -50,10 +50,13 @@ export function DiffView({ task, feedback }: { task: Task; feedback?: Feedback }
 
   const pick = (n: number) => { setPicked(n === revisions.length ? null : n); if (since >= n) setSince(0); };
 
-  // Threads and notes sit on the revision they were made on; a "changes
-  // since" view has other line numbers on its old side, so it shows none inline.
+  // Threads sit on the revision they are shown on (later revisions carry a
+  // line's thread along until its line changes: from then on it is outdated
+  // and listed with its context instead). A "changes since" view keeps the new side's line
+  // numbers, so only its old-side threads and the notes cannot go inline.
   const inline = parent && since === 0;
-  const threads = (feedback?.threads?.threads ?? []).filter((t) => t.revision === revision);
+  const threads = (feedback?.threads?.threads ?? []).filter((t) =>
+    parent && shownOn(t) === revision && (since === 0 || t.anchor?.side !== "old"));
   const notes = (feedback?.threads?.notes ?? []).filter((n) => n.revision === revision);
   const canComment = !!feedback && parent && since === 0 && FEEDBACK_OPEN.has(task.status);
   const ctx: FileCtx = { task, revision, canComment, feedback };
@@ -101,12 +104,13 @@ export function DiffView({ task, feedback }: { task: Task; feedback?: Feedback }
         </p>
       )}
       {parent && feedback && (
-        <ThreadIndex task={task} feedback={feedback} revision={revision} canComment={canComment} notes={unplacedNotes} />
+        <ThreadIndex task={task} feedback={feedback} revision={revision} canComment={canComment} notes={unplacedNotes}
+          placed={new Set(threads.filter((t) => t.anchor).map((t) => t.id))} />
       )}
       {canComment && <p className="hint">Click a line number to comment on that line.</p>}
       {files.map((f) => (
         <FileDiff key={filePath(f) + revision + "-" + since} file={f} open={lineCount <= OPEN_LIMIT}
-          threads={inline ? threads.filter((t) => t.anchor?.path === filePath(f)) : []}
+          threads={threads.filter((t) => t.anchor?.path === filePath(f))}
           notes={inline ? notes.filter((n) => n.path === filePath(f) && n.line && shown.has(`${n.path}:${n.line}`)) : []}
           ctx={ctx} />
       ))}
@@ -202,13 +206,19 @@ function FileDiff({ file, open, threads, notes, ctx }: {
 }
 
 /** Every thread on the change, the reviewer notes not shown on a line, and a general comment box. */
-function ThreadIndex({ task, feedback, revision, canComment, notes }: {
+function ThreadIndex({ task, feedback, revision, canComment, notes, placed }: {
   task: Task; feedback: Feedback; revision: number; canComment: boolean; notes: ReviewerNote[];
+  /** Threads shown on a line of the diff below. */
+  placed: Set<string>;
 }) {
   const [composing, setComposing] = useState(false);
   const all = feedback.threads?.threads ?? [];
-  const general = all.filter((t) => !t.anchor && t.revision === revision);
-  const elsewhere = all.filter((t) => t.revision !== revision);
+  // A general thread is about the whole change, whichever revision it was opened on.
+  const general = all.filter((t) => !t.anchor);
+  // Outdated threads, and line threads on this revision the view cannot place (old side in "changes since").
+  const offDiff = all.filter((t) => t.anchor && !placed.has(t.id) &&
+    (t.outdated ? revision === 0 || revision >= (t.outdatedOn ?? 0) : shownOn(t) === revision));
+  const elsewhere = all.filter((t) => !placed.has(t.id) && !offDiff.includes(t) && !(general.includes(t)));
   const open = all.filter((t) => t.status !== "resolved").length;
   const ctx: FileCtx = { task, revision, canComment, feedback };
   if (!all.length && !notes.length && !canComment) return null;
@@ -220,7 +230,8 @@ function ThreadIndex({ task, feedback, revision, canComment, notes }: {
           {all.map((t) => (
             <li key={t.id}>
               <span className={`thread-status ${t.status}`}>{t.status}</span> <code>{threadWhere(t)}</code>
-              <span className="version"> r{t.revision}</span> — {t.comments[0]?.body.slice(0, 100)}
+              {t.outdated && <span className="thread-status outdated">outdated r{t.outdatedOn}</span>}
+              <span className="version"> r{t.revision}{shownOn(t) !== t.revision ? `→r${shownOn(t)}` : ""}</span> — {t.comments[0]?.body.slice(0, 100)}
               <span className="version"> ({t.comments[0]?.author}{t.comments.length > 1 ? `, ${t.comments.length - 1} repl${t.comments.length === 2 ? "y" : "ies"}` : ""})</span>
               {t.addressedBy && t.status !== "resolved" && <span className="version"> · taken on by a follow-up subtask</span>}
             </li>
@@ -228,6 +239,12 @@ function ThreadIndex({ task, feedback, revision, canComment, notes }: {
         </ul>
       )}
       {general.map((t) => <ThreadView key={t.id} thread={t} ctx={ctx} />)}
+      {offDiff.length > 0 && (
+        <details className="off-diff" open>
+          <summary>{offDiff.length} thread{offDiff.length === 1 ? "" : "s"} not on a line of this view</summary>
+          {offDiff.map((t) => <ThreadView key={t.id} thread={t} ctx={ctx} withContext />)}
+        </details>
+      )}
       {elsewhere.length > 0 && <p className="hint">{elsewhere.length} thread{elsewhere.length === 1 ? " is" : "s are"} on another revision; pick it above to see {elsewhere.length === 1 ? "it" : "them"} on its lines.</p>}
       {notes.length > 0 && (
         <div className="general-notes">
@@ -243,7 +260,7 @@ function ThreadIndex({ task, feedback, revision, canComment, notes }: {
   );
 }
 
-function ThreadView({ thread: t, ctx }: { thread: Thread; ctx: FileCtx }) {
+function ThreadView({ thread: t, ctx, withContext }: { thread: Thread; ctx: FileCtx; withContext?: boolean }) {
   const [replying, setReplying] = useState(false);
   const [err, setErr] = useState("");
   const fb = ctx.feedback!;
@@ -256,11 +273,22 @@ function ThreadView({ thread: t, ctx }: { thread: Thread; ctx: FileCtx }) {
         <span className={`thread-status ${t.status}`}>{t.status}</span> <code>{threadWhere(t)}</code>
         {t.resolvedBy && <span className="version"> resolved by {t.resolvedBy}</span>}
         {t.addressedBy && !t.resolvedBy && <span className="version"> · taken on by follow-up subtask <code>{t.addressedBy}</code></span>}
+        {t.outdated && <span className="version"> · <span className="thread-status outdated">outdated</span> r{t.outdatedOn} changed this line</span>}
+        {t.anchor && (shownOn(t) !== t.revision || (t.origin && t.origin.line !== t.anchor.line)) && (
+          <span className="version"> · opened on r{t.revision}{t.origin ? ` at ${t.origin.path}:${t.origin.line}` : ""}, {t.outdated ? "last on" : "now on"} r{shownOn(t)}</span>
+        )}
       </div>
+      {withContext && t.anchor && (
+        <pre className="thread-context">
+          {(t.anchor.before ?? []).map((l) => `  ${l}\n`).join("")}
+          <mark>{`${t.anchor.side === "old" ? "−" : "›"} ${t.anchor.lineText}`}</mark>{"\n"}
+          {(t.anchor.after ?? []).map((l) => `  ${l}\n`).join("")}
+        </pre>
+      )}
       {t.comments.map((c, i) => (
         <div key={i} className={`comment comment-${c.kind}`}>
           <strong>{c.author}</strong>{c.kind !== "human" && <span className="version"> ({c.kind})</span>}
-          <span className="version"> · {new Date(c.at).toLocaleString()}</span>
+          <span className="version"> · {c.revision ? `r${c.revision} · ` : ""}{new Date(c.at).toLocaleString()}</span>
           <p>{c.body}</p>
         </div>
       ))}

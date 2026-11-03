@@ -292,6 +292,7 @@ func (s *Scheduler) provisionAndStart(ctx context.Context, parent, child *domain
 
 	toolSchemas := make([]agent.ToolSchema, len(tools))
 	copy(toolSchemas, tools)
+	toolSchemas = agent.WithThreadReplies(toolSchemas, len(child.Addresses) > 0)
 	siblings, _ := s.Tasks.ListChildren(ctx, parent.ID)
 	if _, err := s.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:          run.ID,
