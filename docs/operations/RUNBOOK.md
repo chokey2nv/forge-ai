@@ -1,9 +1,9 @@
 # Forge AI — Operations Runbook
 
-Setup, startup, and validation for the platform at its current build state (Phases 1–10). Phase 11+ features are not covered.
+Setup, startup, and validation for the platform at its current build state (Phases 1–13; §9 lists what each phase's evidence is and what isn't covered yet).
 
 **Audience:** whoever is running the platform, not building it.
-**Last updated:** 3 Nov 2026 (Phases 8–12 verified end to end; see §5.7–§5.12 and §9).
+**Last updated:** 4 Nov 2026 (Phases 8–13 verified end to end; see §5.7–§5.12 and §9).
 
 ---
 
@@ -1096,11 +1096,11 @@ rm -rf .forge
 | 6. Eval suite formalized + console | Console verified; eval harness not | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
 | 7. Agent registry, skills, composer | Verified | A new agent is a markdown file and a reload | §5.9 `add-agent` |
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
-| 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
+| 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
-| 13. Hardening | Verified | Service trust, sign-in, roles, projects, sandbox, spend caps, delivery resumed after a restart | Unit tests; §5.9 `sandbox-postinstall`, `budget-tokens`, `restart-mid-delivery` and sign-in, role and project checks throughout; all five §5.7–§5.12 slices with Claude and sign-in on (`claude-haiku-5-5`, $0.09 by Forge's prices); console with Claude: a capped task stopped, cap raised, started again, approved, `MERGED` ($0.0057) |
 | 12. Human feedback | Verified | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; request changes through a head engineer follow-up; agent replies and threads carried across revisions | §5.12 with Claude (comment → request changes → the agent changes it and replies → r2 → resolve → approve → `MERGED`), and the same flow from the console. 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane. 12.3: unit tests (thread handling in a follow-up graph, final review IDs after escalation retries, revision budget, follow-up prompt, new state edges); §5.9 `feedback-request-changes`, `feedback-unhandled-thread`, `feedback-escalated-parent-retry`, `feedback-budget` (§6.5.3); console request changes against a live control plane. 12.4: unit tests (line relocation through a diff, reply parsing, re-anchoring on a real repo); `feedback-request-changes` also checks the implementer's reply on T1, T1 outdated in r2 and T3 moved two lines; console against a live control plane. 12.5: §5.12 slice and console run with `claude-haiku-5-5` |
+| 13. Hardening | Verified | Service trust, sign-in, roles, projects, sandbox, spend caps, delivery resumed after a restart | Unit tests; §5.9 `sandbox-postinstall`, `budget-tokens`, `restart-mid-delivery` and sign-in, role and project checks throughout; all five §5.7–§5.12 slices with Claude and sign-in on (`claude-haiku-5-5`, $0.09 by Forge's prices); console with Claude: a capped task stopped, cap raised, started again, approved, `MERGED` ($0.0057) |
 
 Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a rollback interrupted by a restart. The Phase 6 eval harness has not been re-run.
 
@@ -1206,4 +1206,4 @@ mongosh forge_ai --eval 'db.tasks.find().sort({createdAt:-1}).limit(1).pretty()'
 
 ---
 
-*Runbook reflects the verified Phase 10 build state (2 Nov 2026). It will be updated as Phases 11–13 land. If a command fails in a way not covered by §7, add it — that's a real gap.*
+*Runbook reflects the verified Phase 13 build state (4 Nov 2026). If a command fails in a way not covered by §7, add it — that's a real gap.*
