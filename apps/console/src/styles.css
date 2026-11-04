@@ -86,6 +86,7 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .delivery-pull_request { border-color: #b7c9f0; }
 .delivery-local_merge { border-color: #c5e3c5; background: #f6fbf6; }
 .delivery .warning, .warning { color: #9a5b00; }
+.blocked-why { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .badge-delivering { background: #fff4c2; }
 .badge-pr_open { background: #e2d6ff; }
 .badge-rolling_back, .badge-revert_pr_open { background: #ffd8a8; color: #7a3e00; }

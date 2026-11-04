@@ -156,9 +156,9 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 }
 
 function mapFinish(r: string | undefined, hasToolCalls: boolean): ModelResponse["finishReason"] {
+  if (r === "length") return "length"; // a tool call in it may be incomplete
   if (hasToolCalls) return "tool_calls";
   if (r === "stop") return "stop";
-  if (r === "length") return "length";
   return "error";
 }
 

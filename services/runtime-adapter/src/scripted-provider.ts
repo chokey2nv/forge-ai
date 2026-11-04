@@ -11,7 +11,8 @@
 //     "reviewer":      [ Turn, ... ]
 //   }
 //   Turn = { "content"?: string, "toolCalls"?: [{ "name", "arguments" }], "delayMs"?: number,
-//            "inputTokens"?: number, "outputTokens"?: number }  (reported as the call's usage)
+//            "inputTokens"?: number, "outputTokens"?: number,  (reported as the call's usage)
+//            "finishReason"?: "length" }  (a reply cut off at the output limit)
 //
 // Turns are consumed in order per role across all runs in this process, so a
 // retry or a reviewer's second pass simply takes the next turn. The role is
@@ -34,6 +35,7 @@ interface ScriptTurn {
   delayMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  finishReason?: "length";
 }
 
 type Queue = ScriptTurn[];
@@ -114,7 +116,7 @@ export class ScriptedProvider implements ModelProvider {
     return {
       content: turn.content ?? "",
       toolCalls,
-      finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
+      finishReason: turn.finishReason ?? (toolCalls.length > 0 ? "tool_calls" : "stop"),
       usage: { wallMs: turn.delayMs ?? 0, inputTokens: turn.inputTokens, outputTokens: turn.outputTokens },
     };
   }

@@ -466,6 +466,9 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
     } catch (e) { setErr(String(e)); }
   };
 
+  const childWhy = (c: Task) => (childEvents[c.id] ?? []).filter((e) => e.to === "BLOCKED").pop()?.reason ?? "";
+  const blockedChild = children.find((c) => c.status === "BLOCKED");
+
   useEffect(() => { reload(); }, [id]);
   // Follow a task while the pipeline is still moving it.
   useEffect(() => {
@@ -574,6 +577,14 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
+      {task.status === "BLOCKED" && !task.delivery && (children.length > 0 || task.parentId) && (
+        <p className="warning blocked-why">
+          {blockedChild
+            ? <>Blocked by subtask “{blockedChild.title ?? blockedChild.requirement.slice(0, 100)}”{childWhy(blockedChild) ? `: ${childWhy(blockedChild)}` : "."}</>
+            : <>Blocked{blockedWhy ? `: ${blockedWhy}` : "."}</>}
+        </p>
+      )}
+
       {children.length > 0 && (
         <section>
           <h3>Subtasks</h3>
@@ -583,7 +594,10 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
               {children.map((c) => (
                 <tr key={c.id} className="clickable" onClick={() => onOpen(c.id)}>
                   <td><StatusBadge status={c.status} /></td>
-                  <td>{c.title ?? c.requirement.slice(0, 100)}</td>
+                  <td>
+                    {c.title ?? c.requirement.slice(0, 100)}
+                    {c.status === "BLOCKED" && childWhy(c) && <div className="warning blocked-why">{childWhy(c)}</div>}
+                  </td>
                   <td><code>{c.assignedAgent}</code></td>
                   <td>
                     {[...(c.dependsOn ?? []).map(titleOf), ...(c.implicitDependsOn ?? []).map((d) => `${titleOf(d)} (overlapping scope)`)]

@@ -34,6 +34,9 @@
 #   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
 #   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
 #   feedback-budget    a task budgeted for one revision cannot be sent back
+#   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
+#   cut-off-always     every reply hits the limit: blocked, and the reason says so
+#   blank-reply        the agent stops with no text and no change: blocked, and the reason says so
 #   sandbox-postinstall an agent adds an install hook; it runs offline, unprivileged, on a read-only root (Phase 13.5)
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
@@ -48,7 +51,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery cut-off-reply cut-off-always blank-reply)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -244,6 +247,20 @@ run_scenario() {
   reasons "$child" | sed 's/^/      /'
 
   case "$SC" in
+    cut-off-reply)
+      check "asked again with a higher limit, the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "the cut-off call is spent, the partial reply isn't kept" \
+        "$(curl -sf "$CP/tasks/$child/spend" | jq -e '.task.spend.outputTokens >= 4096' >/dev/null && ! curl -sf "$CP/runs/run-$child" | jq -e '.lastCheckpoint.messages[] | select(.content == "A long partial repl")' >/dev/null; echo $?)"
+      ;;
+    cut-off-always)
+      check "parent and subtask BLOCKED ($final, $(status_of "$child"))" "$([ "$final" = BLOCKED ] && [ "$(status_of "$child")" = BLOCKED ]; echo $?)"
+      check "the reason says the reply was cut off" "$(has_reason "$child" "cut off even at 32768 output tokens"; echo $?)"
+      ;;
+    blank-reply)
+      check "parent and subtask BLOCKED ($final, $(status_of "$child"))" "$([ "$final" = BLOCKED ] && [ "$(status_of "$child")" = BLOCKED ]; echo $?)"
+      check "the reason isn't blank, and says how to get a report" \
+        "$(has_reason "$child" "gave no explanation" && has_reason "$child" "A subtask has to produce a change"; echo $?)"
+      ;;
     verify-retry)
       check "the parent branch was created with the task, named from its description" \
         "$(b=$(branch_of "$task"); [[ "$b" == forge/fix-applydiscount-in-src-price-js-so-it-* ]] && [[ "$b" == *"${task#task-}" ]] && git -C "$repo" show-ref --verify --quiet "refs/heads/$b"; echo $?)"

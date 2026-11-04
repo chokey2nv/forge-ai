@@ -229,10 +229,10 @@ export class ClaudeProvider implements ModelProvider {
 }
 
 function mapStopReason(reason: string | undefined, hasToolCalls: boolean): ModelResponse["finishReason"] {
+  if (reason === "max_tokens") return "length"; // a tool call in it may be incomplete
   if (hasToolCalls) return "tool_calls";
   if (reason === "end" || reason === "end_turn") return "stop";
   if (reason === "stop_sequence") return "stop";
-  if (reason === "max_tokens") return "length";
   return "error";
 }
 

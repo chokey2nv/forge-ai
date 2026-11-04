@@ -21,6 +21,8 @@ export interface AgentConfig {
   maxRetries: number;
   wallClockMs: number;
   systemPrompt: string;
+  /** Room for one model reply (MODEL_MAX_OUTPUT_TOKENS). */
+  maxOutputTokens?: number;
   onCheckpoint?: (state: AgentState) => Promise<void>;
   resumeFrom?: {
     messages: ModelMessage[];
@@ -45,6 +47,10 @@ export interface AgentState {
 }
 
 
+// A long report or a whole file in a tool call needs room; only what the model
+// writes is billed. A reply that's cut off anyway gets one more try with double.
+const DEFAULT_MAX_OUTPUT_TOKENS = 16384;
+
 export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<AgentResult> {
   const messages: ModelMessage[] = cfg.resumeFrom && cfg.resumeFrom.messages.length > 0
     ? cfg.resumeFrom.messages
@@ -62,6 +68,8 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
   };
 
   const deadline = Date.now() + cfg.wallClockMs;
+  const firstLimit = cfg.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  let limit = firstLimit;
 
   while (state.stepCount < cfg.maxSteps) {
     if (cfg.isCancelled?.()) {
@@ -81,7 +89,7 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
       break;
     }
 
-    const resp = await callWithRetry(cfg, state.messages);
+    const resp = await callWithRetry(cfg, state.messages, limit);
     if (!resp) {
       state.status = "error";
       state.blockedReason = `model call failed after ${cfg.maxRetries} retries`;
@@ -90,6 +98,20 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
 
     // Every call is spent, the last one (a submission or final answer) too.
     state.usage.push(resp.usage);
+
+    // Cut off: any text is incomplete and a tool call's arguments may be too,
+    // so none of it goes in the history or gets run.
+    if (resp.finishReason === "length") {
+      console.log(`[adapter] reply cut off at ${limit} output tokens`);
+      await cfg.onCheckpoint?.(state); // reports the spend, and any stop that answers it
+      if (limit === firstLimit) {
+        limit = firstLimit * 2;
+        continue;
+      }
+      state.status = "blocked";
+      state.blockedReason = `the model's reply was cut off even at ${limit} output tokens; raise MODEL_MAX_OUTPUT_TOKENS or split the work into smaller pieces`;
+      break;
+    }
 
     let submission: Record<string, unknown> | undefined;
 
@@ -148,7 +170,7 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
   return { state, finalMessage: state.blockedReason ?? "done" };
 }
 
-async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[]) {
+async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[], maxTokens: number) {
   let attempt = 0;
   while (attempt <= cfg.maxRetries) {
     try {
@@ -157,7 +179,7 @@ async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[]) {
         messages,
         tools: cfg.tools,
         temperature: 0.1,
-        maxTokens: 4096,
+        maxTokens,
       };
       return await cfg.provider.complete(req);
     } catch (e) {

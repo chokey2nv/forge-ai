@@ -173,6 +173,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       role,
       tools: body.tools,
       maxSteps: body.maxSteps ?? 20,
+      maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS) || undefined,
       maxRetries: body.maxRetries ?? 2,
       wallClockMs: body.wallClockMs ?? 1_800_000,
       systemPrompt: body.systemPrompt,   // optional override

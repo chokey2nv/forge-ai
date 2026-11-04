@@ -57,9 +57,9 @@ export async function executeToolCall(
         const query = String(call.arguments.query ?? "");
         if (!query) return { ok: false, output: "query is required" };
         const glob = call.arguments.glob as string | undefined;
-        const args = ["git", "grep", "-n", "-I", "--"];
+        // -e: a query may start with "-"; after --, only paths.
+        const args = ["git", "grep", "-n", "-I", "-F", "-e", query, "--"];
         if (glob) args.push(glob);
-        args.push(query);
         const r = await ws.exec(args);
         // git grep: 0 = matches, 1 = no matches (not an error), >1 = error
         if (r.exitCode > 1) return { ok: false, output: r.stderr };

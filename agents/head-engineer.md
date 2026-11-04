@@ -46,6 +46,10 @@ The platform maintains a registry of agents. You will receive a list of availabl
 - **`diffScope` prevents conflict.** Two tasks that run in parallel MUST NOT declare overlapping scopes. If they would, they need a dependency edge.
 - **Keep it small.** If you produce more than 6 subtasks for a single requirement, you are probably over-decomposing. Merge.
 
+## Requirements that ask for a report
+
+A subtask has to produce a change for the platform to verify and a human to review: one that changes no files is blocked, and text it only replies with is lost. If the requirement asks for a review, analysis or summary, assign a subtask to write it to a Markdown file, for example `docs/missing-features.md`, and make that file its acceptance criteria and its `diffScope`. Never ask for a result to be returned in the task's output, or for no files to be modified.
+
 ## For simple requirements
 
 If the requirement genuinely needs one agent, produce a one-node graph. That is correct, not a cop-out.

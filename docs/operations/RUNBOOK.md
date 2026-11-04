@@ -251,13 +251,14 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `CONTROL_PLANE_SELF_URL` | `http://localhost:8080` | Control plane | Callback base URL passed to adapter |
 | `STALE_AFTER` | `60s` | Control plane | Heartbeat gap before a run becomes `RESUMABLE` |
 | `MAX_AGENT_STEPS` | `20` | Adapter | Per-run step cap (overridable per task) |
+| `MODEL_MAX_OUTPUT_TOKENS` | `16384` | Adapter | Room for one model reply. A reply cut off at this gets one more try with double, then the task blocks. Only what the model writes is billed; a limit above the model's own maximum makes its calls fail |
 | `MAX_RETRIES` | `2` | Adapter | Model-call retry cap |
 | `TASK_TIMEOUT_SECONDS` | `1800` | Adapter | Wall-clock cap |
 | `ADAPTER_PORT` | `8081` | Adapter | Adapter HTTP port |
 | `ADAPTER_HOST` | `127.0.0.1` | Adapter | Address the adapter listens on; only the control plane calls it |
 | `CONTROL_PLANE_URL` | `CONTROL_PLANE_SELF_URL` | Adapter | Where the adapter reports runs. A `callbackUrl` in a run request is ignored |
 | `AGENTS_DIR` / `SKILLS_DIR` | `agents` / `skills` | Control plane | Agent and skill markdown, re-read on `POST /agents/reload` |
-| `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
+| `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `MODEL_PROVIDER`, else `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
 | `MAX_REVISIONS` | `3` | Control plane | Revisions of a parent's combined change a human can be shown (§6.5.3); the task's `budget.maxRevisions` overrides it. Sending a change back is refused once `maxRevisions - 1` follow-ups have been made |
 | `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task is `ESCALATED` to a human (§6.6); each round runs every listed reviewer and gets fresh verification attempts |
@@ -673,6 +674,9 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
 | `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
+| `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
+| `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |
+| `blank-reply` | The implementer stops with no text and no change | `BLOCKED`; the reason says it gave no explanation and how to get a report |
 | `deliver-pr-moved` | Same, the target moves on the forge only | Delivery fetches it, merges it in and verifies again; `PR_OPEN`; the local target doesn't move; a new task starts from the forge's tip and its `branch.created` event says why |
 | `rollback-local` | A delivered local merge, then an unrelated commit on the target, then `POST /tasks/{id}/rollback` | `ROLLED_BACK`; the target is one revert commit on top ("This reverts <merge>"); the fix is gone, the later work stays, the merge is still in history; recorded in `approvals`; a second rollback → 409 |
 | `rollback-pr` | A PR merged on the forge (the harness merges it into the bare origin), then a rollback | `REVERT_PR_OPEN`; `<parent>-revert` pushed as one commit on top of the forge's merge; `gh pr create --head <parent>-revert --title Revert: …`; revert merged → `ROLLED_BACK` |

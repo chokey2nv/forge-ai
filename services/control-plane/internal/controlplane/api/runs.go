@@ -127,6 +127,10 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 	// arrives as status=complete. An unchanged workspace is never a success.
 	if strings.TrimSpace(body.WorkspaceDiff) == "" {
 		reason := "agent finished without changing the workspace: " + body.FinalMessage
+		if strings.TrimSpace(body.FinalMessage) == "" {
+			reason = "agent finished without changing the workspace, and gave no explanation"
+		}
+		reason += ". A subtask has to produce a change to review; to get a report, ask for it to be written to a file"
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
 		return

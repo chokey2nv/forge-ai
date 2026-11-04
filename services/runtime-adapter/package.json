@@ -4,6 +4,7 @@
     "type": "module",
     "scripts": {
         "smoke": "tsx scripts/smoke-test.ts",
+        "test": "tsx --test src/*.test.ts",
         "forge": "tsx src/cli.ts",
         "dev": "tsx src/server.ts",
         "cli": "tsx src/cli.ts"

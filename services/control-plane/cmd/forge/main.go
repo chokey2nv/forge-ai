@@ -186,7 +186,7 @@ func main() {
 		WorkerImage:         workerImage,
 		SelfURL:             selfURL,
 		SetupTimeoutSeconds: int(h.SetupTimeout.Seconds()),
-		DefaultProvider:     envOr("DEFAULT_PROVIDER", "ollama"),
+		DefaultProvider:     envOr("DEFAULT_PROVIDER", envOr("MODEL_PROVIDER", "ollama")),
 		DefaultModel:        envOr("DEFAULT_MODEL", os.Getenv("MODEL_NAME")),
 		MaxConcurrentRuns:   parseInt(envOr("MAX_CONCURRENT_RUNS", "3"), 3),
 	}
