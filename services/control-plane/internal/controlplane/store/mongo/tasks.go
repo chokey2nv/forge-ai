@@ -53,10 +53,13 @@ func (r *TaskRepo) UpdateLatestRun(ctx context.Context, id, runID string, at tim
 	return err
 }
 
-func (r *TaskRepo) List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error) {
+func (r *TaskRepo) List(ctx context.Context, status domain.TaskStatus, projectIDs []string, limit int) ([]*domain.Task, error) {
 	filter := bson.M{}
 	if status != "" {
 		filter["status"] = status
+	}
+	if projectIDs != nil {
+		filter["projectId"] = bson.M{"$in": projectIDs}
 	}
 	opts := options.Find().SetSort(bson.D{bson.E{
 		Key: "createdAt", Value: -1,
@@ -148,4 +151,23 @@ func (r *TaskRepo) SetFollowUpOutcome(ctx context.Context, id string, n int, out
 		bson.M{"_id": id, "followUps.n": n},
 		bson.M{"$set": bson.M{"followUps.$.outcome": outcome, "updatedAt": at}})
 	return err
+}
+
+func (r *TaskRepo) UnassignedRepoPaths(ctx context.Context) ([]string, error) {
+	var out []string
+	res := r.coll.Distinct(ctx, "repoPath", bson.M{"projectId": bson.M{"$exists": false}})
+	if err := res.Err(); err != nil {
+		return nil, err
+	}
+	return out, res.Decode(&out)
+}
+
+func (r *TaskRepo) AssignProject(ctx context.Context, repoPath, projectID string) (int64, error) {
+	res, err := r.coll.UpdateMany(ctx,
+		bson.M{"repoPath": repoPath, "projectId": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"projectId": projectID}})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
 }

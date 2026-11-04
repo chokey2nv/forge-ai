@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Phase 13.2: the API needs a signed-in caller. Create a token with
-# `forge tokens create <user> slices` and export FORGE_TOKEN; every curl
-# below sends it (through a private curl config file).
-: "${FORGE_TOKEN:?export FORGE_TOKEN (an API token: forge tokens create <user> <name>)}"
-export CURL_HOME=$(mktemp -d "${TMPDIR:-/tmp}/forge-curl.XXXXXX")
-printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
+# Signed API calls and a project to work in (Phase 13.2, 13.4).
+source "$(dirname "$0")/lib/forge-api.sh"
 CP=${CP:-http://localhost:8080}
 REPO=$(pwd)/tests/evaluations/fixtures/pagination-off-by-one
 
+forge_register_repo "$REPO"
 TASK=$(curl -sf -X POST $CP/tasks -H 'Content-Type: application/json' -d "{
   \"requirement\":\"Fix the off-by-one pagination bug and add regression tests for empty input and out-of-range pages.\",
   \"acceptance\":[
@@ -17,7 +14,7 @@ TASK=$(curl -sf -X POST $CP/tasks -H 'Content-Type: application/json' -d "{
     \"paginate([], 1, 10) returns []\",
     \"paginate([1,2,3], 0, 2) returns []\"
   ],
-  \"repoPath\":\"$REPO\",
+  \"projectId\":\"$PROJECT\",\"repoPath\":\"$REPO\",
   \"baseCommit\":\"HEAD\",
   \"budget\":{\"maxSteps\":30,\"maxRetries\":2,\"wallClockMs\":900000}
 }" | jq -r .id)

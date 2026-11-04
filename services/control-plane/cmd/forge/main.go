@@ -132,6 +132,11 @@ func main() {
 	h.Reviews = reviewRepo
 	h.CallbackKey = callbackKey
 	h.Users, h.Sessions, h.Tokens = mongo_store.NewUserRepo(db), mongo_store.NewSessionRepo(db), mongo_store.NewTokenRepo(db)
+	h.Projects = mongo_store.NewProjectRepo(db)
+	// Tasks from before projects (13.4) go into a project per repository.
+	if _, _, err := h.MigrateToProjects(ctx); err != nil {
+		log.Fatalf("migrate tasks into projects: %v", err)
+	}
 	h.BootstrapToken = os.Getenv("FORGE_BOOTSTRAP_TOKEN")
 	h.SessionTTL = parseDuration(envOr("FORGE_SESSION_TTL", "12h"), 12*time.Hour)
 	h.SecureCookies = parseBool(envOr("FORGE_SECURE_COOKIES", "false"))

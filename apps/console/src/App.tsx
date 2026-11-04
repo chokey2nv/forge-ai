@@ -1,15 +1,28 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import {
-  api, SIGNED_OUT, can, type User, isParent, reviewRunId, TASK_STATUSES,
+  api, SIGNED_OUT, allows, type Project, type ProjectRole, type User, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
   type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
 import { DiffView } from "./DiffView";
 
-type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" };
+type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" } | { kind: "project" };
 
 /** The signed-in person (Phase 13.2). */
 const CurrentUser = createContext<User | null>(null);
+
+/** The projects you are in, and the one you are working in (Phase 13.4). */
+interface ProjectsState { list: Project[]; current: Project | null; select: (id: string) => void; reload: () => Promise<void> }
+const Projects = createContext<ProjectsState>({ list: [], current: null, select: () => {}, reload: async () => {} });
+const LAST_PROJECT = "forge.project";
+
+/** Your role in a project; instance admins are admins everywhere. */
+function useProjectRole(projectId?: string): ProjectRole | "" {
+  const me = useContext(CurrentUser);
+  const { list } = useContext(Projects);
+  if (me?.instanceAdmin) return "admin";
+  return list.find((p) => p.id === projectId)?.myRole ?? "";
+}
 
 export default function App() {
   const [view, setView] = useState<View>({ kind: "tasks" });
@@ -21,20 +34,35 @@ export default function App() {
     window.addEventListener(SIGNED_OUT, out);
     return () => window.removeEventListener(SIGNED_OUT, out);
   }, []);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState(remembered(LAST_PROJECT));
+  const reloadProjects = async () => { setProjects(await api.listProjects().catch(() => [])); };
+  useEffect(() => { if (user) reloadProjects(); }, [user?.id]);
+  const current = projects.find((p) => p.id === projectId) ?? projects[0] ?? null;
+  const select = (id: string) => { setProjectId(id); remember(LAST_PROJECT, id); };
 
   if (user === undefined) return <div className="app"><p className="hint">Loading…</p></div>;
   if (user === null) return <SignIn onSignedIn={setUser} />;
   const signOut = async () => { await api.logout().catch(() => undefined); setUser(null); };
 
+  const myRole: ProjectRole | "" = user.instanceAdmin ? "admin" : current?.myRole ?? "";
+
   return (
     <CurrentUser.Provider value={user}>
+    <Projects.Provider value={{ list: projects, current, select, reload: reloadProjects }}>
     <div className="app">
       <header>
         <h1>Forge</h1>
         <nav>
-          <span className="signed-in">{user.name} · {user.instanceAdmin ? "admin" : user.role}</span>
-          {can(user, "member") && <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>}
+          {projects.length > 0 && (
+            <select className="project-switch" value={current?.id ?? ""} onChange={(e) => { select(e.target.value); setView({ kind: "tasks" }); }} title="Project">
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <span className="signed-in">{user.name} · {myRole || "no project"}</span>
+          {allows(myRole, "member") && <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>}
           <button className={view.kind === "tasks" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Tasks</button>
+          <button className={view.kind === "project" ? "active" : ""} onClick={() => setView({ kind: "project" })}>Project</button>
           <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
           <button onClick={signOut}>Sign out</button>
         </nav>
@@ -46,8 +74,10 @@ export default function App() {
         )}
         {view.kind === "evals" && <Evals />}
         {view.kind === "new" && <NewTaskForm onCreated={(id) => setView({ kind: "task", id })} onCancel={() => setView({ kind: "tasks" })} />}
+        {view.kind === "project" && <ProjectPage />}
       </main>
     </div>
+    </Projects.Provider>
     </CurrentUser.Provider>
   );
 }
@@ -88,7 +118,9 @@ const remember = (k: string, v: string) => { try { localStorage.setItem(k, v); }
  * do. Creating it creates its branch; starting it hands it to the head engineer.
  */
 function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
-  const [repoPath, setRepoPath] = useState(remembered(LAST_REPO));
+  const { current: project } = useContext(Projects);
+  const repos = project?.repos ?? [];
+  const [repoPath, setRepoPath] = useState(() => repos.some((r) => r.path === remembered(LAST_REPO)) ? remembered(LAST_REPO) : repos[0]?.path ?? "");
   const [target, setTarget] = useState("");
   const [requirement, setRequirement] = useState("");
   const [acceptance, setAcceptance] = useState("");
@@ -111,12 +143,12 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
   // Re-inspect as the path, target or wording change (debounced): the
   // branch name comes from the requirement's first words.
   useEffect(() => {
-    if (!repoPath.trim()) { setInspection(null); return; }
+    if (!repoPath.trim() || !project) { setInspection(null); return; }
     const t = setTimeout(() => {
-      api.inspectRepo(repoPath.trim(), target, requirement).then(setInspection).catch((e) => setInspection({ error: String(e) }));
+      api.inspectRepo(project.id, repoPath.trim(), target, requirement).then(setInspection).catch((e) => setInspection({ error: String(e) }));
     }, 400);
     return () => clearTimeout(t);
-  }, [repoPath, target, requirement]);
+  }, [project?.id, repoPath, target, requirement]);
 
   const repo = inspection?.repo;
   const d = inspection?.delivery;
@@ -127,7 +159,8 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
     setBusy("creating"); setErr("");
     try {
       const task = await api.createTask({
-        requirement: requirement.trim(), acceptance: criteria, repoPath: repo!.path,
+        projectId: project!.id,
+        requirement: requirement.trim(), acceptance: criteria, repoPath: repoPath,
         targetBranch: target || undefined,
         budget: { maxSteps, maxRetries, wallClockMs: minutes * 60_000 },
       });
@@ -149,8 +182,12 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
       {err && <p className="error">{err}</p>}
 
       <section>
-        <label>Repository (a path on the control plane's machine)
-          <input value={repoPath} onChange={(e) => { setRepoPath(e.target.value); setTarget(""); }} placeholder="/Users/you/code/app" />
+        <label>Repository (one of project {project?.name ?? "—"}'s)
+          {repos.length > 0
+            ? <select value={repoPath} onChange={(e) => { setRepoPath(e.target.value); setTarget(""); }}>
+                {repos.map((r) => <option key={r.path} value={r.path}>{r.path}</option>)}
+              </select>
+            : <p className="hint">This project has no repositories yet. A project admin adds them on the <em>Project</em> page.</p>}
         </label>
         {inspection?.error && <p className="error">{inspection.error}</p>}
         {repo && (
@@ -309,16 +346,22 @@ function AgentDetail({ name, onBack }: { name: string; onBack: () => void }) {
   );
 }
 function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
+  const { current: project, list } = useContext(Projects);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [status, setStatus] = useState("");
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    api.listTasks(status || undefined)
+    if (!project) { setTasks([]); return; }
+    api.listTasks(status || undefined, project.id)
       .then(setTasks)
       .catch((e) => setErr(String(e)));
-  }, [status]);
+  }, [status, project?.id]);
+
+  if (!project) {
+    return <p className="hint">{list.length === 0 ? "You are not in any project yet. An instance admin creates projects and a project admin adds you." : "Pick a project."}</p>;
+  }
 
   // Subtasks are reached from their parent; listing them is opt-in. An
   // escalated subtask needs a human, so it is always listed.
@@ -374,9 +417,11 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [threads, setThreads] = useState<ThreadList | null>(null);
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
-  // Decisions and comments are recorded as the signed-in user (13.3).
+  // Decisions and comments are recorded as the signed-in user (13.3); what
+  // they may do follows their role in the task's project (13.4).
   const me = useContext(CurrentUser);
-  const mayDecide = can(me, "reviewer");
+  const role = useProjectRole(task?.projectId);
+  const mayDecide = allows(role, "reviewer");
   const [rationale, setRationale] = useState("");
   const [guidance, setGuidance] = useState("");
   const [err, setErr] = useState("");
@@ -527,7 +572,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
 
       {task.status === "REVIEW_PENDING" && !mayDecide && (
-        <p className="hint">Waiting for a reviewer's decision.{can(me, "member") && isParent(task) ? " You can comment on the change below." : ""}</p>
+        <p className="hint">Waiting for a reviewer's decision.{allows(role, "member") && isParent(task) ? " You can comment on the change below." : ""}</p>
       )}
       {task.status === "REVIEW_PENDING" && mayDecide && (
         <section className="approval">
@@ -600,7 +645,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
-      <DiffView task={task} feedback={isParent(task) ? { threads, user: me, onChange: reloadThreads } : undefined} />
+      <DiffView task={task} feedback={isParent(task) ? { threads, user: me, role, onChange: reloadThreads } : undefined} />
 
       <section>
         <h3>Events</h3>
@@ -828,4 +873,86 @@ function Reviews({ reviews, title }: { reviews: Review[]; title: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status.toLowerCase()}`}>{status}</span>;
+}
+/**
+ * The current project's repositories and members (13.4). Project admins
+ * add and remove them; instance admins also create projects.
+ */
+function ProjectPage() {
+  const me = useContext(CurrentUser);
+  const { current: p, list, select, reload } = useContext(Projects);
+  const [err, setErr] = useState("");
+  const [name, setName] = useState("");
+  const [repo, setRepo] = useState("");
+  const [target, setTarget] = useState("");
+  const [member, setMember] = useState("");
+  const [memberRole, setMemberRole] = useState<ProjectRole>("member");
+  const run = async (f: () => Promise<unknown>) => { setErr(""); try { await f(); await reload(); } catch (e) { setErr(String(e)); } };
+  const admin = me?.instanceAdmin || p?.myRole === "admin";
+
+  return (
+    <div className="detail project-page">
+      {err && <p className="error">{err}</p>}
+      {me?.instanceAdmin && (
+        <section>
+          <h3>New project</h3>
+          <div className="inline-form">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="project name" />
+            <button disabled={!name.trim()} onClick={() => run(async () => { const np = await api.createProject(name.trim()); setName(""); select(np.id); })}>Create</button>
+          </div>
+        </section>
+      )}
+      {!p ? <p className="hint">{list.length ? "Pick a project." : "No projects yet."}</p> : (
+        <>
+          <h2>{p.name} <span className="version">your role: {me?.instanceAdmin ? "admin (instance)" : p.myRole}</span></h2>
+          <section>
+            <h3>Repositories</h3>
+            <p className="hint">Tasks in this project can only work in these, on the control plane's machine.</p>
+            <ul className="project-list">
+              {p.repos.map((r) => (
+                <li key={r.path}><code>{r.path}</code>{r.defaultTarget && <span className="version"> → {r.defaultTarget}</span>}
+                  {admin && <button className="link" onClick={() => run(() => api.removeProjectRepo(p.id, r.path))}>remove</button>}</li>
+              ))}
+              {p.repos.length === 0 && <li className="hint">None yet.</li>}
+            </ul>
+            {admin && (
+              <div className="inline-form">
+                <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/absolute/path/to/repository" />
+                <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="default target branch (optional)" />
+                <button disabled={!repo.trim()} onClick={() => run(async () => { await api.addProjectRepo(p.id, repo.trim(), target.trim()); setRepo(""); setTarget(""); })}>Add repository</button>
+              </div>
+            )}
+          </section>
+          <section>
+            <h3>Members</h3>
+            <table>
+              <thead><tr><th>Name</th><th>Role</th><th></th></tr></thead>
+              <tbody>
+                {p.members.map((m) => (
+                  <tr key={m.userId}>
+                    <td>{m.name}</td>
+                    <td>{admin
+                      ? <select value={m.role} onChange={(e) => run(() => api.setProjectMember(p.id, m.name, e.target.value as ProjectRole))}>
+                          {(["viewer", "member", "reviewer", "admin"] as ProjectRole[]).map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      : m.role}</td>
+                    <td>{admin && <button className="link" onClick={() => run(() => api.removeProjectMember(p.id, m.userId))}>remove</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {admin && (
+              <div className="inline-form">
+                <input value={member} onChange={(e) => setMember(e.target.value)} placeholder="user name" />
+                <select value={memberRole} onChange={(e) => setMemberRole(e.target.value as ProjectRole)}>
+                  {(["viewer", "member", "reviewer", "admin"] as ProjectRole[]).map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <button disabled={!member.trim()} onClick={() => run(async () => { await api.setProjectMember(p.id, member.trim(), memberRole); setMember(""); })}>Add member</button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </div>
+  );
 }

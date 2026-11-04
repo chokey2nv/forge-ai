@@ -16,7 +16,13 @@ type TaskRepo interface {
 	// in `from`. It reports false when another writer got there first.
 	CompareAndSetStatus(ctx context.Context, id string, from, to domain.TaskStatus, at time.Time) (bool, error)
 	UpdateLatestRun(ctx context.Context, id, runID string, at time.Time) error
-	List(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
+	// List returns tasks, newest first; with projectIDs non-nil, only those
+	// projects' (Phase 13.4).
+	List(ctx context.Context, status domain.TaskStatus, projectIDs []string, limit int) ([]*domain.Task, error)
+	// Migration to projects (13.4): repositories of tasks without a project,
+	// and assigning those tasks to one.
+	UnassignedRepoPaths(ctx context.Context) ([]string, error)
+	AssignProject(ctx context.Context, repoPath, projectID string) (int64, error)
 
 	// Phase 8 additions:
 	ListByStatus(ctx context.Context, status domain.TaskStatus, limit int) ([]*domain.Task, error)
@@ -131,4 +137,20 @@ type TokenRepo interface {
 	ListByUser(ctx context.Context, userID string) ([]*domain.APIToken, error)
 	Touch(ctx context.Context, id string, at time.Time) error
 	Revoke(ctx context.Context, id, userID string, at time.Time) (bool, error)
+}
+
+// ProjectRepo holds projects (Phase 13.4).
+type ProjectRepo interface {
+	Create(ctx context.Context, p *domain.Project) error
+	Get(ctx context.Context, id string) (*domain.Project, error)
+	List(ctx context.Context) ([]*domain.Project, error)
+	// ListForUser returns the projects the user is a member of.
+	ListForUser(ctx context.Context, userID string) ([]*domain.Project, error)
+	// ByRepo is the project a repository is registered in.
+	ByRepo(ctx context.Context, path string) (*domain.Project, error)
+	AddRepo(ctx context.Context, id string, repo domain.ProjectRepo) error
+	RemoveRepo(ctx context.Context, id, path string) error
+	// SetMember adds the member or changes their role.
+	SetMember(ctx context.Context, id string, m domain.ProjectMember) error
+	RemoveMember(ctx context.Context, id, userID string) error
 }

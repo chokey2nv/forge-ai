@@ -180,7 +180,19 @@ export FORGE_TOKEN=fgt_…
 export CURL_HOME=$(mktemp -d); printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
 ```
 
-**Roles (13.3).** Each user has one role for the whole instance until projects arrive (13.4): `viewer` reads; `member` also creates and starts tasks, opens and answers threads, resumes runs; `reviewer` also approves, rejects, requests changes, decides escalations, resolves threads, retries deliveries and rolls back. Instance admins can do all of that and manage users and agents. New users are members unless given `--role`; users from before roles are members. Every decision and comment is recorded as the signed-in user (approvals, threads, follow-ups, rollbacks, task creators, and an `actor` on their events); a `reviewer` or `author` in a request body is ignored.
+**Projects (13.4).** Every task belongs to a project, and works in one of the project's registered repositories; other paths on the machine are refused. You see only your projects' tasks: anything else answers 404 (not 403, so its ID is not confirmed). Instance admins create projects and see them all; a project's admins add its repositories (the absolute path of a repository's top folder; a repository belongs to one project) and its members, each with a role there: `viewer`, `member`, `reviewer` or `admin`. A project keeps at least one admin. Tasks from before projects are put into a project per repository on the control plane's first start (named after the folder, with every user as a member at their instance role); it does nothing on later starts.
+
+```bash
+curl -s -X POST localhost:8080/projects -d '{"name":"shop"}'                                # instance admins → {"id":"prj-…"}
+curl -s -X POST localhost:8080/projects/<projectId>/repos -d '{"path":"/Users/you/code/shop","defaultTarget":"main"}'
+curl -s -X POST localhost:8080/projects/<projectId>/members -d '{"name":"rae","role":"reviewer"}'
+curl -s localhost:8080/projects                                                             # yours, with "myRole"
+curl -s localhost:8080/tasks?projectId=<projectId>
+```
+
+Creating a task names its project: `POST /tasks {"projectId": …, "repoPath": …}`. The console has a project switcher in the header, picks the repository from the project's list in *New task*, and a *Project* page where project admins manage repositories and members (and instance admins create projects).
+
+**Roles (13.3).** Within a project, your role there decides what you can do. Each user also has an instance role, which covers what belongs to no project (eval results) and is the role given when tasks from before projects are migrated: `viewer` reads; `member` also creates and starts tasks, opens and answers threads, resumes runs; `reviewer` also approves, rejects, requests changes, decides escalations, resolves threads, retries deliveries and rolls back. Instance admins can do all of that and manage users and agents. New users are members unless given `--role`; users from before roles are members. Every decision and comment is recorded as the signed-in user (approvals, threads, follow-ups, rollbacks, task creators, and an `actor` on their events); a `reviewer` or `author` in a request body is ignored.
 
 ```bash
 echo '<password>' | go run ./cmd/forge users add rae --role reviewer
@@ -221,6 +233,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `FORGE_SESSION_TTL` | `12h` | Control plane | A console session ends after this long unused (and 7 days after sign-in at most) |
 | `FORGE_SECURE_COOKIES` | `false` | Control plane | Mark the session cookie `Secure`; set behind HTTPS |
 | `FORGE_TOKEN` | — | Scripts, `cmd/eval` | An API token (`forge tokens create`) the slices and the eval runner send |
+| `FORGE_PROJECT` | the project named `slices` | Slices, `cmd/eval` | The project the slices register their temporary repositories in and create tasks in (`scripts/lib/forge-api.sh`); unset, the slices use (or, with an instance admin's token, create) the project named `slices`. The eval runner needs it, with its fixture registered |
 | `CONTROL_PLANE_SELF_URL` | `http://localhost:8080` | Control plane | Callback base URL passed to adapter |
 | `STALE_AFTER` | `60s` | Control plane | Heartbeat gap before a run becomes `RESUMABLE` |
 | `MAX_AGENT_STEPS` | `20` | Adapter | Per-run step cap (overridable per task) |
@@ -907,6 +920,9 @@ If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, 
 | API answers 401 "sign in required" | Send a token (`-H "Authorization: Bearer $FORGE_TOKEN"`, §2.7) or sign in to the console. A revoked token, a disabled user, or an expired session all answer 401 |
 | The console shows the sign-in page right after signing in | The session cookie is not reaching the API: its origin must be in `FORGE_CONSOLE_ORIGINS`, and the console and API must be on the same site (`localhost` with `localhost`, not `127.0.0.1` with `localhost`) |
 | 403 "this needs the reviewer role" (or member) | Your role does not allow it (§2.7). An instance admin can change it: `forge users role <name> reviewer` |
+| 404 for a task you know exists | You are not a member of its project; a project admin adds you (§2.7) |
+| Creating a task: 400 "… is not a repository of project …" | A project admin registers it on the *Project* page or with `POST /projects/<id>/repos` |
+| A slice stops: "could not register … in project …" | The token's user must be an admin of `FORGE_PROJECT` (or an instance admin, for the default `slices` project) |
 | A slice stops at once: "FORGE_TOKEN: export FORGE_TOKEN …" | Create a token (`forge tokens create <user> slices`) and export it |
 | Runs fail to start: "adapter: HTTP 401" | The two services have different `FORGE_ADAPTER_TOKEN` values; restart both from the same `.env` |
 | Adapter log: `callback …: HTTP 401` | The run token did not match: the control plane's callback key changed under a running agent (`FORGE_CALLBACK_SECRET` edited, or the `instance` collection cleared). Resume the run |

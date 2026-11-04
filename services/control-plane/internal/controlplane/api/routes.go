@@ -10,17 +10,23 @@ import (
 type Access int
 
 const (
-	Public      Access = iota // anyone: health, sign-in
-	RunCallback               // the adapter, with the run's token (13.1)
-	SignedIn                  // any signed-in user: their own account and tokens (13.2)
-	Viewer                    // reads tasks, runs, diffs, threads (13.3)
-	Member                    // also creates and starts work, comments
-	Reviewer                  // also decides: approve, reject, request changes, escalations, roll back, resolve threads
-	AdminOnly                 // an instance admin
+	Public       Access = iota // anyone: health, sign-in
+	RunCallback                // the adapter, with the run's token (13.1)
+	SignedIn                   // any signed-in user: their own account and tokens (13.2)
+	Viewer                     // reads tasks, runs, diffs, threads (13.3)
+	Member                     // also creates and starts work, comments
+	Reviewer                   // also decides: approve, reject, request changes, escalations, roll back, resolve threads
+	ProjectAdmin               // manages a project's repositories and members (13.4)
+	AdminOnly                  // an instance admin
 )
 
+// Viewer, Member, Reviewer and ProjectAdmin are roles in the project the
+// route's path names (a task's, a run's task's, or /projects/{pid}): 404 to
+// non-members, 403 to members without the role. On routes that name no
+// project they are the user's instance role (13.3).
+
 // accessRole is the role each level needs.
-var accessRole = map[Access]domain.Role{Viewer: domain.RoleViewer, Member: domain.RoleMember, Reviewer: domain.RoleReviewer}
+var accessRole = map[Access]domain.Role{Viewer: domain.RoleViewer, Member: domain.RoleMember, Reviewer: domain.RoleReviewer, ProjectAdmin: domain.RoleAdmin}
 
 // Route is one API endpoint and who may call it. Every route is listed
 // here, so a test can check none is left open by mistake.
@@ -46,6 +52,14 @@ func (h *Handlers) Routes() []Route {
 		{"POST /users", AdminOnly, h.CreateUser},
 		{"POST /users/{uid}/role", AdminOnly, h.SetUserRole},
 
+		{"GET /projects", SignedIn, h.ListProjects},
+		{"POST /projects", AdminOnly, h.CreateProject},
+		{"GET /projects/{pid}", Viewer, h.GetProject},
+		{"POST /projects/{pid}/repos", ProjectAdmin, h.AddProjectRepo},
+		{"DELETE /projects/{pid}/repos", ProjectAdmin, h.RemoveProjectRepo},
+		{"POST /projects/{pid}/members", ProjectAdmin, h.SetProjectMember},
+		{"DELETE /projects/{pid}/members/{uid}", ProjectAdmin, h.RemoveProjectMember},
+
 		{"GET /agents", Viewer, h.ListAgents},
 		{"GET /agents/health", Viewer, h.AgentHealth},
 		{"GET /agents/{name}", Viewer, h.GetAgent},
@@ -53,12 +67,12 @@ func (h *Handlers) Routes() []Route {
 		{"GET /skills", Viewer, h.ListSkills},
 		{"GET /skills/{name}", Viewer, h.GetSkill},
 
-		{"POST /tasks", Member, h.CreateTask},
-		{"GET /repos/inspect", Viewer, h.InspectRepo},
+		{"POST /tasks", SignedIn, h.CreateTask},         // member of the body's project (handler)
+		{"GET /repos/inspect", SignedIn, h.InspectRepo}, // viewer of the query's project (handler)
 		{"GET /config", Viewer, h.GetConfig},
 		{"GET /tasks/{id}", Viewer, h.GetTask},
 		{"POST /tasks/{id}/runs", Member, h.DispatchRun},
-		{"GET /tasks", Viewer, h.ListTasks},
+		{"GET /tasks", SignedIn, h.ListTasks}, // the caller's projects only
 		{"GET /tasks/{id}/runs", Viewer, h.ListTaskRuns},
 		{"GET /tasks/{id}/approvals", Viewer, h.ListApprovals},
 		{"POST /tasks/{id}/approve", Reviewer, h.ApproveTask},
@@ -113,6 +127,9 @@ func (h *Handlers) guard(r Route) http.HandlerFunc {
 	case SignedIn:
 		return h.Authenticated(r.Handler)
 	default:
+		if scope := scopeOf(r.Pattern); scope != "" {
+			return h.RequireProjectRole(scope, accessRole[r.Access], r.Handler)
+		}
 		return h.RequireRole(accessRole[r.Access], r.Handler)
 	}
 }

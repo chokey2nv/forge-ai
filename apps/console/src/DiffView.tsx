@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  api, can, FEEDBACK_OPEN, isParent, shownOn, threadWhere,
-  type ReviewerNote, type Task, type User, type TaskDiff, type Thread, type ThreadList,
+  api, allows, FEEDBACK_OPEN, isParent, shownOn, threadWhere,
+  type ProjectRole, type ReviewerNote, type Task, type User, type TaskDiff, type Thread, type ThreadList,
 } from "./api";
 import { parseDiff, filePath, type DiffFile, type DiffLine } from "./diff";
 
@@ -11,8 +11,10 @@ const OPEN_LIMIT = 1500;
 /** What the diff viewer needs to show and take feedback. */
 interface Feedback {
   threads: ThreadList | null;
-  /** The signed-in user: comments are theirs; what they may do follows their role (13.3). */
+  /** The signed-in user: comments are theirs (13.3). */
   user: User | null;
+  /** Their role in the task's project: what they may do (13.4). */
+  role: ProjectRole | "";
   onChange: () => void;
 }
 
@@ -58,7 +60,7 @@ export function DiffView({ task, feedback }: { task: Task; feedback?: Feedback }
   const threads = (feedback?.threads?.threads ?? []).filter((t) =>
     parent && shownOn(t) === revision && (since === 0 || t.anchor?.side !== "old"));
   const notes = (feedback?.threads?.notes ?? []).filter((n) => n.revision === revision);
-  const canComment = !!feedback && parent && since === 0 && FEEDBACK_OPEN.has(task.status) && can(feedback.user, "member");
+  const canComment = !!feedback && parent && since === 0 && FEEDBACK_OPEN.has(task.status) && allows(feedback.role, "member");
   const ctx: FileCtx = { task, revision, canComment, feedback };
 
   // Notes whose file and line the diff shows go inline; the rest are listed.
@@ -265,8 +267,8 @@ function ThreadView({ thread: t, ctx, withContext }: { thread: Thread; ctx: File
   const [err, setErr] = useState("");
   const fb = ctx.feedback!;
   const live = FEEDBACK_OPEN.has(ctx.task.status);
-  const mayReply = live && can(fb.user, "member");
-  const mayResolve = live && can(fb.user, "reviewer");
+  const mayReply = live && allows(fb.role, "member");
+  const mayResolve = live && allows(fb.role, "reviewer");
   const setStatus = (action: "resolve" | "reopen") =>
     api.setThreadStatus(ctx.task.id, t.id, action).then(fb.onChange).catch((e) => setErr(String(e)));
   return (

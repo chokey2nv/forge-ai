@@ -108,12 +108,18 @@ func (s *memUsers) GetByName(_ context.Context, n string) (*domain.User, error) 
 	}
 	return nil, errors.New("no")
 }
-func (s *memUsers) List(context.Context) ([]*domain.User, error) { return nil, nil }
+func (s *memUsers) List(context.Context) ([]*domain.User, error) {
+	var out []*domain.User
+	for _, u := range s.m {
+		out = append(out, u)
+	}
+	return out, nil
+}
 func (s *memUsers) SetRole(_ context.Context, id string, r domain.Role, admin bool) error {
 	s.m[id].Role, s.m[id].InstanceAdmin = r, admin
 	return nil
 }
-func (s *memUsers) Count(context.Context) (int64, error)         { return int64(len(s.m)), nil }
+func (s *memUsers) Count(context.Context) (int64, error) { return int64(len(s.m)), nil }
 
 type memSessions struct{ m map[string]*domain.Session }
 

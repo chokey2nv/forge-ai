@@ -60,6 +60,9 @@ type Task struct {
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
 	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 	LatestRunID string     `bson:"latestRunId,omitempty" json:"latestRunId,omitempty"`
+	// ProjectID is the project the task belongs to (13.4); its repository is
+	// one of the project's. Subtasks share their parent's.
+	ProjectID string `bson:"projectId,omitempty" json:"projectId,omitempty"`
 	// Who created the task (Phase 13.3).
 	CreatedBy   string `bson:"createdBy,omitempty" json:"createdBy,omitempty"`
 	CreatedByID string `bson:"createdById,omitempty" json:"createdById,omitempty"`

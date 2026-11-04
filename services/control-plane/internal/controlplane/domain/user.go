@@ -49,8 +49,9 @@ const (
 
 var roleRank = map[Role]int{RoleViewer: 1, RoleMember: 2, RoleReviewer: 3}
 
-// ValidRole reports whether r names a role.
-func ValidRole(r Role) bool { return roleRank[r] > 0 }
+// ValidRole reports whether r names a role a user can hold instance-wide
+// (13.3): viewer, member or reviewer.
+func ValidRole(r Role) bool { return r == RoleViewer || r == RoleMember || r == RoleReviewer }
 
 // EffectiveRole is the user's role; users from before roles are members.
 func (u *User) EffectiveRole() Role {

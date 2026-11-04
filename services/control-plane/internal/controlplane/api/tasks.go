@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var body struct {
+		ProjectID   string        `json:"projectId"`
 		Requirement string        `json:"requirement"`
 		Acceptance  []string      `json:"acceptance"`
 		RepoPath    string        `json:"repoPath"`
@@ -39,6 +41,21 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	if body.Requirement == "" || body.RepoPath == "" {
 		http.Error(w, "requirement and repoPath are required", http.StatusBadRequest)
 		return
+	}
+	// A task works in one of its project's repositories (13.4).
+	body.RepoPath = filepath.Clean(body.RepoPath)
+	project, ok := h.memberProject(ctx, w, r, body.ProjectID, domain.RoleMember)
+	if !ok {
+		return
+	}
+	if !project.HasRepo(body.RepoPath) {
+		http.Error(w, body.RepoPath+" is not a repository of project "+project.Name+"; a project admin can add it", http.StatusBadRequest)
+		return
+	}
+	for _, pr := range project.Repos {
+		if filepath.Clean(pr.Path) == body.RepoPath && body.TargetBranch == "" && body.BaseCommit == "" {
+			body.TargetBranch = pr.DefaultTarget
+		}
 	}
 	if body.BaseCommit == "" {
 		body.BaseCommit = "HEAD"
@@ -67,6 +84,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		DiffScope:   body.DiffScope,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+		ProjectID:   project.ID,
 		CreatedBy:   actorOf(r).Name,
 		CreatedByID: actorOf(r).ID,
 
@@ -233,7 +251,20 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	tasks, err := h.Tasks.List(r.Context(), status, limit)
+	var projects []string // nil: every project (instance admins)
+	if pid := q.Get("projectId"); pid != "" {
+		if _, ok := h.memberProject(r.Context(), w, r, pid, domain.RoleViewer); !ok {
+			return
+		}
+		projects = []string{pid}
+	} else {
+		var err error
+		if projects, err = h.visibleProjectIDs(r.Context(), actorOf(r)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	tasks, err := h.Tasks.List(r.Context(), status, projects, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -363,6 +394,15 @@ func (h *Handlers) InspectRepo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 	resp := map[string]any{}
+	// Only a project's repositories can be inspected (13.4).
+	project, ok := h.memberProject(ctx, w, r, q.Get("projectId"), domain.RoleViewer)
+	if !ok {
+		return
+	}
+	if !project.HasRepo(q.Get("path")) {
+		http.Error(w, q.Get("path")+" is not a repository of project "+project.Name, http.StatusBadRequest)
+		return
+	}
 	repo, err := delivery.InspectRepo(ctx, q.Get("path"))
 	if err != nil {
 		resp["error"] = err.Error()

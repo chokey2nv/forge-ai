@@ -131,6 +131,8 @@ func runCase(cfg Config, c EvalCase) (bool, error) {
 
 func postTask(cfg Config, repo string, c EvalCase) (string, error) {
 	body := map[string]any{
+		// The repository must be one of this project's (Phase 13.4).
+		"projectId":   os.Getenv("FORGE_PROJECT"),
 		"requirement": c.Requirement,
 		"acceptance":  c.Acceptance,
 		"repoPath":    repo,

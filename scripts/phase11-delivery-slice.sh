@@ -8,12 +8,8 @@
 # never touched.
 set -euo pipefail
 
-# Phase 13.2: the API needs a signed-in caller. Create a token with
-# `forge tokens create <user> slices` and export FORGE_TOKEN; every curl
-# below sends it (through a private curl config file).
-: "${FORGE_TOKEN:?export FORGE_TOKEN (an API token: forge tokens create <user> <name>)}"
-export CURL_HOME=$(mktemp -d "${TMPDIR:-/tmp}/forge-curl.XXXXXX")
-printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
+# Signed API calls and a project to work in (Phase 13.2, 13.4).
+source "$(dirname "$0")/lib/forge-api.sh"
 
 CP=${CP:-http://localhost:8080}
 PROVIDER=${PROVIDER:-claude}
@@ -42,10 +38,11 @@ wait_for() { # "STATE|STATE" -> final state
   echo "$s"
 }
 
+forge_register_repo "$REPO"
 TASK=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "{
   \"requirement\":\"Fix applyDiscount in src/price.js: it subtracts the percentage as an absolute amount instead of applying a percentage discount rounded to cents.\",
   \"acceptance\":[\"applyDiscount(200, 10) returns 180\",\"applyDiscount(19.99, 25) returns 14.99\",\"npm test passes\"],
-  \"repoPath\":\"$REPO\",
+  \"projectId\":\"$PROJECT\",\"repoPath\":\"$REPO\",
   \"baseCommit\":\"HEAD\",
   \"budget\":{\"maxSteps\":30,\"maxRetries\":2,\"wallClockMs\":900000}
 }" | jq -r .id)

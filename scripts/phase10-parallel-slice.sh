@@ -8,12 +8,8 @@
 # the subtasks' own durations: the gain from running them in parallel.
 set -euo pipefail
 
-# Phase 13.2: the API needs a signed-in caller. Create a token with
-# `forge tokens create <user> slices` and export FORGE_TOKEN; every curl
-# below sends it (through a private curl config file).
-: "${FORGE_TOKEN:?export FORGE_TOKEN (an API token: forge tokens create <user> <name>)}"
-export CURL_HOME=$(mktemp -d "${TMPDIR:-/tmp}/forge-curl.XXXXXX")
-printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
+# Signed API calls and a project to work in (Phase 13.2, 13.4).
+source "$(dirname "$0")/lib/forge-api.sh"
 
 CP=${CP:-http://localhost:8080}
 PROVIDER=${PROVIDER:-claude}
@@ -28,6 +24,7 @@ git -C "$REPO" add -A
 git -C "$REPO" -c user.name=forge -c user.email=forge@localhost commit -q -m "fixture: parallel-features"
 echo "repo: $REPO"
 
+forge_register_repo "$REPO"
 TASK=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "{
   \"requirement\":\"Add three pricing helpers, each in its own module with its own test file, as three subtasks. (1) taxFor(amount, ratePercent) in src/tax.js, returning the tax rounded to cents, tested in tests/tax.test.js. (2) formatPrice(amount) in src/format.js, returning a dollar string with two decimals, tested in tests/format.test.js. (3) priceLabel(amount, ratePercent) in src/label.js, returning formatPrice(amount + taxFor(amount, ratePercent)) followed by ' incl. tax', tested in tests/label.test.js. Subtasks 1 and 2 are independent and touch only their own two files; declare those files as each subtask's diffScope so they can run in parallel. Subtask 3 depends on both.\",
   \"acceptance\":[
@@ -36,7 +33,7 @@ TASK=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "{
     \"priceLabel(50, 8) returns '\$54.00 incl. tax'\",
     \"npm test passes\"
   ],
-  \"repoPath\":\"$REPO\",
+  \"projectId\":\"$PROJECT\",\"repoPath\":\"$REPO\",
   \"baseCommit\":\"HEAD\",
   \"budget\":{\"maxSteps\":30,\"maxRetries\":2,\"wallClockMs\":900000}
 }" | jq -r .id)

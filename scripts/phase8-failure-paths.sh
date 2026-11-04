@@ -157,6 +157,12 @@ as() { # token curl-args… -> HTTP code; the body lands in $WORK/as.out
   local t=$1; shift
   command curl -q -s -o "$WORK/as.out" -w '%{http_code}' -H "Authorization: Bearer $t" "$@"
 }
+# Phase 13.4: the harness's project; the role users are its members.
+PROJECT=$(curl -sf -X POST "$CP/projects" -H 'Content-Type: application/json' -d '{"name":"harness"}' | jq -r .id)
+for m in vic:viewer mo:member rae:reviewer; do
+  curl -sf -X POST "$CP/projects/$PROJECT/members" -H 'Content-Type: application/json' -d "{\"name\":\"${m%%:*}\",\"role\":\"${m##*:}\"}" >/dev/null
+done
+OUTSIDER=$(mkuser otto reviewer) # a reviewer, but of no project
 check "users are created with roles; a member cannot create users (403)" \
   "$([[ "$VIEWER" == fgt_* && "$MEMBER" == fgt_* && "$REVIEWER" == fgt_* ]] && [ "$(as "$MEMBER" -X POST "$CP/users" -H 'Content-Type: application/json' -d '{"name":"x","password":"x-password-1"}')" = 403 ] && [ "$(as "$VIEWER" "$CP/auth/me")" = 200 ] && jq -e '.user.role == "viewer"' "$WORK/as.out" >/dev/null; echo $?)"
 
@@ -181,6 +187,8 @@ new_repo() { # [fixture name] (default cart-pricing)
   cp -R "$src/." "$repo/"
   git -C "$repo" init -q && git -C "$repo" add -A
   git -C "$repo" -c user.name=forge -c user.email=forge@localhost commit -q -m fixture
+  # Phase 13.4: tasks work only in their project's repositories.
+  curl -sf -X POST "$CP/projects/$PROJECT/repos" -H 'Content-Type: application/json' -d "{\"path\":\"$repo\"}" >/dev/null
   echo "$repo"
 }
 
@@ -189,7 +197,7 @@ create_and_dispatch() { # repo [extra budget fields, e.g. ,"maxRevisions":2] -> 
   task=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "{
     \"requirement\":\"Fix applyDiscount in src/price.js so it applies a percentage discount rounded to cents.\",
     \"acceptance\":[\"applyDiscount(200, 10) returns 180\",\"applyDiscount(19.99, 25) returns 14.99\",\"npm test passes\"],
-    \"repoPath\":\"$1\",\"baseCommit\":\"HEAD\",
+    \"projectId\":\"$PROJECT\",\"repoPath\":\"$1\",\"baseCommit\":\"HEAD\",
     \"budget\":{\"maxSteps\":10,\"maxRetries\":0,\"wallClockMs\":300000${2:-}}}" | jq -r .id)
   curl -sf -X POST "$CP/tasks/$task/runs" -H 'Content-Type: application/json' \
     -d '{"provider":"scripted","model":"scripted"}' >/dev/null
@@ -289,6 +297,22 @@ run_scenario() {
         "$(curl -sI "$CP/tasks" -H 'Origin: http://localhost:5173' | grep -qi '^access-control-allow-origin: http://localhost:5173' && ! curl -sI "$CP/tasks" -H 'Origin: https://evil.example' | grep -qi '^access-control-allow-origin'; echo $?)"
       check "GET threads: one resolved with two comments, one open general" \
         "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$tid" '(.threads | length == 2) and (.threads[] | select(.id == $t) | .status == "resolved" and .resolvedBy == "rae" and (.comments | length == 2) and .comments[1].author == "mo") and ([.threads[] | select(.anchor == null and .status == "open")] | length == 1) and (.notes | type == "array")' >/dev/null; echo $?)"
+      # Phase 13.4: the task is the harness project's; outsiders cannot see it.
+      check "the task and its subtask belong to the harness project" \
+        "$([ "$(curl -sf "$CP/tasks/$task" | jq -r .projectId)" = "$PROJECT" ] && [ "$(curl -sf "$CP/tasks/$child" | jq -r .projectId)" = "$PROJECT" ]; echo $?)"
+      check "a reviewer of no project gets 404 for the task, its run, diff and approval, and an empty list" \
+        "$([ "$(as "$OUTSIDER" "$CP/tasks/$task")" = 404 ] && [ "$(as "$OUTSIDER" "$CP/runs/run-$child")" = 404 ] && [ "$(as "$OUTSIDER" "$CP/tasks/$task/diff")" = 404 ] && [ "$(as "$OUTSIDER" -X POST "$CP/tasks/$task/approve" -H 'Content-Type: application/json' -d '{}')" = 404 ] && [ "$(as "$OUTSIDER" "$CP/tasks")" = 200 ] && jq -e 'length == 0' "$WORK/as.out" >/dev/null; echo $?)"
+      check "members list the project's tasks; GET /projects shows their role" \
+        "$([ "$(as "$MEMBER" "$CP/tasks")" = 200 ] && jq -e --arg t "$task" 'any(.[]; .id == $t)' "$WORK/as.out" >/dev/null && [ "$(as "$MEMBER" "$CP/projects")" = 200 ] && jq -e --arg p "$PROJECT" 'length == 1 and .[0].id == $p and .[0].myRole == "member"' "$WORK/as.out" >/dev/null; echo $?)"
+      local stray; stray=$(mktemp -d "$WORK/stray.XXXXXX"); git -C "$stray" init -q; git -C "$stray" -c user.name=x -c user.email=x@x commit -q --allow-empty -m x
+      local c1 c2
+      c1=$(as "$MEMBER" -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "$(jq -nc --arg p "$PROJECT" --arg r "$stray" '{projectId:$p, requirement:"x", acceptance:["x"], repoPath:$r}')")
+      c2=$(as "$MEMBER" -X POST "$CP/tasks" -H 'Content-Type: application/json' -d "$(jq -nc --arg r "$repo" '{projectId:"prj-nope", requirement:"x", acceptance:["x"], repoPath:$r}')")
+      check "a task on a repository the project has not registered is refused ($c1), in a project you are not in too ($c2)" \
+        "$([ "$c1" = 400 ] && [ "$c2" = 404 ]; echo $?)"
+      local other; other=$(curl -sf -X POST "$CP/projects" -H 'Content-Type: application/json' -d '{"name":"other"}' | jq -r .id)
+      check "a repository belongs to one project (409); only project admins add repositories and members (403)" \
+        "$([ "$(code -X POST "$CP/projects/$other/repos" -H 'Content-Type: application/json' -d "{\"path\":\"$repo\"}")" = 409 ] && [ "$(as "$REVIEWER" -X POST "$CP/projects/$PROJECT/repos" -H 'Content-Type: application/json' -d "{\"path\":\"$stray\"}")" = 403 ] && [ "$(as "$REVIEWER" -X POST "$CP/projects/$PROJECT/members" -H 'Content-Type: application/json' -d '{"name":"otto","role":"viewer"}')" = 403 ]; echo $?)"
       code=$(as "$REVIEWER" -X POST "$CP/tasks/$task/approve" -H 'Content-Type: application/json' -d '{"reviewer":"mallory","rationale":"ok"}')
       check "the reviewer approves; the record and the event name the signed-in reviewer, not the body's (HTTP $code)" \
         "$([ "$code" = 200 ] && curl -sf "$CP/tasks/$task/approvals" | jq -e '.[0].action == "approve" and .[0].reviewer == "rae" and (.[0].reviewerId | startswith("usr-"))' >/dev/null && curl -sf "$CP/tasks/$task/events" | jq -e 'any(.[]; .type == "approval.approve" and .actor == "rae")' >/dev/null; echo $?)"
@@ -688,7 +712,7 @@ rollback_delivery() { # local | pr  (task, repo, target, branch, origin from run
   local merge code fixed_before
   merge=$(delivery_of "$task" | jq -r .mergeCommit)
   local other; other=$(curl -s -X POST "$CP/tasks" -H 'Content-Type: application/json' \
-    -d "{\"requirement\":\"noop\",\"acceptance\":[\"x\"],\"repoPath\":\"$repo\",\"baseCommit\":\"HEAD\"}")
+    -d "{\"projectId\":\"$PROJECT\",\"requirement\":\"noop\",\"acceptance\":[\"x\"],\"repoPath\":\"$repo\",\"baseCommit\":\"HEAD\"}")
   check "a task that is not delivered cannot be rolled back ($(echo "$other" | head -c 120))" \
     "$([ "$(rollback "$(echo "$other" | jq -r .id)")" = 409 ]; echo $?)"
   if [ "$1" = local ]; then

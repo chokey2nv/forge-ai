@@ -54,6 +54,9 @@ export interface Task {
   delivery?: Delivery;
   /** Phase 12: each version of a parent's combined change put up for human review. */
   revisions?: Revision[];
+  /** Phase 13.4: the project the task belongs to; who created it (13.3). */
+  projectId?: string;
+  createdBy?: string;
   /** Phase 12.3: each time a human sent the combined change back to the head engineer. */
   followUps?: FollowUp[];
   /** Follow-up subtask: the review threads it takes on. */
@@ -303,6 +306,7 @@ export interface Config {
 }
 
 export interface NewTask {
+  projectId: string;
   requirement: string;
   acceptance: string[];
   repoPath: string;
@@ -321,10 +325,23 @@ export interface User {
 }
 
 export type Role = "viewer" | "member" | "reviewer";
-const RANK: Record<Role, number> = { viewer: 1, member: 2, reviewer: 3 };
+/** A role in a project (13.4): the instance roles plus the project's admin. */
+export type ProjectRole = Role | "admin";
+const RANK: Record<ProjectRole, number> = { viewer: 1, member: 2, reviewer: 3, admin: 4 };
 
-/** Whether the user may do what needs role min (the API enforces it; the console only hides what would be refused). */
+/** Whether the user may do what needs role min across the instance (the API enforces it; the console only hides what would be refused). */
 export const can = (u: User | null | undefined, min: Role) => !!u && (u.instanceAdmin || RANK[u.role] >= RANK[min]);
+/** Whether a project role includes min. */
+export const allows = (r: ProjectRole | "" | undefined, min: ProjectRole) => !!r && RANK[r] >= RANK[min];
+
+/** Phase 13.4: a project, its repositories and members, with your role in it. */
+export interface Project {
+  id: string;
+  name: string;
+  repos: { path: string; defaultTarget?: string; addedAt: string }[];
+  members: { userId: string; name: string; role: ProjectRole }[];
+  myRole: ProjectRole | "";
+}
 
 /** Fired when the API answers 401: the session ended, so the console shows sign-in. */
 export const SIGNED_OUT = "forge:signed-out";
@@ -345,8 +362,8 @@ export const api = {
         }),
     logout: () => fetch(BASE + "/auth/logout", { method: "POST", credentials: "include" }),
     getConfig: () => j<Config>("/config"),
-    inspectRepo: (path: string, targetBranch: string, requirement: string) =>
-        j<RepoInspection>(`/repos/inspect?${new URLSearchParams({ path, targetBranch, requirement })}`),
+    inspectRepo: (projectId: string, path: string, targetBranch: string, requirement: string) =>
+        j<RepoInspection>(`/repos/inspect?${new URLSearchParams({ projectId, path, targetBranch, requirement })}`),
     createTask: (t: NewTask) =>
         j<Task>("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }),
     startTask: (taskId: string, provider: string, model: string) =>
@@ -361,8 +378,29 @@ export const api = {
     listChildren: (parentId: string) => j<Task[]>(`/tasks/${parentId}/children`),
 
 
-    listTasks: (status?: string) =>
-        j<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
+    listTasks: (status?: string, projectId?: string) => {
+        const q = new URLSearchParams();
+        if (status) q.set("status", status);
+        if (projectId) q.set("projectId", projectId);
+        return j<Task[]>(`/tasks${q.size ? `?${q}` : ""}`);
+    },
+    listProjects: () => j<Project[]>("/projects"),
+    createProject: (name: string) =>
+        j<Project>("/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+    addProjectRepo: (pid: string, path: string, defaultTarget: string) =>
+        j<Project>(`/projects/${pid}/repos`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, defaultTarget: defaultTarget || undefined }),
+        }),
+    removeProjectRepo: (pid: string, path: string) =>
+        fetch(`${BASE}/projects/${pid}/repos?${new URLSearchParams({ path })}`, { method: "DELETE", credentials: "include" })
+            .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status} — ${await r.text()}`); }),
+    setProjectMember: (pid: string, name: string, role: ProjectRole) =>
+        j<unknown>(`/projects/${pid}/members`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, role }),
+        }),
+    removeProjectMember: (pid: string, uid: string) =>
+        fetch(`${BASE}/projects/${pid}/members/${uid}`, { method: "DELETE", credentials: "include" })
+            .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status} — ${await r.text()}`); }),
     getTask: (id: string) => j<Task>(`/tasks/${id}`),
     listRuns: (taskId: string) => j<Run[]>(`/tasks/${taskId}/runs`),
     getRun: (id: string) => j<Run>(`/runs/${id}`),

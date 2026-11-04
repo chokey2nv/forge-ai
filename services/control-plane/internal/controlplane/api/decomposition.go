@@ -174,6 +174,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			Addresses:         addressedBy[t.ID],
 			Acceptance:        t.Acceptance,
 			RepoPath:          task.RepoPath,
+			ProjectID:         task.ProjectID,
 			BaseCommit:        integrationBranch, // children work off the integration branch
 			Status:            domain.StatusCreated,
 			DiffScope:         t.DiffScope,

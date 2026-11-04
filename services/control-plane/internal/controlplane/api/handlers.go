@@ -26,6 +26,7 @@ type Handlers struct {
 	// CallbackKey signs each run's callback token (Phase 13.1, RunToken).
 	CallbackKey []byte
 	// Phase 13.2: sign-in.
+	Projects         store.ProjectRepo // Phase 13.4
 	Users            store.UserRepo
 	Sessions         store.SessionRepo
 	Tokens           store.TokenRepo
