@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -85,6 +86,17 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// With a remote, the work starts from what's there: pull requests merged
+	// on the forge leave the local branch behind.
+	tip, startNote, err := delivery.StartingPoint(ctx, body.RepoPath, target, tip)
+	if errors.Is(err, delivery.ErrDiverged) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	now := time.Now().UTC()
 	task := &domain.Task{
@@ -115,11 +127,11 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = h.Events.Append(ctx, &domain.Event{
-		TaskID: task.ID, Type: "branch.created",
-		Reason: fmt.Sprintf("%s from %s at %s", task.IntegrationBranch, target, shortSHA(tip)),
-		At:     now,
-	})
+	reason := fmt.Sprintf("%s from %s at %s", task.IntegrationBranch, target, shortSHA(tip))
+	if startNote != "" {
+		reason += ": " + startNote
+	}
+	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "branch.created", Reason: reason, At: now})
 
 	writeJSON(w, http.StatusCreated, task)
 }

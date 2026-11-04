@@ -163,7 +163,18 @@ mongosh forge_ai --eval '
 
 ### 2.7 Users and tokens (Phase 13.2)
 
-The API and the console need a signed-in user. Create the first one (an instance admin) directly in the database; the password is the first line of stdin:
+The API and the console need a signed-in user. Add one with `make`, from the repository's root; it asks for the password without showing it, and Forge doesn't need to be running. The first user becomes an instance admin:
+
+```bash
+make user NAME=ceejay                  # role member
+make user NAME=rae ROLE=reviewer       # viewer, member or reviewer
+make user NAME=sam ADMIN=1             # instance admin
+make users                             # list them
+```
+
+Sign in on the console with that name and password. A user who isn't an instance admin sees nothing until a project admin adds them on the Project page. The `forge` on your `PATH` may be another program (Foundry has one too), and `services/control-plane/cmd/forge` is a source folder, not a program ("permission denied"), so use the `make` targets or `go run` as below.
+
+For scripts, the password is the first line of stdin:
 
 ```bash
 cd services/control-plane
@@ -263,6 +274,28 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 ---
 
 ## 4. Starting services
+
+### One click
+
+Double-click **Start Forge.command** in the repository's folder in Finder (or run `make up`). It starts Docker and MongoDB if they aren't running, builds what's missing, starts the adapter, control plane and console in the background, waits until each answers, and opens the console. Closing the Terminal window leaves Forge running. **Stop Forge.command** (or `make down`) stops them.
+
+```bash
+scripts/forge.sh status            # what's running
+scripts/forge.sh logs adapter      # follow a log: control-plane (default), adapter, console
+scripts/forge.sh restart           # pick up code changes
+```
+
+| Service | Port | Change it with |
+|---|---|---|
+| Console | 5174 | `FORGE_CONSOLE_PORT` |
+| Control plane | 8085 | `FORGE_CP_PORT` |
+| Adapter | 8086 | `FORGE_ADAPTER_PORT` |
+
+These ports win over the port settings in `.env`, which still apply to the manual steps below and to the slices. A port in use by something else stops the start with a message naming it; nothing is killed. If a service fails to come up, the end of its log is shown and whatever that start began is stopped. Everything else comes from `.env`, which must have `FORGE_ADAPTER_TOKEN`. Logs and PIDs are in `.forge/run/`.
+
+Stopping Forge while agents are running leaves their runs to go stale; resume them after the next start with `POST /runs/{id}/resume`.
+
+The steps below do the same by hand.
 
 Run each in its own terminal, in this order: Mongo → control plane → adapter.
 
@@ -640,6 +673,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
 | `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
+| `deliver-pr-moved` | Same, the target moves on the forge only | Delivery fetches it, merges it in and verifies again; `PR_OPEN`; the local target doesn't move; a new task starts from the forge's tip and its `branch.created` event says why |
 | `rollback-local` | A delivered local merge, then an unrelated commit on the target, then `POST /tasks/{id}/rollback` | `ROLLED_BACK`; the target is one revert commit on top ("This reverts <merge>"); the fix is gone, the later work stays, the merge is still in history; recorded in `approvals`; a second rollback → 409 |
 | `rollback-pr` | A PR merged on the forge (the harness merges it into the bare origin), then a rollback | `REVERT_PR_OPEN`; `<parent>-revert` pushed as one commit on top of the forge's merge; `gh pr create --head <parent>-revert --title Revert: …`; revert merged → `ROLLED_BACK` |
 | `feedback-request-changes` | Three threads on r1, then request changes (`budget.maxRevisions: 2`) | Head engineer shown T1/T2 and the diff; one follow-up subtask addresses T1, starts from r1 and replies on it with `reply_to_thread`; T2 and T3 answered by the head engineer (*addressed*); back to `REVIEW_PENDING` as r2 whose changes since r1 are just the fix; T1's rewritten line is outdated in r2, T3 moves down two lines; a second request is 409; approve → `MERGED` |
@@ -1102,7 +1136,11 @@ rm -rf .forge
 | 12. Human feedback | Verified | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; request changes through a head engineer follow-up; agent replies and threads carried across revisions | §5.12 with Claude (comment → request changes → the agent changes it and replies → r2 → resolve → approve → `MERGED`), and the same flow from the console. 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane. 12.3: unit tests (thread handling in a follow-up graph, final review IDs after escalation retries, revision budget, follow-up prompt, new state edges); §5.9 `feedback-request-changes`, `feedback-unhandled-thread`, `feedback-escalated-parent-retry`, `feedback-budget` (§6.5.3); console request changes against a live control plane. 12.4: unit tests (line relocation through a diff, reply parsing, re-anchoring on a real repo); `feedback-request-changes` also checks the implementer's reply on T1, T1 outdated in r2 and T3 moved two lines; console against a live control plane. 12.5: §5.12 slice and console run with `claude-haiku-5-5` |
 | 13. Hardening | Verified | Service trust, sign-in, roles, projects, sandbox, spend caps, delivery resumed after a restart | Unit tests; §5.9 `sandbox-postinstall`, `budget-tokens`, `restart-mid-delivery` and sign-in, role and project checks throughout; all five §5.7–§5.12 slices with Claude and sign-in on (`claude-haiku-5-5`, $0.09 by Forge's prices); console with Claude: a capped task stopped, cap raised, started again, approved, `MERGED` ($0.0057) |
 
-Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a rollback interrupted by a restart. The Phase 6 eval harness has not been re-run.
+Real GitHub pull requests were checked once by hand on 4 Nov 2026 with the scripted model, on a private repository: approve → PR opened → merged on GitHub → `MERGED`; roll back → revert PR → merged → `ROLLED_BACK`, with the target's files back as they were; a PR closed without merging → `REJECTED`. The suite still uses a stub `gh`.
+
+Not covered yet: resuming a rollback interrupted by a restart. The Phase 6 eval harness has not been re-run.
+
+A repository with a remote: Forge fetches the target when creating a task and again before opening its pull request, and never moves your local branch. A local target that's behind doesn't affect the work (also checked on that repository, with `main` moving on GitHub before the task and again during review). The `branch.created` event says which commit a task started from and why. If the local target and the remote's have diverged, creating a task answers 409 until you pull or push. If the fetch fails when creating a task, it starts from the local branch and the event says so; if it fails during delivery, the task is `BLOCKED` and delivery can be retried.
 
 ---
 

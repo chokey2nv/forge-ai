@@ -27,6 +27,7 @@
 #   deliver-dirty      the target is checked out with edits: blocked; clean it, retry -> merged
 #   deliver-pr         a remote: approval pushes and opens a PR; merged on the forge -> MERGED
 #   deliver-pr-closed  the PR is closed without merging -> REJECTED
+#   deliver-pr-moved   the target moves on the forge only: delivery fetches it, merges it in, verifies; new tasks start there
 #   rollback-local     a delivered local merge is reverted by a commit on the target (Phase 11.4)
 #   rollback-pr        a merged PR is reverted by a revert PR; merged on the forge -> ROLLED_BACK
 #   feedback-request-changes  threads on r1, request changes -> head engineer follow-up -> r2 -> approve -> MERGED (Phase 12.3)
@@ -47,7 +48,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -631,6 +632,11 @@ run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
       echo "# Notes" >"$repo/NOTES.md"; git -C "$repo" add NOTES.md
       git -C "$repo" -c user.name=someone -c user.email=s@localhost commit -q -m "notes" ;;
     dirty) echo "// my edit" >>"$repo/src/price.js" ;;
+    pr-moved) # a PR merges on the forge; the local target knows nothing of it
+      local c; c=$(mktemp -d "$WORK/forge.XXXXXX")
+      git clone -q -b "$target" "$origin" "$c"; echo "# Notes" >"$c/NOTES.md"; git -C "$c" add NOTES.md
+      git -C "$c" -c user.name=github -c user.email=gh@localhost commit -q -m "merged on the forge"
+      git -C "$c" push -q origin "$target" ;;
   esac
   local before; before=$(git -C "$repo" rev-parse "$target")
   [[ "$1" == pr ]] && post_thread "$task" '{"author":"dana","body":"Follow up on rounding mode later."}' >/dev/null
@@ -670,6 +676,19 @@ run_delivery() { # local | moved | dirty | pr | pr-closed, then [rollback]
         "$(delivery_of "$task" | jq -e '.error == null and .mergeCommit != null' >/dev/null && git -C "$repo" merge-base --is-ancestor "$branch" "$target"; echo $?)"
       code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/deliver")
       check "a delivered task cannot be retried (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+      ;;
+    pr-moved)
+      local tip; tip=$(git -C "$origin" rev-parse "$target")
+      check "task PR_OPEN ($final)" "$([ "$final" = PR_OPEN ]; echo $?)"
+      check "the pushed branch holds the forge's new commit" "$(git -C "$origin" merge-base --is-ancestor "$tip" "$branch"; echo $?)"
+      check "it was merged in and verified again" \
+        "$(echo "$d" | jq -e '.targetMoved' >/dev/null && [ "$(event_count "$task" delivery.target_merged "Merge $target")" -ge 1 ] && [ "$(delivery_verifications "$task")" -ge 1 ]; echo $?)"
+      check "the local target did not move" "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ]; echo $?)"
+      local next; next=$(curl -s -X POST "$CP/tasks" -H 'Content-Type: application/json' \
+        -d "{\"projectId\":\"$PROJECT\",\"requirement\":\"next\",\"acceptance\":[\"x\"],\"repoPath\":\"$repo\",\"baseCommit\":\"HEAD\"}")
+      check "a new task starts from the forge's tip, not the stale local one" \
+        "$(echo "$next" | jq -e --arg t "$tip" '.baseCommit == $t and .integrationBaseCommit == $t' >/dev/null; echo $?)"
+      check "and says why" "$([ "$(event_count "$(echo "$next" | jq -r .id)" branch.created "the local branch is behind")" -ge 1 ]; echo $?)"
       ;;
     pr|pr-closed)
       check "task PR_OPEN ($final)" "$([ "$final" = PR_OPEN ]; echo $?)"

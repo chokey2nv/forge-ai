@@ -70,7 +70,12 @@ func (h *Handlers) deliver(ctx context.Context, task *domain.Task) {
 		if preview.Mode == delivery.ModeLocalMerge && h.alreadyMerged(ctx, task, d) {
 			return
 		}
-		moved, err := h.mergeTargetIn(ctx, task, d)
+		tip, err := h.targetTip(ctx, task, preview)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		moved, err := h.mergeTargetIn(ctx, task, d, tip)
 		if err != nil {
 			fail(err.Error())
 			return
@@ -158,17 +163,22 @@ func (h *Handlers) alreadyMerged(ctx context.Context, task *domain.Task, d *doma
 	return true
 }
 
+// targetTip is the commit a delivery has to be up to date with: the remote's
+// target for a pull request, the local branch otherwise.
+func (h *Handlers) targetTip(ctx context.Context, task *domain.Task, preview delivery.Preview) (string, error) {
+	if preview.Mode == delivery.ModePullRequest {
+		return delivery.FetchTarget(ctx, task.RepoPath, preview.Remote.Name, task.TargetBranch)
+	}
+	return delivery.BranchTip(ctx, task.RepoPath, task.TargetBranch)
+}
+
 // mergeTargetIn brings the target's new commits into the parent branch when
 // the target advanced, then re-runs the verification gates on the result.
 // Reviews are not repeated: the reviewed change itself is unchanged. A merge
 // an earlier attempt made whose verification did not pass (it failed, or
 // the control plane stopped during it) is verified now. d.VerifiedCommit
 // records the tip that passed.
-func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task, d *domain.Delivery) (moved bool, err error) {
-	target, err := delivery.BranchTip(ctx, task.RepoPath, task.TargetBranch)
-	if err != nil {
-		return false, err
-	}
+func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task, d *domain.Delivery, target string) (moved bool, err error) {
 	work, err := delivery.BranchTip(ctx, task.RepoPath, task.IntegrationBranch)
 	if err != nil {
 		return false, err
@@ -184,7 +194,7 @@ func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task, d *doma
 	}
 	if !merged {
 		msg := fmt.Sprintf("Merge %s into %s", task.TargetBranch, task.IntegrationBranch)
-		if err := workspace.MergeIntoWorktree(ctx, wt, task.TargetBranch, msg); err != nil {
+		if err := workspace.MergeIntoWorktree(ctx, wt, target, msg); err != nil {
 			return true, fmt.Errorf("%s moved since the work started and conflicts with it: %v", task.TargetBranch, err)
 		}
 		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "delivery.target_merged", Reason: msg, At: time.Now().UTC()})

@@ -111,3 +111,18 @@ console-dev:
 # -  const end = start + size - 1;
 # +  const end = start + size;
 # ...
+.PHONY: up down user users
+
+# The whole of Forge in one command (scripts/forge.sh; RUNBOOK §4).
+up:
+	bash scripts/forge.sh up
+
+down:
+	bash scripts/forge.sh down
+
+# make user NAME=ceejay [ROLE=viewer|member|reviewer] [ADMIN=1]; asks for the password.
+user:
+	@bash scripts/forge.sh user "$(NAME)" $(if $(ROLE),--role $(ROLE)) $(if $(ADMIN),--admin)
+
+users:
+	@bash scripts/forge.sh users
