@@ -69,16 +69,7 @@ func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, chil
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
-		"--network=none",
-		"--workdir", "/workspace",
-		"-v", worktree + ":/workspace:rw",
-		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
-		image, "sleep", "infinity",
-	}
+	args := workerArgs(containerName, runID, worktree, image)
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		removeWorkspaceDir(ctx, parentRepoPath, worktree)
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
@@ -95,16 +86,7 @@ func ProvisionParentContainer(ctx context.Context, repoPath, integrationWorktree
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
-		"--network=none",
-		"--workdir", "/workspace",
-		"-v", integrationWorktree + ":/workspace:rw",
-		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
-		image, "sleep", "infinity",
-	}
+	args := workerArgs(containerName, runID, integrationWorktree, image)
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)

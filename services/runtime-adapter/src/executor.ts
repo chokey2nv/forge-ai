@@ -70,9 +70,10 @@ export async function executeToolCall(
         const p = confine(String(call.arguments.path ?? ""));
         const content = String(call.arguments.content ?? "");
         const b64 = Buffer.from(content, "utf8").toString("base64");
+        // A new file may be in a folder that does not exist yet.
         const r = await ws.exec([
           "sh", "-c",
-          `printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(p)}`,
+          `mkdir -p "$(dirname ${shellQuote(p)})" && printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(p)}`,
         ]);
         if (r.exitCode !== 0) return { ok: false, output: r.stderr || `write failed: ${p}` };
         const d = await ws.exec(["git", "diff", "--", p]);

@@ -36,6 +36,14 @@ export async function provisionWorkspace(cfg: WorkspaceConfig): Promise<Workspac
     "--memory", "2g",
     "--cpus", "2",
     "--pids-limit", "256",
+    // Phase 13.5: unprivileged, as the control plane's containers are.
+    "--user", `${process.getuid?.() || 65534}:${process.getgid?.() || 65534}`,
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--read-only",
+    "--tmpfs", "/tmp:rw,exec,nosuid,size=1g",
+    "-e", "HOME=/tmp",
+    "-e", "npm_config_cache=/tmp/.npm",
     cfg.image,
     "sleep", "infinity",
   ]);

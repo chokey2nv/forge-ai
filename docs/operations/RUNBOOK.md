@@ -643,6 +643,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `feedback-unhandled-thread` | The follow-up graph ignores both threads | Refused: back to `REVIEW_PENDING` with the unhandled threads named; no subtask added; threads still open |
 | `feedback-escalated-parent-retry` | The final review rejects the combined change; a human retries with guidance | Head engineer shown the findings and the guidance; a second subtask fixes it; r1 recorded with final review `-a2` |
 | `feedback-budget` | `budget.maxRevisions: 1` | Request changes is 409; approve still works |
+| `sandbox-postinstall` | A subtask adds a `postinstall` hook and a test of its own container; the next subtask's workspace is set up after it is merged | The test passes in verification (non-root, read-only root, writable `/workspace` and `/tmp`, no network); the hook runs in the offline step as a non-root user, cannot write `/etc` or `/usr`, and neither reaches a listener on the host nor resolves DNS; the listener hears only the harness's own control request |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
 **Pass criteria:** the script prints `PASS`. Logs (control plane, adapter) are kept in the `logs:` directory it prints.
@@ -865,6 +866,18 @@ printf 'run:%s' <runId> | openssl dgst -sha256 -hmac "$FORGE_CALLBACK_SECRET" | 
 
 If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, the two services were started with different values.
 
+### 6.9 The container sandbox (Phase 13.5)
+
+Every container Forge starts (agent workspaces, their verification, a parent's combined verification, dependency setup) runs as the control plane's own user (`nobody` when the control plane runs as root), with no Linux capabilities, `no-new-privileges`, and a read-only root filesystem. Only `/workspace` (the task's clone) and a 1 GB `/tmp` are writable; `HOME`, the npm cache and Go's caches live in `/tmp`. Agents and verification have no network.
+
+Dependencies install in two containers. The first fetches packages with the network but runs none of their scripts (`npm install --ignore-scripts`, `go mod download`). The second runs the install scripts, the dependencies' (`npm rebuild`) and the project's own (`preinstall`, `install`, `postinstall`, `prepare`), with no network. After a task's first subtask the repository holds agent-written code, so a hook an agent adds never runs with network access.
+
+To see a container's settings while it runs:
+
+```bash
+docker inspect forge-worker-<runId> --format '{{.Config.User}} {{.HostConfig.CapDrop}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.NetworkMode}} {{.HostConfig.SecurityOpt}}'
+```
+
 ---
 
 ## 7. Troubleshooting
@@ -920,6 +933,8 @@ If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, 
 | API answers 401 "sign in required" | Send a token (`-H "Authorization: Bearer $FORGE_TOKEN"`, §2.7) or sign in to the console. A revoked token, a disabled user, or an expired session all answer 401 |
 | The console shows the sign-in page right after signing in | The session cookie is not reaching the API: its origin must be in `FORGE_CONSOLE_ORIGINS`, and the console and API must be on the same site (`localhost` with `localhost`, not `127.0.0.1` with `localhost`) |
 | 403 "this needs the reviewer role" (or member) | Your role does not allow it (§2.7). An instance admin can change it: `forge users role <name> reviewer` |
+| Setup fails: "dependency install (none network): …" | An install script (a dependency's or the project's `postinstall`) needs the network, e.g. to download a binary; install scripts run offline since 13.5 (§6.9). Vendor or prebuild what it fetches |
+| A tool fails with `EROFS` / "read-only file system" in a workspace | Since 13.5 only `/workspace` and `/tmp` are writable (§6.9); point the tool's cache or home at `/tmp` |
 | 404 for a task you know exists | You are not a member of its project; a project admin adds you (§2.7) |
 | Creating a task: 400 "… is not a repository of project …" | A project admin registers it on the *Project* page or with `POST /projects/<id>/repos` |
 | A slice stops: "could not register … in project …" | The token's user must be an admin of `FORGE_PROJECT` (or an instance admin, for the default `slices` project) |

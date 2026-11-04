@@ -1,0 +1,213 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "Fix applyDiscount and add an install probe",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "applyDiscount(200, 10) returns 180",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js",
+                  "package.json",
+                  "scripts/probe.js",
+                  "tests/sandbox.test.js"
+                ],
+                "rationale": "Fix, plus a postinstall hook."
+              },
+              {
+                "id": "t2",
+                "title": "Note the sandbox in the README",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "README.md mentions the sandbox",
+                  "npm test passes"
+                ],
+                "dependsOn": [
+                  "t1"
+                ],
+                "diffScope": [
+                  "README.md"
+                ],
+                "rationale": "Its workspace is set up after t1's hook is merged."
+              }
+            ],
+            "notes": "Two subtasks."
+          }
+        }
+      ]
+    }
+  ],
+  "implementer": [
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * 100) / 100;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        },
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "package.json",
+            "content": "{\n    \"name\": \"cart-pricing\",\n    \"private\": true,\n    \"type\": \"commonjs\",\n    \"scripts\": {\n        \"test\": \"node --test\",\n        \"postinstall\": \"node scripts/probe.js\"\n    }\n}\n"
+          }
+        },
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "scripts/probe.js",
+            "content": "// Install hook written by an agent: what can it reach while it runs?\n// Phase 13.5 runs install scripts with no network, unprivileged, on a\n// read-only root filesystem; the harness reads what this records.\nconst fs = require(\"fs\");\nconst http = require(\"http\");\nconst dns = require(\"dns\");\n\nconst out = { uid: process.getuid() };\nfor (const [k, p] of [[\"rootfs\", \"/etc/forge-probe\"], [\"usr\", \"/usr/local/forge-probe\"], [\"tmp\", \"/tmp/forge-probe\"]]) {\n  try { fs.writeFileSync(p, \"x\"); out[k] = \"writable\"; } catch (e) { out[k] = e.code; }\n}\nconst beacon = new Promise((resolve) => {\n  const r = http.get(\"http://host.docker.internal:8093/postinstall\", { timeout: 3000 }, () => resolve(\"reached\"));\n  r.on(\"error\", (e) => resolve(e.code || String(e)));\n  r.on(\"timeout\", () => { r.destroy(); resolve(\"timeout\"); });\n});\nconst lookup = new Promise((resolve) => dns.lookup(\"registry.npmjs.org\", (e) => resolve(e ? e.code : \"resolved\")));\nPromise.all([beacon, lookup]).then(([b, l]) => {\n  out.network = b;\n  out.dns = l;\n  fs.mkdirSync(\"node_modules\", { recursive: true });\n  fs.writeFileSync(\"node_modules/.forge-sandbox-probe.json\", JSON.stringify(out) + \"\\n\");\n});\n"
+          }
+        },
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "tests/sandbox.test.js",
+            "content": "// The worker container an agent and its verification run in (Phase 13.5).\nconst test = require(\"node:test\");\nconst assert = require(\"node:assert\");\nconst fs = require(\"fs\");\nconst http = require(\"http\");\n\ntest(\"runs as a non-root user\", () => {\n  assert.notStrictEqual(process.getuid(), 0);\n});\n\ntest(\"the root filesystem is read-only\", () => {\n  assert.throws(() => fs.writeFileSync(\"/etc/forge-probe\", \"x\"), /EROFS|EACCES/);\n});\n\ntest(\"the workspace and /tmp are writable\", () => {\n  fs.writeFileSync(\"/tmp/forge-probe\", \"x\");\n  fs.writeFileSync(\".forge-probe\", \"x\");\n  fs.unlinkSync(\".forge-probe\");\n});\n\ntest(\"there is no network\", async () => {\n  await assert.rejects(new Promise((resolve, reject) => {\n    const r = http.get(\"http://host.docker.internal:8093/test\", { timeout: 3000 }, resolve);\n    r.on(\"error\", reject);\n    r.on(\"timeout\", () => r.destroy(new Error(\"timeout\")));\n  }));\n});\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Fixed applyDiscount and added the probe."
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "node_modules/.forge-sandbox-probe.json"
+          }
+        },
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "README.md",
+            "content": "# cart-pricing\n\nAgents work in an unprivileged, offline sandbox.\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Added the README."
+    }
+  ],
+  "reviewer": {
+    "You are a code reviewer": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review tests": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ],
+    "You review changes for security": [
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "submit_review",
+            "arguments": {
+              "verdict": "pass",
+              "summary": "Meets every acceptance criterion."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

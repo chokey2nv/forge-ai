@@ -33,6 +33,7 @@
 #   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
 #   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
 #   feedback-budget    a task budgeted for one revision cannot be sent back
+#   sandbox-postinstall an agent adds an install hook; it runs offline, unprivileged, on a read-only root (Phase 13.5)
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
 set -euo pipefail
@@ -46,7 +47,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -88,8 +89,9 @@ export FORGE_GH="$WORK/bin/gh" GH_LOG="$WORK/gh.log" GH_PR_STATE="$WORK/pr-state
 cp -R "$ROOT/agents" "$WORK/agents"
 export AGENTS_DIR="$WORK/agents" SKILLS_DIR="$ROOT/skills"
 
-CP_PID="" AD_PID=""
+CP_PID="" AD_PID="" BEACON_PID=""
 cleanup() {
+  [ -n "$BEACON_PID" ] && kill "$BEACON_PID" 2>/dev/null || true
   [ -n "$AD_PID" ] && stop_adapter
   [ -n "$CP_PID" ] && kill "$CP_PID" 2>/dev/null || true
   # Containers are labeled with this instance; nothing else is touched.
@@ -862,6 +864,42 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
   esac
 }
 
+# Phase 13.5: the first subtask adds a postinstall hook and a test of its own
+# container; the second subtask's workspace is set up after the hook is merged,
+# so the hook runs in the offline scripts step. A listener on the host counts
+# what reaches it: only the control request, never the hook or the tests.
+BEACON_PORT=8093
+run_sandbox() {
+  local repo task final t1 t2 hits beacon probe
+  hits="$WORK/beacon.log"; : >"$hits"
+  node -e "require('http').createServer((q, r) => { require('fs').appendFileSync(process.argv[1], q.url + '\n'); r.end('ok') }).listen($BEACON_PORT, '127.0.0.1')" "$hits" &
+  beacon=$! BEACON_PID=$!
+  sleep 1
+  docker run --rm --network=bridge "${WORKER_IMAGE:-forge-worker:dev}" node -e \
+    "require('http').get('http://host.docker.internal:$BEACON_PORT/control', () => process.exit(0)).on('error', () => process.exit(1))" >/dev/null 2>&1 || true
+  check "control: a container with network reaches the listener" "$(grep -qx /control "$hits"; echo $?)"
+
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED|ESCALATED" 300) || true
+  stop_adapter
+  t1=$(child_titled "$task" "Fix applyDiscount and add an install probe"); t2=$(child_titled "$task" "Note the sandbox in the README")
+  echo "  parent $task -> $final; $t1 -> $(status_of "$t1"); $t2 -> $(status_of "$t2")"
+  check "both subtasks integrated and the parent reached REVIEW_PENDING ($final)" \
+    "$([ "$final" = REVIEW_PENDING ] && [ "$(status_of "$t1")" = INTEGRATED ] && [ "$(status_of "$t2")" = INTEGRATED ]; echo $?)"
+  check "the agent's own container: non-root, read-only root, writable workspace and /tmp, no network (its tests passed in verification)" \
+    "$(curl -sf "$CP/runs/run-$t1/verification" | jq -e '[.gates[] | select(.name == "test")][0] | .passed and (.output | contains("runs as a non-root user") and contains("the root filesystem is read-only") and contains("there is no network") and contains("# fail 0"))' >/dev/null; echo $?)"
+  probe=$(curl -sf "$CP/runs/run-$t2" | jq -r '[(.lastCheckpoint.messages // [])[] | select(.role == "tool") | .content | select(contains("\"uid\""))][0] // empty' || true)
+  echo "  install hook saw: $probe"
+  check "the agent-written install hook ran, as a non-root user, with a read-only root filesystem" \
+    "$(echo "$probe" | jq -e '.uid != 0 and .rootfs == "EROFS" and .usr == "EROFS" and .tmp == "writable"' >/dev/null; echo $?)"
+  check "and with no network: no beacon, no DNS" \
+    "$(echo "$probe" | jq -e '.network != "reached" and .dns != "resolved"' >/dev/null; echo $?)"
+  check "the listener heard only the control request" "$([ "$(sort -u "$hits" | tr '\n' ' ')" = "/control " ]; echo $?)"
+  kill "$beacon" 2>/dev/null || true; wait "$beacon" 2>/dev/null || true; BEACON_PID=""
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -878,6 +916,7 @@ for SC in "${SCENARIOS[@]}"; do
     rollback-*) run_delivery "${SC#rollback-}" rollback ;;
     deliver-*) run_delivery "${SC#deliver-}" ;;
     feedback-*) run_feedback "${SC#feedback-}" ;;
+    sandbox-postinstall) run_sandbox ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

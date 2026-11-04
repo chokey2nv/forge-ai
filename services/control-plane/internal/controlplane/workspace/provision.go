@@ -67,16 +67,7 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
-		"--network=none",
-		"--workdir", "/workspace",
-		"-v", worktreeDir + ":/workspace:rw",
-		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
-		image, "sleep", "infinity",
-	}
+	args := workerArgs(containerName, runID, worktreeDir, image)
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		removeWorkspaceDir(ctx, repoPath, worktreeDir)
@@ -90,26 +81,43 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Killing the docker CLI on timeout or shutdown does not stop the
-	// container, so name it and remove it explicitly on any failure.
-	name := "forge-setup-" + filepath.Base(worktreePath)
-	out, err := exec.CommandContext(sctx, "docker", "run", "--rm",
-		"--name", name,
-		"--label", LabelRun+"=setup-"+filepath.Base(worktreePath), "--label", instanceLabel(),
-		"--workdir", "/workspace",
-		"-v", worktreePath+":/workspace:rw",
-		"--network=bridge",
-		image,
-		"sh", "-c", `
-			if [ -f package.json ]; then npm install --no-audit --no-fund; fi
-			if [ -f go.mod ]; then go mod download; fi
-		`,
-	).CombinedOutput()
-	if err != nil {
-		RemoveContainer(context.WithoutCancel(ctx), name)
-		return fmt.Errorf("dependency install: %s: %w", out, err)
+	base := filepath.Base(worktreePath)
+	step := func(name, network, script string) error {
+		// Killing the docker CLI on timeout or shutdown does not stop the
+		// container, so name it and remove it explicitly on any failure.
+		args := []string{"run", "--rm",
+			"--name", name,
+			"--label", LabelRun + "=setup-" + base, "--label", instanceLabel(),
+			"--workdir", "/workspace",
+			"-v", worktreePath + ":/workspace:rw",
+			"--network=" + network,
+		}
+		args = append(args, sandboxArgs()...)
+		args = append(args, image, "sh", "-c", script)
+		out, err := exec.CommandContext(sctx, "docker", args...).CombinedOutput()
+		if err != nil {
+			RemoveContainer(context.WithoutCancel(ctx), name)
+			return fmt.Errorf("dependency install (%s network): %s: %w", network, out, err)
+		}
+		return nil
 	}
-	return nil
+
+	// Phase 13.5: after its first subtask a repository holds agent-written
+	// code, which may include install hooks. Packages are fetched with the
+	// network but none of their scripts run; the scripts (the dependencies'
+	// and the project's own) then run with no network.
+	if err := step("forge-setup-"+base, "bridge", `
+		if [ -f package.json ]; then npm install --no-audit --no-fund --ignore-scripts; fi
+		if [ -f go.mod ]; then go mod download; fi
+	`); err != nil {
+		return err
+	}
+	return step("forge-setup-scripts-"+base, "none", `
+		if [ -f package.json ]; then
+			npm rebuild --no-audit --no-fund || exit 1
+			for s in preinstall install postinstall prepare; do npm run --if-present "$s" || exit 1; done
+		fi
+	`)
 }
 
 func mktempDir(prefix string) (string, error) {
@@ -132,16 +140,7 @@ func Provision(ctx context.Context, repoPath, baseCommit, image, runID string) (
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
 	// Labels help cleanup after crashes; network=none; memory/cpus caps
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--label", LabelRun + "=" + runID, "--label", instanceLabel(),
-		"--network=none",
-		"--workdir", "/workspace",
-		"-v", worktreeDir + ":/workspace:rw",
-		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
-		image, "sleep", "infinity",
-	}
+	args := workerArgs(containerName, runID, worktreeDir, image)
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
