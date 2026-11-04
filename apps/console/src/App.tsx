@@ -1,8 +1,8 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   api, SIGNED_OUT, allows, type Project, type ProjectRole, type User, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
-  type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, AgentDefinition, Skill,
+  type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, type Limits, type SpendView, type TaskSpend, AgentDefinition, Skill,
 } from "./api";
 import { DiffView } from "./DiffView";
 
@@ -128,6 +128,8 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [maxSteps, setMaxSteps] = useState(30);
+  const [maxTokens, setMaxTokens] = useState("");
+  const [maxCost, setMaxCost] = useState("");
   const [maxRetries, setMaxRetries] = useState(2);
   const [minutes, setMinutes] = useState(30);
   const [startNow, setStartNow] = useState(true);
@@ -162,7 +164,7 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
         projectId: project!.id,
         requirement: requirement.trim(), acceptance: criteria, repoPath: repoPath,
         targetBranch: target || undefined,
-        budget: { maxSteps, maxRetries, wallClockMs: minutes * 60_000 },
+        budget: { maxSteps, maxRetries, wallClockMs: minutes * 60_000, maxTokens: Number(maxTokens) || 0, maxCostUsd: Number(maxCost) || 0 },
       });
       remember(LAST_REPO, repoPath.trim());
       if (startNow) {
@@ -241,6 +243,10 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
             <label>Max steps <input type="number" min={1} value={maxSteps} onChange={(e) => setMaxSteps(+e.target.value)} /></label>
             <label>Max retries <input type="number" min={0} value={maxRetries} onChange={(e) => setMaxRetries(+e.target.value)} /></label>
             <label>Time limit (minutes) <input type="number" min={1} value={minutes} onChange={(e) => setMinutes(+e.target.value)} /></label>
+          </div>
+          <div className="row">
+            <label>Token cap <input type="number" min={0} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="default" /></label>
+            <label>Cost cap ($) <input type="number" min={0} step="0.01" value={maxCost} onChange={(e) => setMaxCost(e.target.value)} placeholder="default" /></label>
           </div>
         </details>
         <label className="inline"><input type="checkbox" checked={startNow} onChange={(e) => setStartNow(e.target.checked)} /> Start now (hand it to the head engineer)</label>
@@ -417,6 +423,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [threads, setThreads] = useState<ThreadList | null>(null);
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
+  const [spend, setSpend] = useState<TaskSpend | null>(null);
+  const [blockedWhy, setBlockedWhy] = useState("");
   // Decisions and comments are recorded as the signed-in user (13.3); what
   // they may do follows their role in the task's project (13.4).
   const me = useContext(CurrentUser);
@@ -452,6 +460,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       setApprovals(await api.listApprovals(id));
       setThreads(isParent(t) ? await api.listThreads(id).catch(() => null) : null);
       setDelivery(!t.parentId ? await api.getDelivery(id).catch(() => null) : null);
+      setSpend(await api.getTaskSpend(id).catch(() => null));
+      setBlockedWhy(t.status === "BLOCKED" ? (await api.getTaskEvents(id).catch(() => [] as Event[])).filter((e) => e.to === "BLOCKED").pop()?.reason ?? "" : "");
       setErr("");
     } catch (e) { setErr(String(e)); }
   };
@@ -521,6 +531,25 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <h3>Acceptance criteria</h3>
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
+
+      {spend && (
+        <SpendPanel title={task.parentId ? "Spend (with the parent task)" : "Spend"} view={spend.task}
+          onSave={!task.parentId && allows(role, "admin") ? async (l) => { await api.setTaskBudget(task.id, l); await reload(); } : undefined}>
+          {task.parentId && <p className="hint">Subtasks share their parent's budget; change it on the parent.</p>}
+          {task.status === "BLOCKED" && !task.parentId && children.length === 0 && !task.delivery && (
+            <p>
+              Blocked before its subtasks were planned{blockedWhy ? `: ${blockedWhy}` : ""}.{" "}
+              {allows(role, "member") && <button className="neutral" onClick={() => api.startTask(task.id, run?.provenance?.provider ?? "", run?.provenance?.model ?? "").then(reload).catch((e) => setErr(String(e)))}>Start again</button>}
+            </p>
+          )}
+          {task.status === "BLOCKED" && !!task.parentId && run?.status === "BLOCKED" && /budget reached/.test(run.blockedReason ?? "") && (
+            <p>
+              {sentence(run.blockedReason!)}{" "}
+              {allows(role, "member") && <button className="neutral" onClick={() => api.resumeRun(run.id).then(reload).catch((e) => setErr(String(e)))}>Resume</button>}
+            </p>
+          )}
+        </SpendPanel>
+      )}
 
       {task.delivery ? <DeliveryRecord task={task} onRetry={mayDecide ? retryDelivery : undefined} onRollback={mayDecide ? rollback : undefined} /> : delivery && <DeliveryHint preview={delivery} />}
 
@@ -871,6 +900,39 @@ function Reviews({ reviews, title }: { reviews: Review[]; title: string }) {
   );
 }
 
+/** What model calls have cost so far against the caps (13.6). */
+function SpendPanel({ title, view, onSave, children }: { title: string; view: SpendView; onSave?: (l: Limits) => Promise<void>; children?: ReactNode }) {
+  const { spend: s, limits: l } = view;
+  const tokens = s.inputTokens + s.outputTokens;
+  const [maxTokens, setMaxTokens] = useState(l.maxTokens ? String(l.maxTokens) : "");
+  const [maxCost, setMaxCost] = useState(l.maxCostUsd ? String(l.maxCostUsd) : "");
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setErr("");
+    try { await onSave!({ maxTokens: Number(maxTokens) || 0, maxCostUsd: Number(maxCost) || 0 }); } catch (e) { setErr(String(e)); }
+  };
+  return (
+    <section className="spend">
+      <h3>{title}</h3>
+      <p>
+        {tokens.toLocaleString()} tokens{l.maxTokens ? ` of ${l.maxTokens.toLocaleString()}` : ""}
+        {" · "}${s.costUsd.toFixed(4)}{l.maxCostUsd ? ` of $${l.maxCostUsd.toFixed(2)}` : ""}
+        {!l.maxTokens && !l.maxCostUsd && <span className="version"> no cap</span>}
+      </p>
+      {s.unpricedTokens > 0 && <p className="hint">{s.unpricedTokens.toLocaleString()} tokens are from models with no price, so they are not in the cost.</p>}
+      {children}
+      {onSave && (
+        <div className="inline-form">
+          <input value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} inputMode="numeric" placeholder="token cap (none)" aria-label="Token cap" />
+          <input value={maxCost} onChange={(e) => setMaxCost(e.target.value)} inputMode="decimal" placeholder="cost cap in $ (none)" aria-label="Cost cap in dollars" />
+          <button onClick={save}>Save caps</button>
+        </div>
+      )}
+      {err && <p className="error">{err}</p>}
+    </section>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status.toLowerCase()}`}>{status}</span>;
 }
@@ -889,6 +951,9 @@ function ProjectPage() {
   const [memberRole, setMemberRole] = useState<ProjectRole>("member");
   const run = async (f: () => Promise<unknown>) => { setErr(""); try { await f(); await reload(); } catch (e) { setErr(String(e)); } };
   const admin = me?.instanceAdmin || p?.myRole === "admin";
+  const [spend, setSpend] = useState<SpendView | null>(null);
+  const loadSpend = () => { if (p) api.getProjectSpend(p.id).then(setSpend).catch(() => setSpend(null)); };
+  useEffect(loadSpend, [p?.id]);
 
   return (
     <div className="detail project-page">
@@ -905,6 +970,10 @@ function ProjectPage() {
       {!p ? <p className="hint">{list.length ? "Pick a project." : "No projects yet."}</p> : (
         <>
           <h2>{p.name} <span className="version">your role: {me?.instanceAdmin ? "admin (instance)" : p.myRole}</span></h2>
+          {spend && (
+            <SpendPanel key={p.id} title="Spend, all tasks" view={spend}
+              onSave={admin ? async (l) => { await api.setProjectBudget(p.id, l); loadSpend(); } : undefined} />
+          )}
           <section>
             <h3>Repositories</h3>
             <p className="hint">Tasks in this project can only work in these, on the control plane's machine.</p>

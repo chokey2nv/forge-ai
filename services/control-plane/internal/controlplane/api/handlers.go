@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"net/http"
 	"time"
 
@@ -26,23 +27,28 @@ type Handlers struct {
 	// CallbackKey signs each run's callback token (Phase 13.1, RunToken).
 	CallbackKey []byte
 	// Phase 13.2: sign-in.
-	Projects         store.ProjectRepo // Phase 13.4
-	Users            store.UserRepo
-	Sessions         store.SessionRepo
-	Tokens           store.TokenRepo
-	BootstrapToken   string        // FORGE_BOOTSTRAP_TOKEN: an instance admin until the first user exists
-	SessionTTL       time.Duration // idle expiry of a console session (default 12h)
-	SecureCookies    bool          // mark the session cookie Secure (behind HTTPS)
-	EvalResults      store.EvalResultRepo
-	SM               *statemachine.Service
-	Adapter          *adapter.Client
-	Verifier         *verification.Runner
-	Registry         *agent.Registry
-	Integrator       *orchestration.Integrator // Phase 8
-	WorkerImage      string
-	SelfURL          string
-	SystemPrompt     string
-	AllowedProviders []string
+	Projects store.ProjectRepo // Phase 13.4
+	// Phase 13.6: model spend per agent invocation, and the prices it is costed at.
+	Spend  store.SpendRepo
+	Prices map[string]Price
+	// DefaultTaskLimits apply to new tasks that set no cap of their own.
+	DefaultTaskLimits domain.Limits
+	Users             store.UserRepo
+	Sessions          store.SessionRepo
+	Tokens            store.TokenRepo
+	BootstrapToken    string        // FORGE_BOOTSTRAP_TOKEN: an instance admin until the first user exists
+	SessionTTL        time.Duration // idle expiry of a console session (default 12h)
+	SecureCookies     bool          // mark the session cookie Secure (behind HTTPS)
+	EvalResults       store.EvalResultRepo
+	SM                *statemachine.Service
+	Adapter           *adapter.Client
+	Verifier          *verification.Runner
+	Registry          *agent.Registry
+	Integrator        *orchestration.Integrator // Phase 8
+	WorkerImage       string
+	SelfURL           string
+	SystemPrompt      string
+	AllowedProviders  []string
 	// What the console offers when starting work (GET /config).
 	DefaultProvider, DefaultModel string
 	MaxVerificationAttempts       int // consecutive verification failures before blocking

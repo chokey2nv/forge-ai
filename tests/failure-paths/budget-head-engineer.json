@@ -1,0 +1,111 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "src/price.js"
+          }
+        }
+      ],
+      "inputTokens": 1500,
+      "outputTokens": 100
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "id": "t1",
+                "title": "Fix applyDiscount",
+                "assignedAgent": "implementer",
+                "acceptance": [
+                  "applyDiscount(200, 10) returns 180",
+                  "applyDiscount(19.99, 25) returns 14.99",
+                  "npm test passes"
+                ],
+                "dependsOn": [],
+                "diffScope": [
+                  "src/price.js"
+                ],
+                "rationale": "Single file fix."
+              }
+            ],
+            "notes": "One subtask."
+          }
+        }
+      ],
+      "inputTokens": 1000,
+      "outputTokens": 200
+    }
+  ],
+  "implementer": [
+    {
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "src/price.js",
+            "content": "// applyDiscount returns price reduced by percent (0-100), rounded to cents.\nfunction applyDiscount(price, percent) {\n  return Math.round(price * (1 - percent / 100) * 100) / 100;\n}\n\nmodule.exports = { applyDiscount };\n"
+          }
+        }
+      ],
+      "inputTokens": 4000,
+      "outputTokens": 500
+    },
+    {
+      "content": "Fixed applyDiscount.",
+      "inputTokens": 100,
+      "outputTokens": 50
+    }
+  ],
+  "reviewer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    }
+  ]
+}

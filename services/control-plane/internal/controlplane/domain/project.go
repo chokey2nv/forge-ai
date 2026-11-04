@@ -17,11 +17,13 @@ func ValidProjectRole(r Role) bool { return ValidRole(r) || r == RoleAdmin }
 // Project is the unit of tenancy (Phase 13.4): the repositories its tasks
 // may work in, and who may do what with them.
 type Project struct {
-	ID        string          `bson:"_id" json:"id"`
-	Name      string          `bson:"name" json:"name"`
-	Repos     []ProjectRepo   `bson:"repos" json:"repos"`
-	Members   []ProjectMember `bson:"members" json:"members"`
-	CreatedAt time.Time       `bson:"createdAt" json:"createdAt"`
+	ID      string          `bson:"_id" json:"id"`
+	Name    string          `bson:"name" json:"name"`
+	Repos   []ProjectRepo   `bson:"repos" json:"repos"`
+	Members []ProjectMember `bson:"members" json:"members"`
+	// Budget caps the spend of all the project's tasks together (13.6).
+	Budget    Limits    `bson:"budget" json:"budget"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
 }
 
 type ProjectRepo struct {

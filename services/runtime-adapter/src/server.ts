@@ -7,7 +7,7 @@ import process from "process";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
-import { timingSafeEqual } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 
 (function loadRootEnv() {
   let dir = process.cwd();
@@ -158,9 +158,17 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       ? { messages, stepCount: body.checkpoint.stepCount, usage: body.checkpoint.usage }
       : undefined;
 
+    // Phase 13.6: this invocation's model usage, reported with every
+    // callback. A resumed history's usage was reported by its own invocation.
+    const model = body.model || process.env.MODEL_NAME || "";
+    const invocation = randomUUID();
+    const priorCalls = resumeFrom?.usage?.length ?? 0;
+    const spend = (usage: any[]) => ({ invocation, model, usage: usage.slice(priorCalls) });
+    let stopReason: string | undefined;
+
     const result = await runAgent({
       provider,
-      model: body.model ?? process.env.MODEL_NAME ?? "",
+      model,
       workspace: ws as any,
       role,
       tools: body.tools,
@@ -171,17 +179,23 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       submissionTool: body.submissionTool,
       resumeFrom,
       isCancelled: () => cancelled,
+      stopReason: () => stopReason,
       onCheckpoint: async (state) => {
         const diff = await workspaceDiff();
         const callbackId = body.callbackRunId ?? body.runId;
-        await callback(`/runs/${callbackId}/checkpoint`, {
+        const answer = await callback(`/runs/${callbackId}/checkpoint`, {
           role,
           messages: state.messages,
           stepCount: state.stepCount,
           usage: state.usage,
           status: state.status,
           workspaceDiff: diff,
+          spend: spend(state.usage),
         });
+        if (answer?.stop) {
+          console.log(`[adapter] run ${body.runId}: control plane says stop: ${answer.stop}`);
+          stopReason = answer.stop;
+        }
       },
     }, body.task);
 
@@ -196,6 +210,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       usage: result.state.usage,
       messages: result.state.messages,
       workspaceDiff: diff,
+      spend: spend(result.state.usage),
     });
   })().catch((err) => {
     console.error(`[adapter] run ${body.runId} failed during completion:`, err);
@@ -242,6 +257,11 @@ async function postCallback(url: string, token: string, body: unknown) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`callback ${url}: HTTP ${res.status}`);
+  // A checkpoint may answer {"stop": reason} (Phase 13.6); otherwise 204.
+  if (res.status === 200 && res.headers.get("content-type")?.includes("application/json")) {
+    return (await res.json()) as { stop?: string };
+  }
+  return undefined;
 }
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

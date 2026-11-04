@@ -38,7 +38,13 @@ type Budget struct {
 	// human can be shown (Phase 12): asking for changes once that many have
 	// been prepared is refused. 0 uses the control plane's default.
 	MaxRevisions int `bson:"maxRevisions,omitempty" json:"maxRevisions,omitempty"`
+	// MaxTokens and MaxCostUSD cap the model spend of the task and its
+	// subtasks (Phase 13.6); only a top-level task's apply. 0: no cap.
+	MaxTokens  int64   `bson:"maxTokens,omitempty" json:"maxTokens,omitempty"`
+	MaxCostUSD float64 `bson:"maxCostUsd,omitempty" json:"maxCostUsd,omitempty"`
 }
+
+func (b Budget) Limits() Limits { return Limits{MaxTokens: b.MaxTokens, MaxCostUSD: b.MaxCostUSD} }
 
 type Provenance struct {
 	AgentDefinition string `bson:"agentDefinition" json:"agentDefinition"` // e.g. "implementer@v1"
@@ -144,14 +150,18 @@ type Delivery struct {
 	Remote       string `bson:"remote,omitempty" json:"remote,omitempty"`
 	// TargetMoved: the target had advanced since the work started, so it was
 	// merged into the branch and the verification gates ran again.
-	TargetMoved bool      `bson:"targetMoved,omitempty" json:"targetMoved,omitempty"`
-	MergeCommit string    `bson:"mergeCommit,omitempty" json:"mergeCommit,omitempty"`
-	PRURL       string    `bson:"prUrl,omitempty" json:"prUrl,omitempty"`
-	PRNumber    int       `bson:"prNumber,omitempty" json:"prNumber,omitempty"`
-	Error       string    `bson:"error,omitempty" json:"error,omitempty"`
-	StartedAt   time.Time `bson:"startedAt" json:"startedAt"`
-	FinishedAt  time.Time `bson:"finishedAt,omitempty" json:"finishedAt,omitzero"`
-	Rollback    *Rollback `bson:"rollback,omitempty" json:"rollback,omitempty"`
+	TargetMoved bool `bson:"targetMoved,omitempty" json:"targetMoved,omitempty"`
+	// VerifiedCommit: the branch tip that passed those gates. A delivery
+	// resumed or retried with a different tip (the merge was made, its
+	// verification never finished or failed) verifies again (13.6).
+	VerifiedCommit string    `bson:"verifiedCommit,omitempty" json:"verifiedCommit,omitempty"`
+	MergeCommit    string    `bson:"mergeCommit,omitempty" json:"mergeCommit,omitempty"`
+	PRURL          string    `bson:"prUrl,omitempty" json:"prUrl,omitempty"`
+	PRNumber       int       `bson:"prNumber,omitempty" json:"prNumber,omitempty"`
+	Error          string    `bson:"error,omitempty" json:"error,omitempty"`
+	StartedAt      time.Time `bson:"startedAt" json:"startedAt"`
+	FinishedAt     time.Time `bson:"finishedAt,omitempty" json:"finishedAt,omitzero"`
+	Rollback       *Rollback `bson:"rollback,omitempty" json:"rollback,omitempty"`
 }
 
 // Rollback undoes a delivery by reverting it (never by rewriting history):

@@ -171,3 +171,12 @@ func (r *TaskRepo) AssignProject(ctx context.Context, repoPath, projectID string
 	}
 	return res.ModifiedCount, nil
 }
+
+func (r *TaskRepo) SetSpendLimits(ctx context.Context, id string, l domain.Limits, at time.Time) error {
+	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"budget.maxTokens": l.MaxTokens, "budget.maxCostUsd": l.MaxCostUSD, "updatedAt": at}})
+	if err == nil && res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}

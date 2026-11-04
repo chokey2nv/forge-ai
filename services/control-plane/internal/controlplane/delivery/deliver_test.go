@@ -119,6 +119,7 @@ echo "$*" >>` + log + `
 case "$1 $2" in
   "pr create") echo "Creating pull request..."; echo "https://github.com/owner/app/pull/42" ;;
   "pr view") echo '{"state":"MERGED","mergeCommit":{"oid":"abc123"}}' ;;
+  "pr list") cat ` + filepath.Join(dir, "open.json") + ` 2>/dev/null || echo '[]' ;;
   *) exit 1 ;;
 esac
 `
@@ -127,6 +128,9 @@ esac
 	}
 
 	remote := &Remote{Name: "origin", Host: "github.com", Repo: "owner/app"}
+	if _, _, ok := FindOpenPR(ctx, gh, repo, remote, "main", "forge/w"); ok {
+		t.Error("no pull request is open yet")
+	}
 	url, n, err := OpenPR(ctx, gh, repo, remote, "main", "forge/w", "Fix it", "body text")
 	if err != nil || url != "https://github.com/owner/app/pull/42" || n != 42 {
 		t.Fatalf("OpenPR = %q %d %v", url, n, err)
@@ -136,6 +140,14 @@ esac
 		if !strings.Contains(string(args), want) {
 			t.Errorf("gh called with %q, want %q", args, want)
 		}
+	}
+
+	_ = os.WriteFile(filepath.Join(dir, "open.json"), []byte(`[{"url":"https://github.com/owner/app/pull/42","number":42}]`), 0o644)
+	if u, n, ok := FindOpenPR(ctx, gh, repo, remote, "main", "forge/w"); !ok || u != url || n != 42 {
+		t.Errorf("FindOpenPR = %q %d %v", u, n, ok)
+	}
+	if !strings.Contains(readFile(t, log), "pr list --head forge/w --base main --state open --json url,number --repo github.com/owner/app") {
+		t.Error("FindOpenPR asks gh for open pull requests from the branch into the target")
 	}
 
 	state, mc, err := PRState(ctx, gh, repo, url)
@@ -167,4 +179,13 @@ func TestPushNeverForces(t *testing.T) {
 	if err := Push(ctx, repo, "origin", "forge/w"); err == nil {
 		t.Error("a non-fast-forward push must fail, not overwrite")
 	}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

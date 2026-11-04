@@ -46,6 +46,10 @@ func (h *Handlers) deliver(ctx context.Context, task *domain.Task) {
 	if preview.Remote != nil {
 		d.Remote = preview.Remote.Name
 	}
+	if prev := task.Delivery; prev != nil && prev.MergeCommit == "" && prev.PRURL == "" {
+		// Resumed or retried: what the earlier attempt merged in may still need verifying.
+		d.TargetMoved, d.VerifiedCommit = prev.TargetMoved, prev.VerifiedCommit
+	}
 	save := func() { _ = h.Tasks.UpdateDelivery(ctx, task.ID, d, time.Now().UTC()) }
 	fail := func(reason string) {
 		log.Printf("delivery %s: %s", task.ID, reason)
@@ -66,7 +70,7 @@ func (h *Handlers) deliver(ctx context.Context, task *domain.Task) {
 		if preview.Mode == delivery.ModeLocalMerge && h.alreadyMerged(ctx, task, d) {
 			return
 		}
-		moved, err := h.mergeTargetIn(ctx, task)
+		moved, err := h.mergeTargetIn(ctx, task, d)
 		if err != nil {
 			fail(err.Error())
 			return
@@ -101,6 +105,41 @@ func (h *Handlers) deliver(ctx context.Context, task *domain.Task) {
 	}
 }
 
+// ResumeDeliveries picks up deliveries a stopped control plane left
+// DELIVERING (Phase 13.6). Every step of a delivery can be repeated: a
+// half-done merge into the parent branch is undone and redone, a merge that
+// landed is recognised, a pushed branch is pushed again and an open pull
+// request is found rather than opened twice. A step that fails blocks the
+// task with its reason, as in any delivery. Called once at startup, before
+// the API serves: one control plane per database.
+func (h *Handlers) ResumeDeliveries(ctx context.Context) int {
+	tasks, err := h.Tasks.ListByStatus(ctx, domain.StatusDelivering, 0)
+	if err != nil {
+		log.Printf("resume deliveries: %v", err)
+		return 0
+	}
+	for _, task := range tasks {
+		reason := "the control plane restarted during delivery; resuming it"
+		if task.IntegrationWorktree != "" && workspace.AbortUnfinishedMerge(task.IntegrationWorktree) {
+			reason += " (undid a half-done merge of " + task.TargetBranch + ")"
+		}
+		log.Printf("delivery %s: %s", task.ID, reason)
+		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "delivery.resumed", Reason: reason, At: time.Now().UTC()})
+		go h.resumeDelivery(context.WithoutCancel(ctx), task)
+	}
+	return len(tasks)
+}
+
+func (h *Handlers) resumeDelivery(ctx context.Context, task *domain.Task) {
+	// The pull request was opened and recorded; only the move to PR_OPEN was lost.
+	if d := task.Delivery; d != nil && d.PRURL != "" && d.Error == "" {
+		_ = h.SM.Transition(ctx, task, domain.StatusPROpen, "opened "+d.PRURL+" (recorded before the restart)")
+		h.removeIntegrationWorktree(ctx, task)
+		return
+	}
+	h.deliver(ctx, task)
+}
+
 // alreadyMerged: a retried delivery whose merge landed (the target holds the
 // branch) completes without merging again.
 func (h *Handlers) alreadyMerged(ctx context.Context, task *domain.Task, d *domain.Delivery) bool {
@@ -121,8 +160,11 @@ func (h *Handlers) alreadyMerged(ctx context.Context, task *domain.Task, d *doma
 
 // mergeTargetIn brings the target's new commits into the parent branch when
 // the target advanced, then re-runs the verification gates on the result.
-// Reviews are not repeated: the reviewed change itself is unchanged.
-func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task) (moved bool, err error) {
+// Reviews are not repeated: the reviewed change itself is unchanged. A merge
+// an earlier attempt made whose verification did not pass (it failed, or
+// the control plane stopped during it) is verified now. d.VerifiedCommit
+// records the tip that passed.
+func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task, d *domain.Delivery) (moved bool, err error) {
 	target, err := delivery.BranchTip(ctx, task.RepoPath, task.TargetBranch)
 	if err != nil {
 		return false, err
@@ -131,7 +173,8 @@ func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task) (moved 
 	if err != nil {
 		return false, err
 	}
-	if delivery.IsAncestor(ctx, task.RepoPath, target, work) {
+	merged := delivery.IsAncestor(ctx, task.RepoPath, target, work)
+	if merged && (!d.TargetMoved || d.VerifiedCommit == work) {
 		return false, nil
 	}
 
@@ -139,11 +182,19 @@ func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task) (moved 
 	if err != nil {
 		return true, err
 	}
-	msg := fmt.Sprintf("Merge %s into %s", task.TargetBranch, task.IntegrationBranch)
-	if err := workspace.MergeIntoWorktree(ctx, wt, task.TargetBranch, msg); err != nil {
-		return true, fmt.Errorf("%s moved since the work started and conflicts with it: %v", task.TargetBranch, err)
+	if !merged {
+		msg := fmt.Sprintf("Merge %s into %s", task.TargetBranch, task.IntegrationBranch)
+		if err := workspace.MergeIntoWorktree(ctx, wt, task.TargetBranch, msg); err != nil {
+			return true, fmt.Errorf("%s moved since the work started and conflicts with it: %v", task.TargetBranch, err)
+		}
+		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "delivery.target_merged", Reason: msg, At: time.Now().UTC()})
+		// Recorded before verifying, so an interrupted verification is redone.
+		d.TargetMoved = true
+		_ = h.Tasks.UpdateDelivery(ctx, task.ID, d, time.Now().UTC())
+		if work, err = delivery.BranchTip(ctx, task.RepoPath, task.IntegrationBranch); err != nil {
+			return true, err
+		}
 	}
-	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "delivery.target_merged", Reason: msg, At: time.Now().UTC()})
 
 	ws, err := workspace.ProvisionParentContainer(ctx, task.RepoPath, wt, h.WorkerImage, task.ID+"-delivery", int(h.SetupTimeout.Seconds()))
 	if err != nil {
@@ -157,6 +208,7 @@ func (h *Handlers) mergeTargetIn(ctx context.Context, task *domain.Task) (moved 
 	if !vr.Passed {
 		return true, fmt.Errorf("verification failed after merging %s:\n%s", task.TargetBranch, h.Verifier.SummaryText(vr))
 	}
+	d.VerifiedCommit = work
 	return true, nil
 }
 
@@ -165,11 +217,17 @@ func (h *Handlers) openPullRequest(ctx context.Context, task *domain.Task, previ
 		fail(err.Error())
 		return
 	}
-	url, number, err := delivery.OpenPR(ctx, h.Delivery.GH, task.RepoPath, preview.Remote,
-		task.TargetBranch, task.IntegrationBranch, firstLine(task.Requirement, 72), h.pullRequestBody(ctx, task))
-	if err != nil {
-		fail(err.Error())
-		return
+	// One may already be open: gh opened it, then the control plane stopped
+	// before recording it.
+	url, number, open := delivery.FindOpenPR(ctx, h.Delivery.GH, task.RepoPath, preview.Remote, task.TargetBranch, task.IntegrationBranch)
+	if !open {
+		var err error
+		url, number, err = delivery.OpenPR(ctx, h.Delivery.GH, task.RepoPath, preview.Remote,
+			task.TargetBranch, task.IntegrationBranch, firstLine(task.Requirement, 72), h.pullRequestBody(ctx, task))
+		if err != nil {
+			fail(err.Error())
+			return
+		}
 	}
 	d.PRURL, d.PRNumber = url, number
 	save()

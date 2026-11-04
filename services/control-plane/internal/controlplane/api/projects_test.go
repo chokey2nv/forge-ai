@@ -75,6 +75,10 @@ func (s *memProjects) SetMember(_ context.Context, id string, m domain.ProjectMe
 	return nil
 }
 func (s *memProjects) RemoveMember(context.Context, string, string) error { return nil }
+func (s *memProjects) SetBudget(_ context.Context, id string, l domain.Limits) error {
+	s.m[id].Budget = l
+	return nil
+}
 
 // projTasks serves tasks by ID and supports the migration.
 type projTasks struct {

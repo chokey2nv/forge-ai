@@ -28,6 +28,8 @@ export interface AgentConfig {
     usage: ModelUsage[];
   };
   isCancelled?: () => boolean;
+  /** The control plane's reason to stop, e.g. a spend cap reached (Phase 13.6). */
+  stopReason?: () => string | undefined;
   submissionTool?: string;
 }
 
@@ -67,6 +69,12 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
       state.blockedReason = "cancelled";
       break;
     }
+    const stop = cfg.stopReason?.();
+    if (stop) {
+      state.status = "blocked";
+      state.blockedReason = stop;
+      break;
+    }
     if (Date.now() > deadline) {
       state.status = "blocked";
       state.blockedReason = `wall clock exceeded (${cfg.wallClockMs}ms)`;
@@ -79,6 +87,9 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
       state.blockedReason = `model call failed after ${cfg.maxRetries} retries`;
       break;
     }
+
+    // Every call is spent, the last one (a submission or final answer) too.
+    state.usage.push(resp.usage);
 
     let submission: Record<string, unknown> | undefined;
 
@@ -116,7 +127,6 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
 
 
     state.stepCount++;
-    state.usage.push(resp.usage);
     for (const call of resp.toolCalls) {
       const result = await executeToolCall(cfg.workspace, call);
       state.messages.push({

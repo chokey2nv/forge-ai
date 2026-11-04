@@ -311,7 +311,7 @@ export interface NewTask {
   acceptance: string[];
   repoPath: string;
   targetBranch?: string;
-  budget: { maxSteps: number; maxRetries: number; wallClockMs: number };
+  budget: { maxSteps: number; maxRetries: number; wallClockMs: number; maxTokens?: number; maxCostUsd?: number };
 }
 
 /** Phase 13.2: the signed-in person. */
@@ -344,6 +344,12 @@ export interface Project {
 }
 
 /** Fired when the API answers 401: the session ended, so the console shows sign-in. */
+// Spend caps (Phase 13.6). A cap of 0 or none means no cap.
+export interface Limits { maxTokens?: number; maxCostUsd?: number }
+export interface Spend { inputTokens: number; outputTokens: number; costUsd: number; unpricedTokens: number }
+export interface SpendView { spend: Spend; limits: Limits }
+export interface TaskSpend { rootTaskId: string; task: SpendView; subtask?: Spend; project?: SpendView }
+
 export const SIGNED_OUT = "forge:signed-out";
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
@@ -424,6 +430,13 @@ export const api = {
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
     getDelivery: (taskId: string) => j<DeliveryPreview>(`/tasks/${taskId}/delivery`),
+    getTaskSpend: (taskId: string) => j<TaskSpend>(`/tasks/${taskId}/spend`),
+    setTaskBudget: (taskId: string, l: Limits) =>
+      j<Limits>(`/tasks/${taskId}/budget`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(l) }),
+    getProjectSpend: (pid: string) => j<SpendView>(`/projects/${pid}/spend`),
+    setProjectBudget: (pid: string, l: Limits) =>
+      j<Limits>(`/projects/${pid}/budget`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(l) }),
+    resumeRun: (runId: string) => j<{ runId: string; status: string }>(`/runs/${runId}/resume`, { method: "POST" }),
     getTaskDiff: (taskId: string, revision?: number, since?: number) => {
       const q = new URLSearchParams();
       if (revision !== undefined) q.set("revision", String(revision));

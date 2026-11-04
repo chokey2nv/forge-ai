@@ -61,7 +61,21 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		body.BaseCommit = "HEAD"
 	}
 	if body.Budget.MaxSteps == 0 {
-		body.Budget = domain.Budget{MaxSteps: 20, MaxRetries: 2, WallClockMS: 1_800_000}
+		b := body.Budget
+		body.Budget = domain.Budget{MaxSteps: 20, MaxRetries: 2, WallClockMS: 1_800_000,
+			MaxRevisions: b.MaxRevisions, MaxTokens: b.MaxTokens, MaxCostUSD: b.MaxCostUSD}
+	}
+	if body.Budget.MaxTokens < 0 || body.Budget.MaxCostUSD < 0 {
+		http.Error(w, "budget caps cannot be negative", http.StatusBadRequest)
+		return
+	}
+	// Caps the task does not set come from FORGE_TASK_MAX_TOKENS and
+	// FORGE_TASK_MAX_COST_USD (13.6).
+	if body.Budget.MaxTokens == 0 {
+		body.Budget.MaxTokens = h.DefaultTaskLimits.MaxTokens
+	}
+	if body.Budget.MaxCostUSD == 0 {
+		body.Budget.MaxCostUSD = h.DefaultTaskLimits.MaxCostUSD
 	}
 
 	// The task's work lives on its own branch from the start: resolve the
@@ -144,8 +158,32 @@ func (h *Handlers) DispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Over a spend cap the task stays CREATED: raise the cap, then start it.
+	if reason := h.overBudget(ctx, task); reason != "" {
+		http.Error(w, (&BudgetError{Reason: reason}).Error(), http.StatusConflict)
+		return
+	}
+
+	// A task blocked before any subtask was planned (a spend cap stopped its
+	// head engineer, say) can be started again; a blocked task with subtasks
+	// or a delivery has its own ways on.
+	reason := "head-engineer requested"
+	switch task.Status {
+	case domain.StatusCreated:
+	case domain.StatusBlocked:
+		kids, err := h.Tasks.ListChildren(ctx, task.ID)
+		if err != nil || len(kids) > 0 || task.Delivery != nil || task.ParentID != "" || len(task.Revisions) > 0 {
+			http.Error(w, "only a task blocked before its subtasks were planned can be started again", http.StatusConflict)
+			return
+		}
+		reason = "started again after decomposition was blocked"
+	default:
+		http.Error(w, "the task has already started (status "+string(task.Status)+")", http.StatusConflict)
+		return
+	}
+
 	// Transition CREATED → DECOMPOSING
-	if err := h.SM.Transition(ctx, task, domain.StatusDecomposing, "head-engineer requested"); err != nil {
+	if err := h.SM.Transition(ctx, task, domain.StatusDecomposing, reason); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

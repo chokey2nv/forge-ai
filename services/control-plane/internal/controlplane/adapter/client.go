@@ -17,6 +17,9 @@ type Client struct {
 	// CallbackToken gives a run's callback token; the adapter presents it
 	// on that run's checkpoints and completion (Phase 13.1).
 	CallbackToken func(runID string) string
+	// Gate, when set, may refuse a run before it starts: a spend cap is
+	// reached (Phase 13.6).
+	Gate func(ctx context.Context, req *StartRunRequest) error
 }
 
 type ToolSchema struct {
@@ -51,6 +54,11 @@ type StartRunResponse struct {
 }
 
 func (c *Client) StartRun(ctx context.Context, req *StartRunRequest) (*StartRunResponse, error) {
+	if c.Gate != nil {
+		if err := c.Gate(ctx, req); err != nil {
+			return nil, err
+		}
+	}
 	if c.CallbackToken != nil {
 		id := req.CallbackRunID
 		if id == "" {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -22,11 +23,17 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "run is not resumable (status="+string(run.Status)+")", http.StatusConflict)
 		return
 	}
-	if run.LastCheckpoint == nil {
+	// A run refused before its agent started (a spend cap, say) has no
+	// checkpoint: resuming it starts the agent from the beginning.
+	if run.LastCheckpoint == nil && run.Status != domain.RunBlocked {
 		http.Error(w, "no checkpoint to resume from", http.StatusConflict)
 		return
 	}
 	task, _ := h.Tasks.Get(ctx, run.TaskID)
+	if reason := h.overBudget(ctx, task); reason != "" {
+		http.Error(w, (&BudgetError{Reason: reason}).Error(), http.StatusConflict)
+		return
+	}
 	def, sysPrompt, tools, err := h.composeImplementer(run, task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -52,10 +59,14 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Restore worktree from checkpoint
-	if err := workspace.ApplyDiff(ctx, ws.WorktreePath, run.LastCheckpoint.WorkspaceDiff); err != nil {
-		workspace.Cleanup(ctx, ws, task.RepoPath)
-		http.Error(w, "apply checkpoint diff: "+err.Error(), http.StatusInternalServerError)
-		return
+	var checkpoint any
+	if run.LastCheckpoint != nil {
+		checkpoint = run.LastCheckpoint
+		if err := workspace.ApplyDiff(ctx, ws.WorktreePath, run.LastCheckpoint.WorkspaceDiff); err != nil {
+			workspace.Cleanup(ctx, ws, task.RepoPath)
+			http.Error(w, "apply checkpoint diff: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Verification and review run in the run's recorded workspace; point it at
@@ -69,6 +80,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunRunning, "", time.Now().UTC())
+	h.reopenParent(ctx, task)
 
 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
 		RunID:          run.ID + "-r",
@@ -86,7 +98,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		MaxSteps:       task.Budget.MaxSteps,
 		MaxRetries:     task.Budget.MaxRetries,
 		WallClockMS:    task.Budget.WallClockMS,
-		Checkpoint:     run.LastCheckpoint,
+		Checkpoint:     checkpoint,
 	}); err != nil {
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunBlocked, err.Error(), time.Now().UTC())
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -94,4 +106,18 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"runId": runID, "status": "RUNNING"})
+}
+
+// reopenParent: a parent blocked because this subtask was blocked waits for
+// its subtasks again once the subtask is resumed. The scheduler blocks it
+// again if another subtask is still blocked.
+func (h *Handlers) reopenParent(ctx context.Context, child *domain.Task) {
+	if child.ParentID == "" {
+		return
+	}
+	parent, err := h.Tasks.Get(ctx, child.ParentID)
+	if err != nil || parent.Status != domain.StatusBlocked || parent.Delivery != nil {
+		return
+	}
+	_ = h.SM.Transition(ctx, parent, domain.StatusDispatched, "subtask "+child.ID+" resumed")
 }

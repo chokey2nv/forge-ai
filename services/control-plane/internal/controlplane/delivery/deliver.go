@@ -160,6 +160,28 @@ func OpenPR(ctx context.Context, gh, repoPath string, remote *Remote, target, br
 	return "", 0, fmt.Errorf("gh pr create: no pull request URL in output %q", out)
 }
 
+// FindOpenPR returns the open pull request from branch into target, if one
+// exists: a delivery interrupted after gh opened it (a restart, say) uses
+// it instead of opening another.
+func FindOpenPR(ctx context.Context, gh, repoPath string, remote *Remote, target, branch string) (url string, number int, ok bool) {
+	args := []string{"pr", "list", "--head", branch, "--base", target, "--state", "open", "--json", "url,number"}
+	if remote != nil && remote.Host != "" && remote.Repo != "" {
+		args = append(args, "--repo", remote.Host+"/"+remote.Repo)
+	}
+	out, err := runGH(ctx, gh, repoPath, args...)
+	if err != nil {
+		return "", 0, false
+	}
+	var prs []struct {
+		URL    string `json:"url"`
+		Number int    `json:"number"`
+	}
+	if json.Unmarshal([]byte(out), &prs) != nil || len(prs) == 0 {
+		return "", 0, false
+	}
+	return prs[0].URL, prs[0].Number, true
+}
+
 // PRState asks gh for a pull request's state: OPEN, MERGED or CLOSED, and
 // the merge commit when merged.
 func PRState(ctx context.Context, gh, repoPath, url string) (state, mergeCommit string, err error) {

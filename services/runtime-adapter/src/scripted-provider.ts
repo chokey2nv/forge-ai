@@ -10,7 +10,8 @@
 //     "implementer":   [ Turn, ... ],
 //     "reviewer":      [ Turn, ... ]
 //   }
-//   Turn = { "content"?: string, "toolCalls"?: [{ "name", "arguments" }], "delayMs"?: number }
+//   Turn = { "content"?: string, "toolCalls"?: [{ "name", "arguments" }], "delayMs"?: number,
+//            "inputTokens"?: number, "outputTokens"?: number }  (reported as the call's usage)
 //
 // Turns are consumed in order per role across all runs in this process, so a
 // retry or a reviewer's second pass simply takes the next turn. The role is
@@ -31,6 +32,8 @@ interface ScriptTurn {
   content?: string;
   toolCalls?: Array<{ name: string; arguments?: Record<string, unknown> }>;
   delayMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 type Queue = ScriptTurn[];
@@ -112,7 +115,7 @@ export class ScriptedProvider implements ModelProvider {
       content: turn.content ?? "",
       toolCalls,
       finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
-      usage: { wallMs: turn.delayMs ?? 0 },
+      usage: { wallMs: turn.delayMs ?? 0, inputTokens: turn.inputTokens, outputTokens: turn.outputTokens },
     };
   }
 }

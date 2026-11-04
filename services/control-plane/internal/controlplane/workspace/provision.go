@@ -84,7 +84,10 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	base := filepath.Base(worktreePath)
 	step := func(name, network, script string) error {
 		// Killing the docker CLI on timeout or shutdown does not stop the
-		// container, so name it and remove it explicitly on any failure.
+		// container, so name it and remove it explicitly on any failure, and
+		// before starting: one left running by a control plane that was
+		// killed would hold the name.
+		RemoveContainer(ctx, name)
 		args := []string{"run", "--rm",
 			"--name", name,
 			"--label", LabelRun + "=setup-" + base, "--label", instanceLabel(),

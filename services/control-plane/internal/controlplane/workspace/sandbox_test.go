@@ -49,7 +49,13 @@ func TestInstallScriptsRunWithoutNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(log)
-	calls := strings.Split(strings.TrimSuffix(string(out), "\036"), "\036")
+	var calls []string
+	for _, c := range strings.Split(strings.TrimSuffix(string(out), "\036"), "\036") {
+		if strings.HasPrefix(c, "rm -f forge-setup-") {
+			continue // a leftover container of the same name is removed first
+		}
+		calls = append(calls, c)
+	}
 	if len(calls) != 2 {
 		t.Fatalf("want 2 docker runs, got %d:\n%s", len(calls), out)
 	}

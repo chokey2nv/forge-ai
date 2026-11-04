@@ -183,7 +183,9 @@ header .signed-in { font-size: 13px; color: #555; margin-right: 4px; }
 
 /* Phase 13.4: projects */
 header .project-switch { margin-right: 8px; padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; font-size: 13px; background: #fff; }
-.project-page .inline-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.project-page .inline-form, .spend .inline-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.spend .inline-form input { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; min-width: 180px; }
+.spend .inline-form button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
 .project-page .inline-form input, .project-page .inline-form select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; min-width: 220px; }
 .project-page .inline-form button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
 .project-page .project-list { list-style: none; padding: 0; }

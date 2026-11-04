@@ -59,6 +59,8 @@ func (h *Handlers) Routes() []Route {
 		{"DELETE /projects/{pid}/repos", ProjectAdmin, h.RemoveProjectRepo},
 		{"POST /projects/{pid}/members", ProjectAdmin, h.SetProjectMember},
 		{"DELETE /projects/{pid}/members/{uid}", ProjectAdmin, h.RemoveProjectMember},
+		{"GET /projects/{pid}/spend", Viewer, h.GetProjectSpend},
+		{"PUT /projects/{pid}/budget", ProjectAdmin, h.SetProjectBudget},
 
 		{"GET /agents", Viewer, h.ListAgents},
 		{"GET /agents/health", Viewer, h.AgentHealth},
@@ -90,6 +92,8 @@ func (h *Handlers) Routes() []Route {
 		{"POST /tasks/{id}/threads/{tid}/reopen", Reviewer, h.ReopenThread},
 		{"POST /tasks/{id}/deliver", Reviewer, h.RetryDelivery},
 		{"POST /tasks/{id}/rollback", Reviewer, h.RollbackTask},
+		{"GET /tasks/{id}/spend", Viewer, h.GetTaskSpend},
+		{"PUT /tasks/{id}/budget", ProjectAdmin, h.SetTaskBudget},
 
 		{"POST /evals/results", Member, h.RecordEval},
 		{"GET /evals/results", Viewer, h.ListEvals},

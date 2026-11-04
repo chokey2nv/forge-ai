@@ -69,6 +69,15 @@ func MergeIntoWorktree(ctx context.Context, worktree, branch, message string) er
 	return fmt.Errorf("merge %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
 }
 
+// AbortUnfinishedMerge undoes a merge left half done in worktree, by a
+// control plane that stopped during it. It reports whether there was one.
+func AbortUnfinishedMerge(worktree string) bool {
+	if exec.Command("git", "-C", worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD").Run() != nil {
+		return false
+	}
+	return exec.Command("git", "-C", worktree, "merge", "--abort").Run() == nil
+}
+
 // commitEnv supplies a committer identity when the repository has none
 // configured, so commits made on the user's behalf never fail for lack of one.
 func commitEnv(repoPath string) []string {

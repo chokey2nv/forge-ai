@@ -34,6 +34,8 @@ type TaskRepo interface {
 	// AddFollowUp appends f unless a follow-up with its number exists.
 	AddFollowUp(ctx context.Context, id string, f domain.FollowUp, at time.Time) error
 	SetFollowUpOutcome(ctx context.Context, id string, n int, outcome string, at time.Time) error
+	// SetSpendLimits changes a task's token and cost caps (13.6).
+	SetSpendLimits(ctx context.Context, id string, l domain.Limits, at time.Time) error
 }
 
 type RunRepo interface {
@@ -153,4 +155,14 @@ type ProjectRepo interface {
 	// SetMember adds the member or changes their role.
 	SetMember(ctx context.Context, id string, m domain.ProjectMember) error
 	RemoveMember(ctx context.Context, id, userID string) error
+	SetBudget(ctx context.Context, id string, l domain.Limits) error
+}
+
+// SpendRepo keeps each agent invocation's model usage (Phase 13.6).
+type SpendRepo interface {
+	// Record writes the invocation's latest totals.
+	Record(ctx context.Context, r *domain.SpendRecord) error
+	// Total sums the records whose field ("rootTaskId", "taskId" or
+	// "projectId") is value.
+	Total(ctx context.Context, field, value string) (domain.Spend, error)
 }

@@ -100,7 +100,9 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	},
 	domain.StatusBlocked: {
 		domain.StatusRunning,
-		domain.StatusDelivering, // delivery retried after fixing what blocked it
+		domain.StatusDelivering,  // delivery retried after fixing what blocked it
+		domain.StatusDispatched,  // parent: a blocked subtask was resumed (13.6)
+		domain.StatusDecomposing, // blocked before any subtask was planned: started again (13.6)
 	},
 	domain.StatusResumable: {domain.StatusRunning},
 	// Integrated, Rejected, RolledBack terminal

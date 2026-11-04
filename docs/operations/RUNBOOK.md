@@ -225,13 +225,16 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `MONGODB_DATABASE` | `forge_ai` | Control plane | Database name |
 | `WORKER_IMAGE` | `forge-worker:dev` | Control plane | Container image per run |
 | `ADAPTER_URL` | `http://localhost:8081` | Control plane | Adapter base URL |
-| `CONTROL_PLANE_ADDR` | `127.0.0.1:8080` | Control plane | HTTP bind address. Localhost by default; a non-loopback address (`:8080`) logs a warning, since the API has no sign-in until 13.2 |
+| `CONTROL_PLANE_ADDR` | `127.0.0.1:8080` | Control plane | HTTP bind address. Localhost by default; a non-loopback address (`:8080`) logs a warning: serve it through a TLS proxy (§6.12) |
 | `FORGE_ADAPTER_TOKEN` | — (required) | Both | Shared secret: the adapter accepts `/runs` and cancels only with it. Same value in both services' environment; `openssl rand -hex 32` |
 | `FORGE_CALLBACK_SECRET` | random, kept in Mongo | Control plane | Signs each run's callback token (§6.8). Unset, one is generated on first start and stored in the `instance` collection |
 | `FORGE_CONSOLE_ORIGINS` | `http://localhost:5173,…:5174` (localhost and 127.0.0.1) | Control plane | Browser origins allowed by CORS, with credentials (the console's session cookie). Others get no CORS headers |
 | `FORGE_BOOTSTRAP_TOKEN` | — | Control plane | Acts as an instance admin only while no user exists, to create the first one (`POST /users`). Prefer `forge users add` (§2.7) |
 | `FORGE_SESSION_TTL` | `12h` | Control plane | A console session ends after this long unused (and 7 days after sign-in at most) |
 | `FORGE_SECURE_COOKIES` | `false` | Control plane | Mark the session cookie `Secure`; set behind HTTPS |
+| `FORGE_TASK_MAX_TOKENS` | `0` (none) | Control plane | Token cap for new tasks that set none (§6.10) |
+| `FORGE_TASK_MAX_COST_USD` | `0` (none) | Control plane | Cost cap in dollars for new tasks that set none (§6.10) |
+| `FORGE_MODEL_PRICES` | — | Control plane | Adds to or overrides the built-in prices: `model=in/out,…`, dollars per million input and output tokens |
 | `FORGE_TOKEN` | — | Scripts, `cmd/eval` | An API token (`forge tokens create`) the slices and the eval runner send |
 | `FORGE_PROJECT` | the project named `slices` | Slices, `cmd/eval` | The project the slices register their temporary repositories in and create tasks in (`scripts/lib/forge-api.sh`); unset, the slices use (or, with an instance admin's token, create) the project named `slices`. The eval runner needs it, with its fixture registered |
 | `CONTROL_PLANE_SELF_URL` | `http://localhost:8080` | Control plane | Callback base URL passed to adapter |
@@ -643,6 +646,8 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `feedback-unhandled-thread` | The follow-up graph ignores both threads | Refused: back to `REVIEW_PENDING` with the unhandled threads named; no subtask added; threads still open |
 | `feedback-escalated-parent-retry` | The final review rejects the combined change; a human retries with guidance | Head engineer shown the findings and the guidance; a second subtask fixes it; r1 recorded with final review `-a2` |
 | `feedback-budget` | `budget.maxRevisions: 1` | Request changes is 409; approve still works |
+| `budget-tokens` | A task's token cap is reached while its subtask works, as its head engineer finishes, and during its head engineer; each is then raised; a project's cap is reached | The subtask stops before its next model call and it and the parent are `BLOCKED` with the cap named; spend is priced and shown against the cap; resuming is refused (409) until a project admin raises the cap (a member gets 403; a subtask shares its parent's, 400); after raising it, resume finishes the work and the resumed history is not counted twice. A subtask refused before it began resumes from the start; a stopped head engineer's task starts again; a task under review cannot be started again (409). A project over its cap starts no new task, which stays `CREATED` |
+| `restart-mid-delivery` | The target moves, so delivery merges it in and verifies again; the control plane is killed (`kill -9`) during that verification | Nothing was delivered at the kill; on restart a `delivery.resumed` event is recorded, the merge is verified again (`verifiedCommit`), and the task is `MERGED` with one merge on the target; another restart changes nothing |
 | `sandbox-postinstall` | A subtask adds a `postinstall` hook and a test of its own container; the next subtask's workspace is set up after it is merged | The test passes in verification (non-root, read-only root, writable `/workspace` and `/tmp`, no network); the hook runs in the offline step as a non-root user, cannot write `/etc` or `/usr`, and neither reaches a listener on the host nor resolves DNS; the listener hears only the harness's own control request |
 | `final-review-escalates` | Final review rejects the combined change | Parent `ESCALATED`; `retry` refused (409); `accept` → `REVIEW_PENDING`; every reviewer's prompt carried the gate results and test output |
 
@@ -878,6 +883,61 @@ To see a container's settings while it runs:
 docker inspect forge-worker-<runId> --format '{{.Config.User}} {{.HostConfig.CapDrop}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.NetworkMode}} {{.HostConfig.SecurityOpt}}'
 ```
 
+### 6.10 Spend caps (Phase 13.6)
+
+Every agent reports its model usage with each checkpoint. The control plane prices it (`DefaultPrices` in `api/spend.go`, Anthropic's first-party rates, plus `FORGE_MODEL_PRICES`) and keeps one record per agent invocation in the `spend` collection. A model with no price counts towards token caps only; a task's panel says how many tokens that is.
+
+There are two caps, each in tokens (input + output) and in dollars, and 0 means none:
+
+- **A task's**, covering it and its subtasks: `budget.maxTokens` and `budget.maxCostUsd` when it is created, or `FORGE_TASK_MAX_TOKENS` and `FORGE_TASK_MAX_COST_USD` for tasks that set none.
+- **A project's**, covering all its tasks, for all time.
+
+When a cap is reached the agent stops before its next model call and the task is `BLOCKED` with the reason, as is its parent. No new agent starts while a cap is reached. The stop comes after a checkpoint, so spend can pass a cap by a step, and by what reviewers running in parallel use meanwhile. A reviewer that is stopped counts as a rejection, never a pass.
+
+```bash
+curl -s localhost:8080/tasks/<id>/spend -H "Authorization: Bearer $FORGE_TOKEN" | jq          # the task's and its project's
+curl -s localhost:8080/projects/<pid>/spend -H "Authorization: Bearer $FORGE_TOKEN" | jq
+# Project admins raise a cap (the top-level task's for subtasks); both fields are set, 0 removes one:
+curl -s -X PUT localhost:8080/tasks/<id>/budget -H "Authorization: Bearer $FORGE_TOKEN" -d '{"maxTokens":200000,"maxCostUsd":5}'
+curl -s -X PUT localhost:8080/projects/<pid>/budget -H "Authorization: Bearer $FORGE_TOKEN" -d '{"maxCostUsd":50}'
+# Then carry on from the checkpoint (or from the start, if the subtask was refused before it began):
+curl -s -X POST localhost:8080/runs/run-<subtaskId>/resume -H "Authorization: Bearer $FORGE_TOKEN"
+# A task whose head engineer was stopped has no subtasks yet: start it again.
+curl -s -X POST localhost:8080/tasks/<id>/runs -H "Authorization: Bearer $FORGE_TOKEN" -H 'Content-Type: application/json' -d '{"provider":"claude","model":"claude-haiku-5-5"}'
+```
+
+The console shows the same on a task's page and the *Project* page, with **Save caps** for admins, **Resume** on a stopped subtask, and **Start again** on a task stopped before its subtasks were planned. New tasks can set their caps under *Model and budget*.
+
+A final reviewer or a follow-up head engineer stopped by a cap is not resumed directly. A stopped reviewer rejects, so the round fails or escalates as usual, and a refused follow-up returns the task to its human decision.
+
+Only calls made since 13.6 are counted: usage from before is not in the totals. Prices are a snapshot, so check your provider's bill for what you actually owe.
+
+### 6.11 Restarting during a delivery (Phase 13.6)
+
+At startup the control plane resumes every task left `DELIVERING`, and records a `delivery.resumed` event. Each step can safely run again: a half-done merge into the parent branch is undone and redone, a merge of the target whose verification did not finish is verified (`delivery.verifiedCommit` is the tip that passed), a merge that landed is recognised, and an open pull request is found rather than opened twice. A step that fails blocks the task with its reason, and **Retry delivery** works as usual.
+
+A local merge cut short in your own checkout of the target shows up as uncommitted changes, so the delivery blocks and asks you to clean up. `ROLLING_BACK` is not resumed: a rollback interrupted by a restart stays in that state.
+
+### 6.12 Deploying behind a proxy
+
+Forge has no TLS of its own, and both services bind to loopback by default. To reach it from other machines:
+
+1. Keep the adapter on loopback or a private network. Only the control plane talks to it, and only with `FORGE_ADAPTER_TOKEN`.
+2. Put the control plane and the built console behind a reverse proxy that terminates TLS. Set `CONTROL_PLANE_ADDR` to the address the proxy reaches.
+3. Set `FORGE_SECURE_COOKIES=true` and `FORGE_CONSOLE_ORIGINS` to the console's public origin. If the console and API are on different sites, the `SameSite=Strict` cookie is not sent, so serve them from one site.
+4. Set `FORGE_ADAPTER_TOKEN` and `FORGE_CALLBACK_SECRET` from a secret store. Leave `FORGE_BOOTSTRAP_TOKEN` unset once the first user exists.
+5. Run one control plane per database: the scheduler and the delivery resume assume it.
+
+Then set up people and work:
+
+```bash
+forge users add <name>                       # the first user is an instance admin
+forge users role <name> <viewer|member|reviewer> [--admin|--no-admin]
+forge tokens create <user> <token name>      # for scripts: sent as Authorization: Bearer
+```
+
+Instance admins create projects on the console's *Project* page. Project admins add its repositories and members there, and set its spend cap (§6.10).
+
 ---
 
 ## 7. Troubleshooting
@@ -937,6 +997,8 @@ docker inspect forge-worker-<runId> --format '{{.Config.User}} {{.HostConfig.Cap
 | A tool fails with `EROFS` / "read-only file system" in a workspace | Since 13.5 only `/workspace` and `/tmp` are writable (§6.9); point the tool's cache or home at `/tmp` |
 | 404 for a task you know exists | You are not a member of its project; a project admin adds you (§2.7) |
 | Creating a task: 400 "… is not a repository of project …" | A project admin registers it on the *Project* page or with `POST /projects/<id>/repos` |
+| `BLOCKED`: "token budget reached" or "cost budget reached"; a start or resume answers 409 "raise the cap" | A task's or project's spend cap (§6.10). Raise it, then resume the stopped subtask |
+| Cost stays $0 while tokens rise | The model has no price: add it with `FORGE_MODEL_PRICES` |
 | A slice stops: "could not register … in project …" | The token's user must be an admin of `FORGE_PROJECT` (or an instance admin, for the default `slices` project) |
 | A slice stops at once: "FORGE_TOKEN: export FORGE_TOKEN …" | Create a token (`forge tokens create <user> slices`) and export it |
 | Runs fail to start: "adapter: HTTP 401" | The two services have different `FORGE_ADAPTER_TOKEN` values; restart both from the same `.env` |
@@ -1037,9 +1099,10 @@ rm -rf .forge
 | 10. Parallel execution | Verified | Disjoint subtasks run in parallel up to `MAX_CONCURRENT_RUNS`; overlapping ones are serialized; integration is serialized and 3-way; a change's reviewers run together | §5.10 with Claude (1.5x); §5.9 `parallel-siblings`, `diamond`, `concurrency-cap`, `overlap-serialized`, `cycle-rejected`, `parallel-reviewers`; console timeline |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
 | 11. Delivery | Verified | The parent branch exists from task creation; subtasks merge into it; approval merges locally or opens a PR with `gh`; rollback reverts | §5.11 with Claude (approve → `MERGED`, roll back → original tree); §5.9 `deliver-*`, `rollback-*` (stub `gh`, local bare origin); console rollback from the UI against a live control plane |
+| 13. Hardening | Verified | Service trust, sign-in, roles, projects, sandbox, spend caps, delivery resumed after a restart | Unit tests; §5.9 `sandbox-postinstall`, `budget-tokens`, `restart-mid-delivery` and sign-in, role and project checks throughout; all five §5.7–§5.12 slices with Claude and sign-in on (`claude-haiku-5-5`, $0.09 by Forge's prices); console with Claude: a capped task stopped, cap raised, started again, approved, `MERGED` ($0.0057) |
 | 12. Human feedback | Verified | Revisions of the combined change and a diff viewer; line comment threads and reviewer notes; request changes through a head engineer follow-up; agent replies and threads carried across revisions | §5.12 with Claude (comment → request changes → the agent changes it and replies → r2 → resolve → approve → `MERGED`), and the same flow from the console. 12.1: unit tests (per-revision IDs, diff by revision, diff parser); §5.9 `verify-retry` and `final-review-escalates` check the recorded revision and `GET /tasks/{id}/diff`; console diff viewer against a live control plane. 12.2: unit tests (anchors, thread rules, location parsing, reviewer notes); §5.9 `verify-retry`, `deliver-local` and `deliver-pr` check threads, the 409 after delivery, and unresolved threads in the approval and PR body (§6.5.2); console threads against a live control plane. 12.3: unit tests (thread handling in a follow-up graph, final review IDs after escalation retries, revision budget, follow-up prompt, new state edges); §5.9 `feedback-request-changes`, `feedback-unhandled-thread`, `feedback-escalated-parent-retry`, `feedback-budget` (§6.5.3); console request changes against a live control plane. 12.4: unit tests (line relocation through a diff, reply parsing, re-anchoring on a real repo); `feedback-request-changes` also checks the implementer's reply on T1, T1 outdated in r2 and T3 moved two lines; console against a live control plane. 12.5: §5.12 slice and console run with `claude-haiku-5-5` |
 
-Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a delivery interrupted by a control-plane restart. The Phase 6 eval harness has not been re-run.
+Not covered yet: a real GitHub pull request (the suite uses a stub `gh`); resuming a rollback interrupted by a restart. The Phase 6 eval harness has not been re-run.
 
 ---
 

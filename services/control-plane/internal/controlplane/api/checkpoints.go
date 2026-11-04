@@ -15,7 +15,8 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		domain.Checkpoint
-		Role string `json:"role"`
+		Role  string       `json:"role"`
+		Spend *SpendReport `json:"spend,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -30,9 +31,10 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cp.WorkspaceDiff = keptDiff(run, cp.WorkspaceDiff)
+	task, _ := h.Tasks.Get(ctx, run.TaskID)
 	// First checkpoint: DISPATCHED → RUNNING on the task
 	if run.Status == domain.RunDispatched {
-		task, _ := h.Tasks.Get(ctx, run.TaskID)
 		_ = h.SM.Transition(ctx, task, domain.StatusRunning, "adapter started")
 		_ = h.Runs.UpdateStatus(ctx, runID, domain.RunRunning, "", time.Now().UTC())
 	}
@@ -50,5 +52,12 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 		Payload: map[string]any{"stepCount": cp.StepCount},
 		At:      time.Now().UTC(),
 	})
+	// Over a spend cap (13.6): the adapter stops the agent before its next
+	// model call, and it ends blocked with this reason.
+	if reason := h.recordSpend(ctx, run, task, body.Role, body.Spend); reason != "" {
+		log.Printf("checkpoint %s: %s", runID, reason)
+		writeJSON(w, http.StatusOK, map[string]string{"stop": reason})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

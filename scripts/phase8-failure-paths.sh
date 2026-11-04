@@ -47,7 +47,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -65,6 +65,7 @@ export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPT
 # Reviewers answer instantly here; a short timeout lets reviewer-timeout finish quickly.
 export REVIEWER_TIMEOUT=8s REVIEW_TIMEOUT_GRACE=2s
 export SCRIPTED_PROVIDER_LOG="$WORK/prompts.jsonl" # every agent's task prompt, for assertions
+export FORGE_MODEL_PRICES="scripted=10/50" # budget-tokens checks what its turns cost
 
 # A stand-in gh: tests never call the real one (it would act as your account).
 mkdir -p "$WORK/bin"
@@ -74,6 +75,7 @@ echo "gh $*" >>"${GH_LOG:-/dev/null}"
 case "$1 $2" in
   "auth status") echo "  ✓ Logged in to github.com account forge-test (keyring)"; exit 0 ;;
   "pr create") echo "https://github.com/example/app/pull/7"; exit 0 ;;
+  "pr list") echo "[]"; exit 0 ;;
   # The harness plays the forge: it writes OPEN, MERGED or CLOSED to $GH_PR_STATE.
   "pr view") s=$(cat "$GH_PR_STATE" 2>/dev/null || echo OPEN)
     # ...and, once it has merged the PR into the bare origin, the merge commit to $GH_PR_MERGE.
@@ -900,6 +902,140 @@ run_sandbox() {
   kill "$beacon" 2>/dev/null || true; wait "$beacon" 2>/dev/null || true; BEACON_PID=""
 }
 
+child_of_latest() { curl -sf "$CP/tasks/$1/children" | jq -r '.[0].id // empty'; }
+run_budget() {
+  local repo task child code final s
+  repo=$(new_repo)
+  start_adapter "$SCEN/budget-tokens.json"
+  # The head engineer uses 1,200 tokens, the implementer's first call 4,500: over the cap.
+  task=$(create_and_dispatch "$repo" ',"maxTokens":5000')
+  final=$(wait_status "$task" "BLOCKED|REVIEW_PENDING" 180) || true
+  child=$(child_of "$task")
+  check "the cap stops the run: parent and subtask BLOCKED ($final, $(status_of "$child"))" \
+    "$([ "$final" = BLOCKED ] && [ "$(status_of "$child")" = BLOCKED ]; echo $?)"
+  check "the subtask's block names the cap" \
+    "$(has_reason "$child" "token budget reached: task $task used 5700 of 5000 tokens"; echo $?)"
+  check "the agent stopped before its next model call" \
+    "$(curl -sf "$CP/runs/run-$child" | jq -e '.lastCheckpoint.stepCount == 1 and (.blockedReason | contains("token budget reached"))' >/dev/null; echo $?)"
+  s=$(curl -sf "$CP/tasks/$child/spend")
+  check "spend is the whole task's, priced, against its cap" \
+    "$(echo "$s" | jq -e --arg t "$task" '.rootTaskId == $t and .task.spend.inputTokens == 5000 and .task.spend.outputTokens == 700 and (.task.spend.costUsd - 0.085 | fabs) < 0.000001 and .task.limits.maxTokens == 5000 and .subtask.inputTokens == 4000' >/dev/null; echo $?)"
+
+  code=$(curl -s -o "$WORK/resume.out" -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")
+  check "resuming over the cap is refused, and says why ($code)" \
+    "$([ "$code" = 409 ] && grep -q "raise the cap" "$WORK/resume.out"; echo $?)"
+  check "only a project admin raises a cap; a member gets 403" \
+    "$([ "$(as "$MEMBER" -X PUT "$CP/tasks/$task/budget" -H 'Content-Type: application/json' -d '{"maxTokens":100000}')" = 403 ]; echo $?)"
+  check "a subtask shares its parent's budget (400)" \
+    "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$CP/tasks/$child/budget" -H 'Content-Type: application/json' -d '{"maxTokens":100000}')" = 400 ]; echo $?)"
+  check "the cap is raised, and that is recorded with who did it" \
+    "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$CP/tasks/$task/budget" -H 'Content-Type: application/json' -d '{"maxTokens":100000}')" = 200 ] && curl -sf "$CP/tasks/$task/events" | jq -e 'any(.[]; .type == "budget.changed" and .actor == "harness")' >/dev/null; echo $?)"
+  code=$(curl -s -o "$WORK/resume.out" -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 180) || true
+  stop_adapter
+  check "after raising it, resume finishes the work ($code, $final)" "$([ "$code" = 202 ] && [ "$final" = REVIEW_PENDING ]; echo $?)"
+  check "the parent went back to waiting when its subtask resumed" "$(has_reason "$task" "subtask $child resumed"; echo $?)"
+  check "the resumed invocation's history is not counted twice" \
+    "$(curl -sf "$CP/tasks/$task/spend" | jq -e '.task.spend.inputTokens == 5100 and .task.spend.outputTokens == 750' >/dev/null; echo $?)"
+
+  # The cap is reached as the head engineer finishes: the subtask is refused
+  # before its agent starts, so it has no checkpoint. Resume starts it.
+  start_adapter "$SCEN/budget-tokens.json"
+  task=$(create_and_dispatch "$repo" ',"maxTokens":1000')
+  final=$(wait_status "$task" "BLOCKED|REVIEW_PENDING" 180) || true
+  child=$(child_of_latest "$task")
+  check "a subtask refused before it starts is BLOCKED with the cap named ($final)" \
+    "$([ "$final" = BLOCKED ] && has_reason "$child" "token budget reached" && curl -sf "$CP/runs/run-$child" | jq -e '.lastCheckpoint == null' >/dev/null; echo $?)"
+  curl -sf -X PUT "$CP/tasks/$task/budget" -H 'Content-Type: application/json' -d '{"maxTokens":100000}' >/dev/null
+  code=$(curl -s -o "$WORK/resume.out" -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 180) || true
+  stop_adapter
+  check "after raising the cap, resume starts it from the beginning and it finishes ($code, $final)" \
+    "$([ "$code" = 202 ] && [ "$final" = REVIEW_PENDING ]; echo $?)"
+
+  # The cap stops the head engineer itself: no subtasks, so the task starts again.
+  start_adapter "$SCEN/budget-head-engineer.json"
+  task=$(create_and_dispatch "$repo" ',"maxTokens":1000')
+  final=$(wait_status "$task" "BLOCKED|REVIEW_PENDING" 180) || true
+  check "a head engineer stopped by the cap blocks its task, with the cap named ($final)" \
+    "$([ "$final" = BLOCKED ] && has_reason "$task" "token budget reached" && [ "$(curl -sf "$CP/tasks/$task/children" | jq length)" = 0 ]; echo $?)"
+  code=$(curl -s -o "$WORK/start.out" -w '%{http_code}' -X POST "$CP/tasks/$task/runs" -H 'Content-Type: application/json' -d '{"provider":"scripted","model":"scripted"}')
+  check "starting it again over the cap is refused ($code)" "$([ "$code" = 409 ] && grep -q "raise the cap" "$WORK/start.out"; echo $?)"
+  curl -sf -X PUT "$CP/tasks/$task/budget" -H 'Content-Type: application/json' -d '{"maxTokens":100000}' >/dev/null
+  code=$(curl -s -o "$WORK/start.out" -w '%{http_code}' -X POST "$CP/tasks/$task/runs" -H 'Content-Type: application/json' -d '{"provider":"scripted","model":"scripted"}')
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 180) || true
+  stop_adapter
+  check "after raising the cap it starts again and finishes ($code, $final)" \
+    "$([ "$code" = 202 ] && [ "$final" = REVIEW_PENDING ] && has_reason "$task" "started again after decomposition"; echo $?)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/runs" -H 'Content-Type: application/json' -d '{"provider":"scripted","model":"scripted"}')
+  check "a task under review cannot be started again ($code)" "$([ "$code" = 409 ]; echo $?)"
+
+  # A project's cap covers all its tasks. It stays CREATED, ready to start once raised.
+  curl -sf -X PUT "$CP/projects/$PROJECT/budget" -H 'Content-Type: application/json' -d '{"maxTokens":5000}' >/dev/null
+  local other; other=$(curl -sf -X POST "$CP/tasks" -H 'Content-Type: application/json' \
+    -d "{\"projectId\":\"$PROJECT\",\"requirement\":\"noop\",\"acceptance\":[\"x\"],\"repoPath\":\"$repo\",\"baseCommit\":\"HEAD\"}" | jq -r .id)
+  code=$(curl -s -o "$WORK/start.out" -w '%{http_code}' -X POST "$CP/tasks/$other/runs" -H 'Content-Type: application/json' -d '{"provider":"scripted","model":"scripted"}')
+  check "a project over its cap starts no new work ($code)" \
+    "$([ "$code" = 409 ] && grep -q "token budget reached: project harness" "$WORK/start.out" && [ "$(status_of "$other")" = CREATED ]; echo $?)"
+  check "a project's spend and cap can be read; a viewer cannot change the cap" \
+    "$(curl -sf "$CP/projects/$PROJECT/spend" | jq -e '.limits.maxTokens == 5000 and .spend.inputTokens >= 5100' >/dev/null && [ "$(as "$VIEWER" -X PUT "$CP/projects/$PROJECT/budget" -H 'Content-Type: application/json' -d '{}')" = 403 ]; echo $?)"
+  curl -sf -X PUT "$CP/projects/$PROJECT/budget" -H 'Content-Type: application/json' -d '{}' >/dev/null
+}
+
+run_restart_delivery() {
+  local repo task target before final d branch
+  repo=$(new_repo)
+  target=$(git -C "$repo" symbolic-ref --short HEAD)
+  start_adapter "$SCEN/two-reviewers-pass.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  check "parent reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+  branch=$(branch_of "$task")
+
+  # The target moves, so delivery merges it in and verifies again. The commit
+  # that moves it holds a test that takes 25s, which only this verification
+  # sees: the control plane is killed during it, after the merge was made.
+  mkdir -p "$repo/tests"
+  cat >"$repo/tests/slow-delivery.test.js" <<'SLOW'
+const test = require('node:test');
+const fs = require('node:fs');
+test('slow verification', async () => {
+  // Only the first run is slow: the verification interrupted by the kill.
+  if (!fs.existsSync('/workspace/.slow-done')) {
+    fs.writeFileSync('/workspace/.slow-done', 'x');
+    await new Promise((r) => setTimeout(r, 25000));
+  }
+});
+SLOW
+  git -C "$repo" add tests/slow-delivery.test.js
+  git -C "$repo" -c user.name=someone -c user.email=s@localhost commit -q -m "a slow test"
+  before=$(git -C "$repo" rev-parse "$target")
+
+  check "approval answers DELIVERING" "$([ "$(approve "$task")" = 200 ]; echo $?)"
+  for _ in $(seq 1 120); do [ "$(event_count "$task" delivery.target_merged "Merge $target")" -ge 1 ] && break; sleep 1; done
+  sleep 3 # into the verification
+  check "the target was merged in; delivery is still running ($(status_of "$task"))" \
+    "$([ "$(status_of "$task")" = DELIVERING ] && [ "$(delivery_verifications "$task")" = 0 ]; echo $?)"
+  kill -9 "$CP_PID" 2>/dev/null || true; wait "$CP_PID" 2>/dev/null || true; CP_PID=""
+  echo "  control plane killed during delivery"
+  check "the target has not moved: nothing was delivered" "$([ "$(git -C "$repo" rev-parse "$target")" = "$before" ]; echo $?)"
+
+  start_cp
+  final=$(wait_status "$task" "MERGED|BLOCKED" 180) || true
+  d=$(delivery_of "$task"); echo "  delivery: $d"
+  reasons "$task" | tail -3 | sed 's/^/      /'
+  check "on restart the delivery resumes and finishes ($final)" "$([ "$final" = MERGED ]; echo $?)"
+  check "the restart is recorded on the task" "$([ "$(event_count "$task" delivery.resumed "restarted during delivery")" = 1 ]; echo $?)"
+  check "the merge whose verification was cut short is verified after the restart" \
+    "$([ "$(delivery_verifications "$task")" = 1 ] && echo "$d" | jq -e --arg b "$(git -C "$repo" rev-parse "$branch")" '.targetMoved and .verifiedCommit == $b' >/dev/null; echo $?)"
+  check "the target holds the merge exactly once" \
+    "$(git -C "$repo" merge-base --is-ancestor "$before" "$target" && git -C "$repo" merge-base --is-ancestor "$branch" "$target" && [ "$(git -C "$repo" rev-list --count "$before..$target" --first-parent)" = 1 ]; echo $?)"
+  stop_cp; start_cp
+  check "a second restart with nothing to deliver changes nothing" \
+    "$([ "$(status_of "$task")" = MERGED ] && [ "$(event_count "$task" delivery.resumed "restarted")" = 1 ]; echo $?)"
+}
+
 for SC in "${SCENARIOS[@]}"; do
   echo "== $SC"
   case "$SC" in
@@ -917,6 +1053,8 @@ for SC in "${SCENARIOS[@]}"; do
     deliver-*) run_delivery "${SC#deliver-}" ;;
     feedback-*) run_feedback "${SC#feedback-}" ;;
     sandbox-postinstall) run_sandbox ;;
+    budget-tokens) run_budget ;;
+    restart-mid-delivery) run_restart_delivery ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

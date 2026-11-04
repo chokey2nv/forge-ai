@@ -18,6 +18,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/api"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/orchestration"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/runner"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/statemachine"
@@ -133,6 +134,16 @@ func main() {
 	h.CallbackKey = callbackKey
 	h.Users, h.Sessions, h.Tokens = mongo_store.NewUserRepo(db), mongo_store.NewSessionRepo(db), mongo_store.NewTokenRepo(db)
 	h.Projects = mongo_store.NewProjectRepo(db)
+	// Phase 13.6: spend caps. No agent starts over a task's or project's cap.
+	h.Spend = mongo_store.NewSpendRepo(db)
+	if h.Prices, err = api.ParsePrices(os.Getenv("FORGE_MODEL_PRICES")); err != nil {
+		log.Fatal(err)
+	}
+	adapterClient.Gate = h.BudgetGate
+	h.DefaultTaskLimits = domain.Limits{
+		MaxTokens:  int64(parseInt(envOr("FORGE_TASK_MAX_TOKENS", "0"), 0)),
+		MaxCostUSD: parseFloat(envOr("FORGE_TASK_MAX_COST_USD", "0")),
+	}
 	// Tasks from before projects (13.4) go into a project per repository.
 	if _, _, err := h.MigrateToProjects(ctx); err != nil {
 		log.Fatalf("migrate tasks into projects: %v", err)
@@ -213,12 +224,17 @@ func main() {
 		parseDuration(envOr("ORPHAN_CONTAINER_GRACE", "10m"), 10*time.Minute))
 	go reaper.Run(ctx)
 
+	// ---- deliveries a stopped control plane left unfinished (13.6) ----
+	if n := h.ResumeDeliveries(ctx); n > 0 {
+		log.Printf("resuming %d delivery(ies) interrupted by a restart", n)
+	}
+
 	// ---- server ----
 	srv := &http.Server{Addr: addr, Handler: api.WithCORS(consoleOrigins, mux)}
 	go func() {
 		log.Printf("control-plane listening on %s (adapter=%s, worker=%s, allowed=%v, console origins=%v)", addr, adapterURL, workerImage, allowed, consoleOrigins)
 		if !loopback(addr) {
-			log.Printf("WARNING: %s is reachable from other machines, and the API has no sign-in yet (Phase 13.2). Use 127.0.0.1:<port> unless that is intended.", addr)
+			log.Printf("WARNING: %s is reachable from other machines. Serve it through a TLS proxy and set FORGE_SECURE_COOKIES=true (docs/operations/RUNBOOK.md, deployment), or use 127.0.0.1:<port>.", addr)
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
@@ -318,4 +334,12 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func parseFloat(s string) float64 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v < 0 {
+		log.Fatalf("invalid amount %q", s)
+	}
+	return v
 }

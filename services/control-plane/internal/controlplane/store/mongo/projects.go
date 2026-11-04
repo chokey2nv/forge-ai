@@ -92,3 +92,11 @@ func (r *ProjectRepo) RemoveMember(ctx context.Context, id, userID string) error
 	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$pull": bson.M{"members": bson.M{"userId": userID}}})
 	return err
 }
+
+func (r *ProjectRepo) SetBudget(ctx context.Context, id string, l domain.Limits) error {
+	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"budget": l}})
+	if err == nil && res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}

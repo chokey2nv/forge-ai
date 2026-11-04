@@ -67,6 +67,7 @@ type AgentCompleteBody struct {
 	Usage         []domain.Usage   `json:"usage"`
 	WorkspaceDiff string           `json:"workspaceDiff"`
 	Messages      []domain.Message `json:"messages"`
+	Spend         *SpendReport     `json:"spend,omitempty"`
 }
 
 func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
@@ -97,13 +98,14 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cp := &domain.Checkpoint{
 			Messages: body.Messages, StepCount: body.StepCount, Usage: body.Usage,
-			Status: body.Status, WorkspaceDiff: body.WorkspaceDiff, SavedAt: time.Now().UTC(),
+			Status: body.Status, WorkspaceDiff: keptDiff(run, body.WorkspaceDiff), SavedAt: time.Now().UTC(),
 		}
 		if err := h.Runs.SaveCheckpoint(ctx, runID, cp, time.Now().UTC()); err != nil {
 			log.Printf("complete %s: save checkpoint failed (diff %d bytes): %v", runID, len(cp.WorkspaceDiff), err)
 		}
 	}
 
+	h.recordSpend(ctx, run, task, body.Role, body.Spend)
 	h.dispatchCompletion(ctx, run, task, body)
 
 	w.WriteHeader(http.StatusNoContent)
@@ -112,6 +114,13 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 	if body.Status != "complete" {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, body.FinalMessage, time.Now().UTC())
 		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, body.FinalMessage)
+		return
+	}
+	// Marked stale, its workspace can be removed while the agent is reporting:
+	// an empty diff then says nothing about its work. The task stays RESUMABLE,
+	// and a resume rebuilds the workspace from the last real checkpoint.
+	if strings.TrimSpace(body.WorkspaceDiff) == "" && run.Status == domain.RunResumable {
+		log.Printf("complete %s: empty diff from a run marked stale; leaving it resumable", run.ID)
 		return
 	}
 	// Implementers have no submission tool, so a text-only "I'm blocked" reply
@@ -128,6 +137,16 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 	}
 	// Detach from the callback request: its context ends when we return 204.
 	go h.runVerificationAndReview(context.WithoutCancel(ctx), run, task)
+}
+
+// keptDiff is the diff to checkpoint: a run marked stale may report an empty
+// one because its workspace is being removed, which must not replace the
+// work a resume would rebuild from.
+func keptDiff(run *domain.WorkflowRun, diff string) string {
+	if strings.TrimSpace(diff) == "" && run.Status == domain.RunResumable && run.LastCheckpoint != nil {
+		return run.LastCheckpoint.WorkspaceDiff
+	}
+	return diff
 }
 
 // startVerifying moves a task whose agent reported complete to VERIFYING.
@@ -387,7 +406,7 @@ func (h *Handlers) invokeImplementer(run *domain.WorkflowRun, task *domain.Task,
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, err.Error(), time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "implementer invocation failed")
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "implementer invocation failed: "+err.Error())
 	}
 }
 
@@ -459,7 +478,7 @@ func (h *Handlers) reinvokeImplementer(run *domain.WorkflowRun, task *domain.Tas
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "adapter retry: "+err.Error(), time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "adapter retry failed")
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "adapter retry failed: "+err.Error())
 	}
 }
 
@@ -587,7 +606,7 @@ func (h *Handlers) runVerification(run *domain.WorkflowRun, task *domain.Task) {
 	})
 	if err != nil {
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, "adapter retry: "+err.Error(), time.Now().UTC())
-		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "adapter retry failed")
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, "adapter retry failed: "+err.Error())
 		workspace.Cleanup(ctx, ws, task.RepoPath)
 	}
 }

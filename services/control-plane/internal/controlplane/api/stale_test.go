@@ -83,6 +83,32 @@ func TestCompletionAfterStaleMarking(t *testing.T) {
 	}
 }
 
+// Marked stale, the run's workspace is removed while the agent reports: its
+// empty diff must neither replace the checkpoint nor block the run.
+func TestEmptyCompletionFromStaleRun(t *testing.T) {
+	stale := &domain.WorkflowRun{ID: "run-c", TaskID: "c", Status: domain.RunResumable,
+		LastCheckpoint: &domain.Checkpoint{WorkspaceDiff: "diff --git a/x b/x"}}
+	if keptDiff(stale, " \n") != "diff --git a/x b/x" {
+		t.Error("an empty diff from a stale run replaced the checkpoint's")
+	}
+	if keptDiff(stale, "new") != "new" {
+		t.Error("a real diff from a stale run is used")
+	}
+	if keptDiff(&domain.WorkflowRun{Status: domain.RunRunning, LastCheckpoint: stale.LastCheckpoint}, "") != "" {
+		t.Error("a live run's empty diff is reported as it is")
+	}
+
+	tasks := &casTasks{status: map[string]domain.TaskStatus{"c": domain.StatusResumable}}
+	runs := &statusRuns{run: stale}
+	events := &recordEvents{}
+	h := &Handlers{Tasks: tasks, Runs: runs, Events: events, SM: &statemachine.Service{Tasks: tasks, Events: events}}
+	h.handleImplementerDone(context.Background(), stale, &domain.Task{ID: "c", Status: domain.StatusResumable},
+		AgentCompleteBody{Status: "complete", FinalMessage: "Fixed it."})
+	if runs.run.Status != domain.RunResumable || tasks.status["c"] != domain.StatusResumable {
+		t.Errorf("run %s, task %s: both stay resumable", runs.run.Status, tasks.status["c"])
+	}
+}
+
 type recordEvents struct {
 	store.EventRepo
 	types []string
