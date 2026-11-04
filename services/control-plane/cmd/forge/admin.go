@@ -9,13 +9,16 @@ import (
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/api"
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	mongo_store "github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 const adminUsage = `usage:
-  forge users add <name> [--admin] [--email <address>]   password on stdin (first line)
+  forge users add <name> [--role viewer|member|reviewer] [--admin] [--email <address>]
+                                                         password on stdin (first line); role default member
+  forge users role <name> <viewer|member|reviewer> [--admin|--no-admin]
   forge users list
   forge tokens create <user> <token name>                prints the token once`
 
@@ -43,11 +46,16 @@ func runAdmin(args []string) int {
 			fmt.Fprintln(os.Stderr, adminUsage)
 			return 2
 		}
-		admin, email := false, ""
+		admin, email, role := false, "", domain.RoleMember
 		for i := 3; i < len(args); i++ {
 			switch args[i] {
 			case "--admin":
 				admin = true
+			case "--role":
+				if i+1 < len(args) {
+					role = domain.Role(args[i+1])
+					i++
+				}
 			case "--email":
 				if i+1 < len(args) {
 					email = args[i+1]
@@ -57,12 +65,37 @@ func runAdmin(args []string) int {
 		}
 		fmt.Fprint(os.Stderr, "Password (first line of stdin): ")
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		u, err := h.AddUser(ctx, args[2], strings.TrimRight(line, "\r\n"), email, admin)
+		u, err := h.AddUser(ctx, args[2], strings.TrimRight(line, "\r\n"), email, admin, role)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "\n"+err.Error())
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "\ncreated %s (%s)%s\n", u.Name, u.ID, map[bool]string{true: ", instance admin"}[u.InstanceAdmin])
+		fmt.Fprintf(os.Stderr, "\ncreated %s (%s), %s%s\n", u.Name, u.ID, u.EffectiveRole(), map[bool]string{true: ", instance admin"}[u.InstanceAdmin])
+		return 0
+	case "users role":
+		if len(args) < 4 || !domain.ValidRole(domain.Role(args[3])) {
+			fmt.Fprintln(os.Stderr, adminUsage)
+			return 2
+		}
+		u, err := h.Users.GetByName(ctx, args[2])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no user %q\n", args[2])
+			return 1
+		}
+		admin := u.InstanceAdmin
+		for _, a := range args[4:] {
+			switch a {
+			case "--admin":
+				admin = true
+			case "--no-admin":
+				admin = false
+			}
+		}
+		if err := h.Users.SetRole(ctx, u.ID, domain.Role(args[3]), admin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "%s is now %s%s\n", u.Name, args[3], map[bool]string{true: ", instance admin"}[admin])
 		return 0
 	case "users list":
 		us, err := h.Users.List(ctx)
@@ -71,7 +104,7 @@ func runAdmin(args []string) int {
 			return 1
 		}
 		for _, u := range us {
-			fmt.Printf("%s\t%s\tadmin=%v\tdisabled=%v\n", u.ID, u.Name, u.InstanceAdmin, u.DisabledAt != nil)
+			fmt.Printf("%s\t%s\trole=%s\tadmin=%v\tdisabled=%v\n", u.ID, u.Name, u.EffectiveRole(), u.InstanceAdmin, u.DisabledAt != nil)
 		}
 		return 0
 	case "tokens create":

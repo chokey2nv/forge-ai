@@ -316,7 +316,15 @@ export interface User {
   name: string;
   email?: string;
   instanceAdmin: boolean;
+  /** Phase 13.3: viewer < member < reviewer; instance admins can do everything. */
+  role: Role;
 }
+
+export type Role = "viewer" | "member" | "reviewer";
+const RANK: Record<Role, number> = { viewer: 1, member: 2, reviewer: 3 };
+
+/** Whether the user may do what needs role min (the API enforces it; the console only hides what would be refused). */
+export const can = (u: User | null | undefined, min: Role) => !!u && (u.instanceAdmin || RANK[u.role] >= RANK[min]);
 
 /** Fired when the API answers 401: the session ended, so the console shows sign-in. */
 export const SIGNED_OUT = "forge:signed-out";
@@ -362,17 +370,18 @@ export const api = {
     getVerification: (runId: string) =>
         fetch(`${BASE}/runs/${runId}/verification`, { credentials: "include" }).then((r) => (r.ok ? (r.json() as Promise<VerificationRun>) : null)),
     listApprovals: (taskId: string) => j<Approval[]>(`/tasks/${taskId}/approvals`),
-    approve: (taskId: string, reviewer: string, rationale: string) =>
+    // Decisions and comments are recorded as the signed-in user (13.3): no name is sent.
+    approve: (taskId: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/approve`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reviewer, rationale }),
+            body: JSON.stringify({ rationale }),
         }),
-    reject: (taskId: string, reviewer: string, rationale: string) =>
+    reject: (taskId: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/reject`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reviewer, rationale }),
+            body: JSON.stringify({ rationale }),
         }),
     listReviews: (runId: string) => j<Review[]>(`/runs/${runId}/reviews`),
     getTaskEvents: (taskId: string) => j<Event[]>(`/tasks/${taskId}/events`),
@@ -383,33 +392,33 @@ export const api = {
       if (since) q.set("since", String(since));
       return j<TaskDiff>(`/tasks/${taskId}/diff${q.size ? `?${q}` : ""}`);
     },
-    requestChanges: (taskId: string, reviewer: string, summary: string) =>
+    requestChanges: (taskId: string, summary: string) =>
         j<{ status: string; followUp: number }>(`/tasks/${taskId}/request-changes`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reviewer, summary }),
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ summary }),
         }),
     listThreads: (taskId: string) => j<ThreadList>(`/tasks/${taskId}/threads`),
-    createThread: (taskId: string, t: { author: string; body: string; revision?: number; anchor?: { path: string; side: "old" | "new"; line: number } }) =>
+    createThread: (taskId: string, t: { body: string; revision?: number; anchor?: { path: string; side: "old" | "new"; line: number } }) =>
         j<Thread>(`/tasks/${taskId}/threads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }),
-    replyThread: (taskId: string, threadId: string, author: string, body: string) =>
+    replyThread: (taskId: string, threadId: string, body: string) =>
         j<Thread>(`/tasks/${taskId}/threads/${threadId}/comments`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, body }),
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
         }),
-    setThreadStatus: (taskId: string, threadId: string, action: "resolve" | "reopen", author: string) =>
+    setThreadStatus: (taskId: string, threadId: string, action: "resolve" | "reopen") =>
         j<Thread>(`/tasks/${taskId}/threads/${threadId}/${action}`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }),
+            method: "POST",
         }),
-    rollback: (taskId: string, reviewer: string, rationale: string) =>
+    rollback: (taskId: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/rollback`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reviewer, rationale }),
+            body: JSON.stringify({ rationale }),
         }),
     retryDelivery: (taskId: string) => j<{ status: string }>(`/tasks/${taskId}/deliver`, { method: "POST" }),
-    decideEscalation: (taskId: string, decision: EscalationDecision, reviewer: string, rationale: string, guidance: string) =>
+    decideEscalation: (taskId: string, decision: EscalationDecision, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ decision, reviewer, rationale, guidance }),
+            body: JSON.stringify({ decision, rationale, guidance }),
         }),
     listEvals: (model?: string) =>
         j<EvalResult[]>(`/evals/results${model ? `?model=${encodeURIComponent(model)}` : ""}`),

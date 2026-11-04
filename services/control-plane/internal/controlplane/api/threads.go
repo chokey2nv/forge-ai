@@ -199,26 +199,6 @@ func (h *Handlers) threadTask(w http.ResponseWriter, r *http.Request) (*domain.T
 	return task, true
 }
 
-// humanAuthor answers 403 unless the request is a human's. Agents reply to
-// threads through their work submissions, never through these endpoints,
-// and only humans resolve. Until there is authentication (Phase 13) a
-// human is anyone who does not claim to be an agent or use an agent's name.
-func (h *Handlers) humanAuthor(w http.ResponseWriter, author, kind, doing string) bool {
-	if strings.TrimSpace(author) == "" {
-		http.Error(w, "author is required", http.StatusBadRequest)
-		return false
-	}
-	isAgent := false
-	if h.Registry != nil {
-		_, isAgent = h.Registry.GetAgent(author)
-	}
-	if (kind != "" && kind != domain.CommentHuman) || isAgent {
-		http.Error(w, "only a human can "+doing, http.StatusForbidden)
-		return false
-	}
-	return true
-}
-
 func (h *Handlers) loadThread(w http.ResponseWriter, r *http.Request, task *domain.Task) (*domain.Thread, bool) {
 	t, err := h.Threads.Get(r.Context(), r.PathValue("tid"))
 	if err != nil || t.TaskID != task.ID {
@@ -257,8 +237,6 @@ func (h *Handlers) ListThreads(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var body struct {
-		Author   string         `json:"author"`
-		Kind     string         `json:"kind,omitempty"`
 		Body     string         `json:"body"`
 		Revision *int           `json:"revision,omitempty"`
 		Anchor   *anchorRequest `json:"anchor,omitempty"`
@@ -268,9 +246,12 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, ok := h.threadTask(w, r)
-	if !ok || !h.humanAuthor(w, body.Author, body.Kind, "open a thread") {
+	if !ok {
 		return
 	}
+	// The author is the signed-in user (13.3). Agents never sign in: they
+	// reply through their runs (12.4), so only people write here.
+	who := actorOf(r)
 	if strings.TrimSpace(body.Body) == "" {
 		http.Error(w, "body is required", http.StatusBadRequest)
 		return
@@ -291,7 +272,7 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	t := &domain.Thread{
 		TaskID: task.ID, Revision: n, ShownOn: n, Commit: commit, Status: domain.ThreadOpen,
-		Comments:  []domain.Comment{{Author: body.Author, Kind: domain.CommentHuman, Body: body.Body, Revision: n, At: now}},
+		Comments:  []domain.Comment{{Author: who.Name, AuthorID: who.ID, Kind: domain.CommentHuman, Body: body.Body, Revision: n, At: now}},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if body.Anchor != nil {
@@ -306,7 +287,7 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "thread.opened", Reason: t.ID + " on " + t.Where() + " by " + body.Author, At: now})
+	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "thread.opened", Reason: t.ID + " on " + t.Where() + " by " + who.Name, Actor: who.Name, ActorID: who.ID, At: now})
 	writeJSON(w, http.StatusCreated, t)
 }
 
@@ -314,15 +295,14 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) AddThreadComment(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var body struct {
-		Author string `json:"author"`
-		Kind   string `json:"kind,omitempty"`
-		Body   string `json:"body"`
+		Body string `json:"body"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	task, ok := h.threadTask(w, r)
-	if !ok || !h.humanAuthor(w, body.Author, body.Kind, "reply here") {
+	if !ok {
 		return
 	}
+	who := actorOf(r)
 	if strings.TrimSpace(body.Body) == "" {
 		http.Error(w, "body is required", http.StatusBadRequest)
 		return
@@ -331,7 +311,7 @@ func (h *Handlers) AddThreadComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c := domain.Comment{Author: body.Author, Kind: domain.CommentHuman, Body: body.Body, Revision: len(task.Revisions), At: time.Now().UTC()}
+	c := domain.Comment{Author: who.Name, AuthorID: who.ID, Kind: domain.CommentHuman, Body: body.Body, Revision: len(task.Revisions), At: time.Now().UTC()}
 	if err := h.Threads.AddComment(ctx, t.ID, c); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -350,16 +330,11 @@ func (h *Handlers) ReopenThread(w http.ResponseWriter, r *http.Request) {
 // setThreadStatus: POST /tasks/{id}/threads/{tid}/resolve|reopen {author}.
 func (h *Handlers) setThreadStatus(w http.ResponseWriter, r *http.Request, to domain.ThreadStatus) {
 	ctx := r.Context()
-	var body struct {
-		Author string `json:"author"`
-		Kind   string `json:"kind,omitempty"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	verb := map[domain.ThreadStatus]string{domain.ThreadResolved: "resolve", domain.ThreadOpen: "reopen"}[to]
 	task, ok := h.threadTask(w, r)
-	if !ok || !h.humanAuthor(w, body.Author, body.Kind, verb+" a thread") {
+	if !ok {
 		return
 	}
+	who := actorOf(r)
 	t, ok := h.loadThread(w, r, task)
 	if !ok {
 		return
@@ -370,7 +345,7 @@ func (h *Handlers) setThreadStatus(w http.ResponseWriter, r *http.Request, to do
 	}
 	by := ""
 	if to == domain.ThreadResolved {
-		by = body.Author
+		by = who.Name
 	}
 	now := time.Now().UTC()
 	if err := h.Threads.SetStatus(ctx, t.ID, to, by, now); err != nil {
@@ -378,7 +353,7 @@ func (h *Handlers) setThreadStatus(w http.ResponseWriter, r *http.Request, to do
 		return
 	}
 	t.Status, t.ResolvedBy, t.UpdatedAt = to, by, now
-	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "thread." + string(to), Reason: t.ID + " by " + body.Author, At: now})
+	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "thread." + string(to), Reason: t.ID + " by " + who.Name, Actor: who.Name, ActorID: who.ID, At: now})
 	writeJSON(w, http.StatusOK, t)
 }
 

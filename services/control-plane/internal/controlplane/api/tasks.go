@@ -67,6 +67,8 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		DiffScope:   body.DiffScope,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+		CreatedBy:   actorOf(r).Name,
+		CreatedByID: actorOf(r).ID,
 
 		TargetBranch:          target,
 		IntegrationBaseCommit: tip,
@@ -257,14 +259,10 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 	taskID := r.PathValue("id")
 
 	var body struct {
-		Reviewer  string `json:"reviewer"`
 		Rationale string `json:"rationale,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Reviewer == "" {
-		http.Error(w, "reviewer is required", http.StatusBadRequest)
-		return
-	}
+	who := actorOf(r) // the decision is the signed-in reviewer's (13.3)
 
 	task, err := h.Tasks.Get(ctx, taskID)
 	if err != nil {
@@ -282,7 +280,7 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 	} else {
 		to = domain.StatusRejected
 	}
-	if err := h.SM.Transition(ctx, task, to, body.Reviewer+": "+body.Rationale); err != nil {
+	if err := h.SM.Transition(ctx, task, to, who.Name+": "+body.Rationale); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -293,7 +291,8 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 		TaskID:            taskID,
 		RunID:             task.LatestRunID,
 		Action:            action,
-		Reviewer:          body.Reviewer,
+		Reviewer:          who.Name,
+		ReviewerID:        who.ID,
 		Rationale:         body.Rationale,
 		UnresolvedThreads: unresolved,
 		DecidedAt:         time.Now().UTC(),
@@ -301,13 +300,13 @@ func (h *Handlers) decideTask(w http.ResponseWriter, r *http.Request, action str
 	_ = h.Events.Append(ctx, &domain.Event{
 		RunID: task.LatestRunID, TaskID: taskID,
 		Type: "approval." + action, Reason: body.Rationale,
-		At: time.Now().UTC(),
+		Actor: who.Name, ActorID: who.ID, At: time.Now().UTC(),
 	})
 
 	// Approval delivers: a pull request when the repository has a remote,
 	// otherwise a local merge into the target branch.
 	if to == domain.StatusApproved && canDeliver(task) {
-		if err := h.startDelivery(ctx, task, "approved by "+body.Reviewer); err != nil {
+		if err := h.startDelivery(ctx, task, "approved by "+who.Name); err != nil {
 			log.Printf("delivery of %s not started: %v", taskID, err)
 		} else {
 			to = domain.StatusDelivering

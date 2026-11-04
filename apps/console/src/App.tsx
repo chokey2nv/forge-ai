@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import {
-  api, SIGNED_OUT, type User, isParent, reviewRunId, TASK_STATUSES,
+  api, SIGNED_OUT, can, type User, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
   type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
@@ -32,8 +32,8 @@ export default function App() {
       <header>
         <h1>Forge</h1>
         <nav>
-          <span className="signed-in">{user.name}{user.instanceAdmin ? " (admin)" : ""}</span>
-          <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>
+          <span className="signed-in">{user.name} · {user.instanceAdmin ? "admin" : user.role}</span>
+          {can(user, "member") && <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>}
           <button className={view.kind === "tasks" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Tasks</button>
           <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
           <button onClick={signOut}>Sign out</button>
@@ -374,8 +374,9 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [threads, setThreads] = useState<ThreadList | null>(null);
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
-  // The decision fields still take a name until 13.3 records the signed-in user.
-  const [reviewer, setReviewer] = useState(useContext(CurrentUser)?.name ?? "human");
+  // Decisions and comments are recorded as the signed-in user (13.3).
+  const me = useContext(CurrentUser);
+  const mayDecide = can(me, "reviewer");
   const [rationale, setRationale] = useState("");
   const [guidance, setGuidance] = useState("");
   const [err, setErr] = useState("");
@@ -424,19 +425,19 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [sendingBack, setSendingBack] = useState(false);
   const requestChanges = async () => {
     setSendingBack(true);
-    try { await api.requestChanges(id, reviewer, rationale); setRationale(""); await reload(); } catch (e) { setErr(String(e)); } finally { setSendingBack(false); }
+    try { await api.requestChanges(id, rationale); setRationale(""); await reload(); } catch (e) { setErr(String(e)); } finally { setSendingBack(false); }
   };
 
   const decide = async (action: "approve" | "reject") => {
     try {
-      if (action === "approve") await api.approve(id, reviewer, rationale);
-      else                       await api.reject(id, reviewer, rationale);
+      if (action === "approve") await api.approve(id, rationale);
+      else                       await api.reject(id, rationale);
       await reload();
     } catch (e) { setErr(String(e)); }
   };
 
   const rollback = async (why: string) => {
-    try { await api.rollback(id, reviewer, why); await reload(); } catch (e) { setErr(String(e)); }
+    try { await api.rollback(id, why); await reload(); } catch (e) { setErr(String(e)); }
   };
 
   const retryDelivery = async () => {
@@ -445,7 +446,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
 
   const decideEscalation = async (decision: EscalationDecision) => {
     try {
-      await api.decideEscalation(id, decision, reviewer, rationale, guidance);
+      await api.decideEscalation(id, decision, rationale, guidance);
       setRationale(""); setGuidance("");
       await reload();
     } catch (e) { setErr(String(e)); }
@@ -476,13 +477,15 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
       </section>
 
-      {task.delivery ? <DeliveryRecord task={task} onRetry={retryDelivery} onRollback={rollback} /> : delivery && <DeliveryHint preview={delivery} />}
+      {task.delivery ? <DeliveryRecord task={task} onRetry={mayDecide ? retryDelivery : undefined} onRollback={mayDecide ? rollback : undefined} /> : delivery && <DeliveryHint preview={delivery} />}
 
-      {task.status === "ESCALATED" && (
+      {task.status === "ESCALATED" && !mayDecide && (
+        <p className="hint">Escalated: waiting for a reviewer to decide.</p>
+      )}
+      {task.status === "ESCALATED" && mayDecide && (
         <section className="approval escalation">
           <h3>Escalated — your decision</h3>
           <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
-          <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="your name" />
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (recorded with the decision)" />
           <textarea value={guidance} onChange={(e) => setGuidance(e.target.value)}
             placeholder={`guidance for the ${isParent(task) ? "head engineer" : "implementer"} (used by Send back)`} />
@@ -523,11 +526,14 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
 
       {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
 
-      {task.status === "REVIEW_PENDING" && (
+      {task.status === "REVIEW_PENDING" && !mayDecide && (
+        <p className="hint">Waiting for a reviewer's decision.{can(me, "member") && isParent(task) ? " You can comment on the change below." : ""}</p>
+      )}
+      {task.status === "REVIEW_PENDING" && mayDecide && (
         <section className="approval">
           <h3>Decision</h3>
           {delivery && <p className="hint">{delivery.deliversOnApproval ? delivery.action : "Approval records the decision only."}</p>}
-          <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="reviewer" />
+          <p className="hint">Deciding as <strong>{me?.name}</strong>.</p>
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)}
             placeholder={isParent(task) ? "rationale (optional); for Request changes, what to change beyond the threads" : "rationale (optional)"} />
           {unresolved > 0 && (
@@ -594,7 +600,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
-      <DiffView task={task} feedback={isParent(task) ? { threads, author: reviewer, onChange: reloadThreads } : undefined} />
+      <DiffView task={task} feedback={isParent(task) ? { threads, user: me, onChange: reloadThreads } : undefined} />
 
       <section>
         <h3>Events</h3>
@@ -738,7 +744,7 @@ function DeliveryHint({ preview: p }: { preview: DeliveryPreview }) {
 }
 
 /** What approval did: the merge commit or pull request, or why it stopped. */
-function DeliveryRecord({ task, onRetry, onRollback }: { task: Task; onRetry: () => void; onRollback: (why: string) => void }) {
+function DeliveryRecord({ task, onRetry, onRollback }: { task: Task; onRetry?: () => void; onRollback?: (why: string) => void }) {
   const d = task.delivery!;
   const rb = d.rollback;
   const blocked = task.status === "BLOCKED" && !!d.error;
@@ -758,7 +764,7 @@ function DeliveryRecord({ task, onRetry, onRollback }: { task: Task; onRetry: ()
       {blocked && (
         <>
           <pre className="error">{d.error}</pre>
-          <button className="neutral" onClick={onRetry}>Retry delivery</button>
+          {onRetry && <button className="neutral" onClick={onRetry}>Retry delivery</button>}
         </>
       )}
       {rb && (
@@ -771,7 +777,7 @@ function DeliveryRecord({ task, onRetry, onRollback }: { task: Task; onRetry: ()
           {rb.error && task.status === "MERGED" && <pre className="error">{rb.error}</pre>}
         </div>
       )}
-      {task.status === "MERGED" && d.mergeCommit && (
+      {task.status === "MERGED" && d.mergeCommit && onRollback && (
         <div className="rollback">
           <p className="hint">
             {d.mode === "pull_request"

@@ -51,6 +51,14 @@ func (r *UserRepo) Count(ctx context.Context) (int64, error) {
 	return r.coll.CountDocuments(ctx, bson.M{})
 }
 
+func (r *UserRepo) SetRole(ctx context.Context, id string, role domain.Role, admin bool) error {
+	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"role": role, "instanceAdmin": admin}})
+	if err == nil && res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+
 type SessionRepo struct{ coll *mongo.Collection }
 
 func NewSessionRepo(db *mongo.Database) *SessionRepo {

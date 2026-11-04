@@ -146,6 +146,20 @@ export FORGE_TOKEN
 export CURL_HOME="$WORK/curl"; mkdir -p "$CURL_HOME"
 printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
 
+# Phase 13.3: one user per role, each with its own token.
+mkuser() { # name role -> API token
+  curl -sf -X POST "$CP/users" -H 'Content-Type: application/json' -d "{\"name\":\"$1\",\"password\":\"$1-password-1\",\"role\":\"$2\"}" >/dev/null
+  command curl -q -sf -c "$WORK/jar-$1" -X POST "$CP/auth/login" -H 'Content-Type: application/json' -d "{\"name\":\"$1\",\"password\":\"$1-password-1\"}" >/dev/null
+  command curl -q -sf -b "$WORK/jar-$1" -X POST "$CP/auth/tokens" -H 'Content-Type: application/json' -d '{"name":"harness"}' | jq -r .token
+}
+VIEWER=$(mkuser vic viewer) MEMBER=$(mkuser mo member) REVIEWER=$(mkuser rae reviewer)
+as() { # token curl-args… -> HTTP code; the body lands in $WORK/as.out
+  local t=$1; shift
+  command curl -q -s -o "$WORK/as.out" -w '%{http_code}' -H "Authorization: Bearer $t" "$@"
+}
+check "users are created with roles; a member cannot create users (403)" \
+  "$([[ "$VIEWER" == fgt_* && "$MEMBER" == fgt_* && "$REVIEWER" == fgt_* ]] && [ "$(as "$MEMBER" -X POST "$CP/users" -H 'Content-Type: application/json' -d '{"name":"x","password":"x-password-1"}')" = 403 ] && [ "$(as "$VIEWER" "$CP/auth/me")" = 200 ] && jq -e '.user.role == "viewer"' "$WORK/as.out" >/dev/null; echo $?)"
+
 start_adapter() { # script.json
   (cd "$ROOT/services/runtime-adapter" && SCRIPTED_PROVIDER_FILE="$1" exec npx tsx src/server.ts) >>"$WORK/adapter.log" 2>&1 &
   AD_PID=$!
@@ -245,16 +259,20 @@ run_scenario() {
       # Phase 12.2: threads on r1.
       local line thr
       line=$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -n Math.round | head -1 | cut -d: -f1)
-      thr=$(post_thread "$task" "{\"author\":\"dana\",\"body\":\"Why divide by 100 here?\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$line}}")
-      check "a thread opens on the Math.round line of r1 (HTTP $(head -c3 <<<"$thr"))" \
-        "$(tail -c +4 <<<"$thr" | jq -e --arg l "$line" '.revision == 1 and .status == "open" and .anchor.side == "new" and .anchor.line == ($l|tonumber) and (.anchor.lineText | contains("Math.round"))' >/dev/null; echo $?)"
-      local tid; tid=$(tail -c +4 <<<"$thr" | jq -r .id)
+      # Phase 12.2 threads, as the member mo (13.3: the body's author is ignored).
+      check "a viewer reads the change but cannot comment or decide (403)" \
+        "$([ "$(as "$VIEWER" "$CP/tasks/$task/diff")" = 200 ] && [ "$(as "$VIEWER" -X POST "$CP/tasks/$task/threads" -H 'Content-Type: application/json' -d '{"body":"x"}')" = 403 ] && [ "$(as "$VIEWER" -X POST "$CP/tasks/$task/approve" -H 'Content-Type: application/json' -d '{}')" = 403 ]; echo $?)"
+      local tid code
+      code=$(as "$MEMBER" -X POST "$CP/tasks/$task/threads" -H 'Content-Type: application/json' -d "{\"author\":\"mallory\",\"body\":\"Why divide by 100 here?\",\"anchor\":{\"path\":\"src/price.js\",\"line\":$line}}")
+      check "a member opens a thread on the Math.round line of r1, as themself (HTTP $code)" \
+        "$([ "$code" = 201 ] && jq -e --arg l "$line" '.revision == 1 and .status == "open" and .anchor.side == "new" and .anchor.line == ($l|tonumber) and (.anchor.lineText | contains("Math.round")) and .comments[0].author == "mo" and (.comments[0].authorId | startswith("usr-"))' "$WORK/as.out" >/dev/null; echo $?)"
+      tid=$(jq -r .id "$WORK/as.out")
       check "a line the diff does not show is refused (400)" \
-        "$([ "$(post_thread "$task" '{"author":"dana","body":"x","anchor":{"path":"src/price.js","line":999}}' | head -c3)" = 400 ]; echo $?)"
-      check "a general thread opens" "$([ "$(post_thread "$task" '{"author":"dana","body":"Please add a test for 0%."}' | head -c3)" = 201 ]; echo $?)"
-      check "a human replies" "$([ "$(thread_post "$task" "$tid/comments" '{"author":"lee","body":"Cents."}')" = 200 ]; echo $?)"
-      check "an agent cannot resolve (403)" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"reviewer"}')" = 403 ]; echo $?)"
-      check "a human resolves" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"dana"}')" = 200 ]; echo $?)"
+        "$([ "$(as "$MEMBER" -X POST "$CP/tasks/$task/threads" -H 'Content-Type: application/json' -d '{"body":"x","anchor":{"path":"src/price.js","line":999}}')" = 400 ]; echo $?)"
+      check "a general thread opens" "$([ "$(as "$MEMBER" -X POST "$CP/tasks/$task/threads" -H 'Content-Type: application/json' -d '{"body":"Please add a test for 0%."}')" = 201 ]; echo $?)"
+      check "the member replies, but cannot resolve or approve (403)" \
+        "$([ "$(as "$MEMBER" -X POST "$CP/tasks/$task/threads/$tid/comments" -H 'Content-Type: application/json' -d '{"body":"Cents."}')" = 200 ] && [ "$(as "$MEMBER" -X POST "$CP/tasks/$task/threads/$tid/resolve")" = 403 ] && [ "$(as "$MEMBER" -X POST "$CP/tasks/$task/approve" -H 'Content-Type: application/json' -d '{}')" = 403 ]; echo $?)"
+      check "a reviewer resolves" "$([ "$(as "$REVIEWER" -X POST "$CP/tasks/$task/threads/$tid/resolve")" = 200 ] && jq -e '.resolvedBy == "rae"' "$WORK/as.out" >/dev/null; echo $?)"
       # Phase 13.1: only the adapter that was given a run's token may report on it.
       local fr="run-$task-final-review"
       check "a forged completion without the run's token is refused (401), even with a user's token" \
@@ -270,7 +288,10 @@ run_scenario() {
       check "CORS answers the console's origin only" \
         "$(curl -sI "$CP/tasks" -H 'Origin: http://localhost:5173' | grep -qi '^access-control-allow-origin: http://localhost:5173' && ! curl -sI "$CP/tasks" -H 'Origin: https://evil.example' | grep -qi '^access-control-allow-origin'; echo $?)"
       check "GET threads: one resolved with two comments, one open general" \
-        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$tid" '(.threads | length == 2) and (.threads[] | select(.id == $t) | .status == "resolved" and .resolvedBy == "dana" and (.comments | length == 2)) and ([.threads[] | select(.anchor == null and .status == "open")] | length == 1) and (.notes | type == "array")' >/dev/null; echo $?)"
+        "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$tid" '(.threads | length == 2) and (.threads[] | select(.id == $t) | .status == "resolved" and .resolvedBy == "rae" and (.comments | length == 2) and .comments[1].author == "mo") and ([.threads[] | select(.anchor == null and .status == "open")] | length == 1) and (.notes | type == "array")' >/dev/null; echo $?)"
+      code=$(as "$REVIEWER" -X POST "$CP/tasks/$task/approve" -H 'Content-Type: application/json' -d '{"reviewer":"mallory","rationale":"ok"}')
+      check "the reviewer approves; the record and the event name the signed-in reviewer, not the body's (HTTP $code)" \
+        "$([ "$code" = 200 ] && curl -sf "$CP/tasks/$task/approvals" | jq -e '.[0].action == "approve" and .[0].reviewer == "rae" and (.[0].reviewerId | startswith("usr-"))' >/dev/null && curl -sf "$CP/tasks/$task/events" | jq -e 'any(.[]; .type == "approval.approve" and .actor == "rae")' >/dev/null; echo $?)"
       ;;
     parallel-reviewers)
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
@@ -791,7 +812,7 @@ run_feedback() { # request-changes | unhandled-thread | escalated-parent-retry |
         "$(jq -e -s '[.[] | select(.role == "head-engineer")] | length == 2 and (.[1].task | contains("## T1 — src/price.js:") and contains("Name the 100.") and contains("## T2 — general") and contains("```diff\ndiff --git a/src/price.js"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
       local f; f=$(child_titled "$task" "Name the cents factor")
       check "the follow-up subtask addresses T1, was told about it, and started from r1" \
-        "$([ -n "$f" ] && curl -sf "$CP/tasks/$f" | jq -e --arg t "$t1" '.addresses == [$t] and .status == "INTEGRATED" and (.requirement | contains("Review comments this subtask addresses:") and contains("dana: Name the 100."))' >/dev/null && [ "$(run_base "$f")" = "$(curl -sf "$CP/tasks/$task" | jq -r '.revisions[0].commit')" ]; echo $?)"
+        "$([ -n "$f" ] && curl -sf "$CP/tasks/$f" | jq -e --arg t "$t1" '.addresses == [$t] and .status == "INTEGRATED" and (.requirement | contains("Review comments this subtask addresses:") and contains("harness: Name the 100."))' >/dev/null && [ "$(run_base "$f")" = "$(curl -sf "$CP/tasks/$task" | jq -r '.revisions[0].commit')" ]; echo $?)"
       check "T1 is taken on by that subtask; T2 has the head engineer's answer and is addressed" \
         "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t1 "$t1" --arg t2 "$t2" --arg f "$f" '(.threads[] | select(.id == $t1) | .addressedBy == $f) and (.threads[] | select(.id == $t2) | .status == "addressed" and .comments[1].author == "head-engineer" and .comments[1].kind == "agent" and (.comments[1].body | contains("already covers 0%")))' >/dev/null; echo $?)"
       check "r2's changes since r1 are just the named constant" \

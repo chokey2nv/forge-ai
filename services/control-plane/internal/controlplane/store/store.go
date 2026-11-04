@@ -115,6 +115,7 @@ type UserRepo interface {
 	GetByName(ctx context.Context, name string) (*domain.User, error)
 	List(ctx context.Context) ([]*domain.User, error)
 	Count(ctx context.Context) (int64, error)
+	SetRole(ctx context.Context, id string, role domain.Role, instanceAdmin bool) error
 }
 
 type SessionRepo interface {

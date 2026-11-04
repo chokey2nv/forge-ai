@@ -109,6 +109,10 @@ func (s *memUsers) GetByName(_ context.Context, n string) (*domain.User, error) 
 	return nil, errors.New("no")
 }
 func (s *memUsers) List(context.Context) ([]*domain.User, error) { return nil, nil }
+func (s *memUsers) SetRole(_ context.Context, id string, r domain.Role, admin bool) error {
+	s.m[id].Role, s.m[id].InstanceAdmin = r, admin
+	return nil
+}
 func (s *memUsers) Count(context.Context) (int64, error)         { return int64(len(s.m)), nil }
 
 type memSessions struct{ m map[string]*domain.Session }
@@ -241,10 +245,10 @@ func TestSignInSessionsTokensAndBootstrap(t *testing.T) {
 	}
 
 	// Instance-admin routes refuse other users.
-	if _, err := h.AddUser(context.Background(), "lee", "lee-password-1", "", false); err != nil {
+	if _, err := h.AddUser(context.Background(), "lee", "lee-password-1", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.AddUser(context.Background(), "lee", "lee-password-2", "", false); !errors.Is(err, errNameTaken) {
+	if _, err := h.AddUser(context.Background(), "lee", "lee-password-2", "", false, ""); !errors.Is(err, errNameTaken) {
 		t.Errorf("duplicate name: %v", err)
 	}
 	lw := do("POST", "/auth/login", "", nil, map[string]string{"name": "lee", "password": "lee-password-1"})
@@ -273,5 +277,60 @@ func TestSignInSessionsTokensAndBootstrap(t *testing.T) {
 	}
 	if w := do("GET", "/auth/me", "", c, nil); w.Code != 401 {
 		t.Errorf("cookie after sign-out: %d", w.Code)
+	}
+}
+
+// Each access level against each kind of user (13.3).
+func TestRoleMatrix(t *testing.T) {
+	h := &Handlers{Users: &memUsers{m: map[string]*domain.User{}}, Tokens: &memTokens{m: map[string]*domain.APIToken{}}}
+	ctx := context.Background()
+	token := map[string]string{}
+	for _, u := range []struct {
+		name  string
+		role  domain.Role
+		admin bool
+	}{{"ada", "", true}, {"vic", domain.RoleViewer, false}, {"mo", domain.RoleMember, false}, {"rae", domain.RoleReviewer, false}} {
+		user, err := h.AddUser(ctx, u.name, u.name+"-password-1", "", u.admin, u.role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, secret, _ := h.IssueToken(ctx, user.ID, "t-"+u.name)
+		token[u.name] = secret
+	}
+	// The first user is an admin whatever was asked; ada is first.
+	want := map[Access]map[string]int{ //                       admin viewer member reviewer
+		SignedIn:  {"ada": 200, "vic": 200, "mo": 200, "rae": 200},
+		Viewer:    {"ada": 200, "vic": 200, "mo": 200, "rae": 200},
+		Member:    {"ada": 200, "vic": 403, "mo": 200, "rae": 200},
+		Reviewer:  {"ada": 200, "vic": 403, "mo": 403, "rae": 200},
+		AdminOnly: {"ada": 200, "vic": 403, "mo": 403, "rae": 403},
+	}
+	names := map[Access]string{SignedIn: "signed in", Viewer: "viewer", Member: "member", Reviewer: "reviewer", AdminOnly: "admin"}
+	for access, byUser := range want {
+		handler := h.guard(Route{Access: access, Handler: func(w http.ResponseWriter, r *http.Request) {
+			if PrincipalFrom(r.Context()) == nil {
+				t.Error("handler reached without a principal")
+			}
+			w.WriteHeader(http.StatusOK)
+		}})
+		for user, code := range byUser {
+			req := httptest.NewRequest("POST", "/x", nil)
+			req.Header.Set("Authorization", "Bearer "+token[user])
+			w := httptest.NewRecorder()
+			handler(w, req)
+			if w.Code != code {
+				t.Errorf("%s route as %s: %d, want %d", names[access], user, w.Code, code)
+			}
+		}
+	}
+	if _, err := h.AddUser(ctx, "zed", "zed-password-1", "", false, "owner"); err == nil {
+		t.Error("an unknown role must be refused")
+	}
+	if u, _ := h.Users.GetByName(ctx, "mo"); u.EffectiveRole() != domain.RoleMember {
+		t.Errorf("mo: %s", u.EffectiveRole())
+	}
+	legacy := &domain.User{Name: "old"} // created before roles existed
+	if legacy.EffectiveRole() != domain.RoleMember || legacy.Can(domain.RoleReviewer) {
+		t.Error("a user from before 13.3 is a member")
 	}
 }

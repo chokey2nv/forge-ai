@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  api, FEEDBACK_OPEN, isParent, shownOn, threadWhere,
-  type ReviewerNote, type Task, type TaskDiff, type Thread, type ThreadList,
+  api, can, FEEDBACK_OPEN, isParent, shownOn, threadWhere,
+  type ReviewerNote, type Task, type User, type TaskDiff, type Thread, type ThreadList,
 } from "./api";
 import { parseDiff, filePath, type DiffFile, type DiffLine } from "./diff";
 
@@ -11,8 +11,8 @@ const OPEN_LIMIT = 1500;
 /** What the diff viewer needs to show and take feedback. */
 interface Feedback {
   threads: ThreadList | null;
-  /** Who is commenting: the decision bar's reviewer name. */
-  author: string;
+  /** The signed-in user: comments are theirs; what they may do follows their role (13.3). */
+  user: User | null;
   onChange: () => void;
 }
 
@@ -58,7 +58,7 @@ export function DiffView({ task, feedback }: { task: Task; feedback?: Feedback }
   const threads = (feedback?.threads?.threads ?? []).filter((t) =>
     parent && shownOn(t) === revision && (since === 0 || t.anchor?.side !== "old"));
   const notes = (feedback?.threads?.notes ?? []).filter((n) => n.revision === revision);
-  const canComment = !!feedback && parent && since === 0 && FEEDBACK_OPEN.has(task.status);
+  const canComment = !!feedback && parent && since === 0 && FEEDBACK_OPEN.has(task.status) && can(feedback.user, "member");
   const ctx: FileCtx = { task, revision, canComment, feedback };
 
   // Notes whose file and line the diff shows go inline; the rest are listed.
@@ -186,7 +186,7 @@ function FileDiff({ file, open, threads, notes, ctx }: {
                               <Composer ctx={ctx} placeholder={`Comment on ${filePath(file)}:${at.line}${at.side === "old" ? " (old)" : ""}`}
                                 onCancel={() => setComposing(null)}
                                 submit={(body) => api.createThread(ctx.task.id, {
-                                  author: ctx.feedback!.author, body, revision: ctx.revision,
+                                  body, revision: ctx.revision,
                                   anchor: { path: filePath(file), side: at.side, line: at.line },
                                 }).then(() => setComposing(null))} />
                             )}
@@ -254,7 +254,7 @@ function ThreadIndex({ task, feedback, revision, canComment, notes, placed }: {
       )}
       {canComment && (composing
         ? <Composer ctx={ctx} placeholder="Comment on the whole change" onCancel={() => setComposing(false)}
-            submit={(body) => api.createThread(task.id, { author: feedback.author, body, revision }).then(() => setComposing(false))} />
+            submit={(body) => api.createThread(task.id, { body, revision }).then(() => setComposing(false))} />
         : <button className="link" onClick={() => setComposing(true)}>Comment on the whole change</button>)}
     </div>
   );
@@ -264,9 +264,11 @@ function ThreadView({ thread: t, ctx, withContext }: { thread: Thread; ctx: File
   const [replying, setReplying] = useState(false);
   const [err, setErr] = useState("");
   const fb = ctx.feedback!;
-  const can = FEEDBACK_OPEN.has(ctx.task.status);
+  const live = FEEDBACK_OPEN.has(ctx.task.status);
+  const mayReply = live && can(fb.user, "member");
+  const mayResolve = live && can(fb.user, "reviewer");
   const setStatus = (action: "resolve" | "reopen") =>
-    api.setThreadStatus(ctx.task.id, t.id, action, fb.author).then(fb.onChange).catch((e) => setErr(String(e)));
+    api.setThreadStatus(ctx.task.id, t.id, action).then(fb.onChange).catch((e) => setErr(String(e)));
   return (
     <div className={`thread thread-${t.status}`}>
       <div className="thread-head">
@@ -293,14 +295,14 @@ function ThreadView({ thread: t, ctx, withContext }: { thread: Thread; ctx: File
         </div>
       ))}
       {err && <p className="error">{err}</p>}
-      {can && (replying
+      {(mayReply || mayResolve) && (replying
         ? <Composer ctx={ctx} placeholder="Reply" onCancel={() => setReplying(false)}
-            submit={(body) => api.replyThread(ctx.task.id, t.id, fb.author, body).then(() => setReplying(false))} />
+            submit={(body) => api.replyThread(ctx.task.id, t.id, body).then(() => setReplying(false))} />
         : <div className="thread-actions">
-            <button className="link" onClick={() => setReplying(true)}>Reply</button>
-            {t.status === "resolved"
+            {mayReply && <button className="link" onClick={() => setReplying(true)}>Reply</button>}
+            {mayResolve && (t.status === "resolved"
               ? <button className="link" onClick={() => setStatus("reopen")}>Reopen</button>
-              : <button className="link" onClick={() => setStatus("resolve")}>Resolve</button>}
+              : <button className="link" onClick={() => setStatus("resolve")}>Resolve</button>)}
           </div>)}
     </div>
   );
@@ -322,7 +324,7 @@ function Composer({ ctx, placeholder, submit, onCancel }: {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const author = ctx.feedback!.author.trim();
+  const author = ctx.feedback!.user?.name ?? "";
   const send = async () => {
     setBusy(true);
     try { await submit(body); setBody(""); ctx.feedback!.onChange(); } catch (e) { setErr(String(e)); } finally { setBusy(false); }
@@ -334,7 +336,7 @@ function Composer({ ctx, placeholder, submit, onCancel }: {
       <div>
         <button className="approve" disabled={busy || !body.trim() || !author} onClick={send}>{busy ? "Saving…" : "Comment"}</button>
         <button onClick={onCancel}>Cancel</button>
-        <span className="version"> as {author || "— set your name in the Decision box"}</span>
+        <span className="version"> as {author}</span>
       </div>
     </div>
   );

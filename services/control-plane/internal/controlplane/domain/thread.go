@@ -62,8 +62,9 @@ type Anchor struct {
 }
 
 type Comment struct {
-	Author   string    `bson:"author" json:"author"`
-	Kind     string    `bson:"kind" json:"kind"` // human | agent | reviewer
+	Author   string    `bson:"author" json:"author"`                         // a user's name, or an agent's
+	AuthorID string    `bson:"authorId,omitempty" json:"authorId,omitempty"` // the user, for human comments (13.3)
+	Kind     string    `bson:"kind" json:"kind"`                             // human | agent | reviewer
 	Body     string    `bson:"body" json:"body"`
 	Revision int       `bson:"revision" json:"revision"`
 	At       time.Time `bson:"at" json:"at"`

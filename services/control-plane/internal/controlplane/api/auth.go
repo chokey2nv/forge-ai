@@ -186,6 +186,26 @@ func (h *Handlers) InstanceAdmin(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+// RequireRole lets through signed-in users with at least role min (13.3).
+func (h *Handlers) RequireRole(min domain.Role, next http.HandlerFunc) http.HandlerFunc {
+	return h.Authenticated(func(w http.ResponseWriter, r *http.Request) {
+		if !PrincipalFrom(r.Context()).User.Can(min) {
+			http.Error(w, "this needs the "+string(min)+" role", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	})
+}
+
+// actorOf is the signed-in user an action is recorded as. Every human action
+// is behind authentication, so a missing principal is a wiring bug.
+func actorOf(r *http.Request) *domain.User {
+	if p := PrincipalFrom(r.Context()); p != nil {
+		return p.User
+	}
+	return &domain.User{Name: "unknown"}
+}
+
 // Login: POST /auth/login {name, password} — starts a console session.
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -293,16 +313,17 @@ func (h *Handlers) RevokeToken(w http.ResponseWriter, r *http.Request) {
 // admins only. The first user is always an instance admin.
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name          string `json:"name"`
-		Password      string `json:"password"`
-		Email         string `json:"email,omitempty"`
-		InstanceAdmin bool   `json:"instanceAdmin"`
+		Name          string      `json:"name"`
+		Password      string      `json:"password"`
+		Email         string      `json:"email,omitempty"`
+		InstanceAdmin bool        `json:"instanceAdmin"`
+		Role          domain.Role `json:"role,omitempty"` // default member
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	u, err := h.AddUser(r.Context(), body.Name, body.Password, body.Email, body.InstanceAdmin)
+	u, err := h.AddUser(r.Context(), body.Name, body.Password, body.Email, body.InstanceAdmin, body.Role)
 	if errors.Is(err, errNameTaken) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -317,8 +338,14 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 var errNameTaken = errors.New("that name is taken")
 
 // AddUser creates a user (the HTTP endpoint and `forge users add`).
-func (h *Handlers) AddUser(ctx context.Context, name, password, email string, admin bool) (*domain.User, error) {
+func (h *Handlers) AddUser(ctx context.Context, name, password, email string, admin bool, role domain.Role) (*domain.User, error) {
 	name = strings.TrimSpace(name)
+	if role == "" {
+		role = domain.RoleMember
+	}
+	if !domain.ValidRole(role) {
+		return nil, errors.New("role must be viewer, member or reviewer")
+	}
 	if name == "" || strings.ContainsAny(name, " \t\n/") {
 		return nil, errors.New("a user needs a name without spaces or slashes")
 	}
@@ -332,7 +359,7 @@ func (h *Handlers) AddUser(ctx context.Context, name, password, email string, ad
 	if n, err := h.Users.Count(ctx); err == nil && n == 0 {
 		admin = true
 	}
-	u := &domain.User{Name: name, Email: strings.TrimSpace(email), PasswordHash: hash, InstanceAdmin: admin, CreatedAt: time.Now().UTC()}
+	u := &domain.User{Name: name, Email: strings.TrimSpace(email), PasswordHash: hash, InstanceAdmin: admin, Role: role, CreatedAt: time.Now().UTC()}
 	if err := h.Users.Create(ctx, u); err != nil {
 		return nil, err
 	}
@@ -347,4 +374,36 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, us)
+}
+
+// SetUserRole: POST /users/{uid}/role {role, instanceAdmin?} — instance admins only.
+func (h *Handlers) SetUserRole(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Role          domain.Role `json:"role"`
+		InstanceAdmin *bool       `json:"instanceAdmin,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !domain.ValidRole(body.Role) {
+		http.Error(w, "role must be viewer, member or reviewer", http.StatusBadRequest)
+		return
+	}
+	u, err := h.Users.Get(r.Context(), r.PathValue("uid"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	admin := u.InstanceAdmin
+	if body.InstanceAdmin != nil {
+		admin = *body.InstanceAdmin
+	}
+	if u.ID == actorOf(r).ID && !admin {
+		http.Error(w, "you cannot take away your own instance admin", http.StatusConflict)
+		return
+	}
+	if err := h.Users.SetRole(r.Context(), u.ID, body.Role, admin); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	u.Role, u.InstanceAdmin = body.Role, admin
+	writeJSON(w, http.StatusOK, u)
 }

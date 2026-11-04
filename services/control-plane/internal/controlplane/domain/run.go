@@ -89,13 +89,16 @@ type Usage struct {
 }
 
 type Event struct {
-	ID      string    `bson:"_id" json:"id"`
-	RunID   string    `bson:"runId" json:"runId"`
-	TaskID  string    `bson:"taskId,omitempty" json:"taskId,omitempty"`
-	Type    string    `bson:"type" json:"type"` // state.transition | checkpoint | complete | error
-	From    string    `bson:"from,omitempty" json:"from,omitempty"`
-	To      string    `bson:"to,omitempty" json:"to,omitempty"`
-	Reason  string    `bson:"reason,omitempty" json:"reason,omitempty"`
-	Payload any       `bson:"payload,omitempty" json:"payload,omitempty"`
+	ID      string `bson:"_id" json:"id"`
+	RunID   string `bson:"runId" json:"runId"`
+	TaskID  string `bson:"taskId,omitempty" json:"taskId,omitempty"`
+	Type    string `bson:"type" json:"type"` // state.transition | checkpoint | complete | error
+	From    string `bson:"from,omitempty" json:"from,omitempty"`
+	To      string `bson:"to,omitempty" json:"to,omitempty"`
+	Reason  string `bson:"reason,omitempty" json:"reason,omitempty"`
+	Payload any    `bson:"payload,omitempty" json:"payload,omitempty"`
+	// Actor is the signed-in user who caused it, when a person did (13.3).
+	Actor   string    `bson:"actor,omitempty" json:"actor,omitempty"`
+	ActorID string    `bson:"actorId,omitempty" json:"actorId,omitempty"`
 	At      time.Time `bson:"at" json:"at"`
 }

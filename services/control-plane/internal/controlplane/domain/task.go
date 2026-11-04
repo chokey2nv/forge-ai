@@ -60,6 +60,9 @@ type Task struct {
 	UpdatedAt   time.Time  `bson:"updatedAt" json:"updatedAt"`
 	DiffScope   []string   `bson:"diffScope,omitempty" json:"diffScope,omitempty"`
 	LatestRunID string     `bson:"latestRunId,omitempty" json:"latestRunId,omitempty"`
+	// Who created the task (Phase 13.3).
+	CreatedBy   string `bson:"createdBy,omitempty" json:"createdBy,omitempty"`
+	CreatedByID string `bson:"createdById,omitempty" json:"createdById,omitempty"`
 
 	ParentID  string   `bson:"parentId,omitempty" json:"parentId,omitempty"`
 	DependsOn []string `bson:"dependsOn,omitempty" json:"dependsOn,omitempty"`
@@ -106,12 +109,13 @@ const (
 // FollowUp is one round of the head engineer planning more work on a
 // parent's combined change after a human's feedback.
 type FollowUp struct {
-	N        int    `bson:"n" json:"n"` // 1-based
-	Kind     string `bson:"kind" json:"kind"`
-	Revision int    `bson:"revision" json:"revision"` // the latest revision when it was asked for (0: none yet)
-	Reviewer string `bson:"reviewer" json:"reviewer"`
-	Summary  string `bson:"summary,omitempty" json:"summary,omitempty"`
-	RunID    string `bson:"runId" json:"runId"` // the head engineer's follow-up run
+	N          int    `bson:"n" json:"n"` // 1-based
+	Kind       string `bson:"kind" json:"kind"`
+	Revision   int    `bson:"revision" json:"revision"` // the latest revision when it was asked for (0: none yet)
+	Reviewer   string `bson:"reviewer" json:"reviewer"`
+	ReviewerID string `bson:"reviewerId,omitempty" json:"reviewerId,omitempty"`
+	Summary    string `bson:"summary,omitempty" json:"summary,omitempty"`
+	RunID      string `bson:"runId" json:"runId"` // the head engineer's follow-up run
 	// Outcome: "planned" once its subtasks exist, "refused: …" when the
 	// head engineer's graph was not accepted.
 	Outcome string    `bson:"outcome,omitempty" json:"outcome,omitempty"`
@@ -151,6 +155,7 @@ type Delivery struct {
 // a revert commit on the target, or a revert pull request.
 type Rollback struct {
 	Reviewer     string    `bson:"reviewer" json:"reviewer"`
+	ReviewerID   string    `bson:"reviewerId,omitempty" json:"reviewerId,omitempty"`
 	Rationale    string    `bson:"rationale,omitempty" json:"rationale,omitempty"`
 	RevertCommit string    `bson:"revertCommit,omitempty" json:"revertCommit,omitempty"`
 	Branch       string    `bson:"branch,omitempty" json:"branch,omitempty"` // the revert PR's branch

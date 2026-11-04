@@ -180,6 +180,16 @@ export FORGE_TOKEN=fgt_…
 export CURL_HOME=$(mktemp -d); printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
 ```
 
+**Roles (13.3).** Each user has one role for the whole instance until projects arrive (13.4): `viewer` reads; `member` also creates and starts tasks, opens and answers threads, resumes runs; `reviewer` also approves, rejects, requests changes, decides escalations, resolves threads, retries deliveries and rolls back. Instance admins can do all of that and manage users and agents. New users are members unless given `--role`; users from before roles are members. Every decision and comment is recorded as the signed-in user (approvals, threads, follow-ups, rollbacks, task creators, and an `actor` on their events); a `reviewer` or `author` in a request body is ignored.
+
+```bash
+echo '<password>' | go run ./cmd/forge users add rae --role reviewer
+go run ./cmd/forge users role rae member [--admin|--no-admin]
+curl -s -X POST localhost:8080/users/<userId>/role -H 'Content-Type: application/json' -d '{"role":"reviewer"}'   # instance admins
+```
+
+A request your role does not allow answers 403 ("this needs the reviewer role"); the console hides what you cannot do.
+
 `GET /auth/me` says who you are; `GET|POST /auth/tokens` and `DELETE /auth/tokens/<id>` list, create and revoke your tokens; instance admins create users with `POST /users`. Without a user, setting `FORGE_BOOTSTRAP_TOKEN` lets you `POST /users` once with it instead.
 
 ---
@@ -759,7 +769,7 @@ A delivered (`MERGED`) task can be rolled back. Rollback reverts; it never rewri
 
 ```bash
 curl -s -X POST localhost:8080/tasks/<taskId>/rollback -H 'Content-Type: application/json' \
-  -d '{"reviewer":"you","rationale":"why"}'               # 202, ROLLING_BACK
+  -d '{"rationale":"why"}'                                # 202, ROLLING_BACK (as you, a reviewer)
 curl -s localhost:8080/tasks/<taskId> | jq .delivery.rollback
 ```
 
@@ -775,13 +785,13 @@ While a parent task is `REVIEW_PENDING` or `ESCALATED`, a human can comment on l
 ```bash
 curl -s localhost:8080/tasks/<taskId>/threads | jq               # {threads, notes}
 curl -s -X POST localhost:8080/tasks/<taskId>/threads -H 'Content-Type: application/json' \
-  -d '{"author":"dana","body":"Why divide here?","anchor":{"path":"src/price.js","side":"new","line":3}}'
-curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/comments -H 'Content-Type: application/json' -d '{"author":"dana","body":"…"}'
-curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/resolve  -H 'Content-Type: application/json' -d '{"author":"dana"}'
-curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/reopen   -H 'Content-Type: application/json' -d '{"author":"dana"}'
+  -d '{"body":"Why divide here?","anchor":{"path":"src/price.js","side":"new","line":3}}'
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/comments -H 'Content-Type: application/json' -d '{"body":"…"}'
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/resolve
+curl -s -X POST localhost:8080/tasks/<taskId>/threads/<threadId>/reopen
 ```
 
-A thread is on the latest revision unless the request gives `"revision"`. The anchor must be a line that revision's diff shows (`side` `new` for added or unchanged lines, `old` for deleted ones), or the request answers 400. Outside `REVIEW_PENDING`/`ESCALATED` every change answers 409. Only humans write here: an author that is a registered agent's name, or `"kind":"agent"`, answers 403; agents reply through their work (§6.5.3). Approving with unresolved threads is allowed; the console warns first, the approval record lists them (`unresolvedThreads`), and so does the pull request description.
+A thread is on the latest revision unless the request gives `"revision"`. The anchor must be a line that revision's diff shows (`side` `new` for added or unchanged lines, `old` for deleted ones), or the request answers 400. Outside `REVIEW_PENDING`/`ESCALATED` every change answers 409. Comments are the signed-in user's (§2.7): members open and answer threads, reviewers resolve and reopen them, and any `author` in the body is ignored. Agents never sign in; they reply through their work (§6.5.3). Approving with unresolved threads is allowed; the console warns first, the approval record lists them (`unresolvedThreads`), and so does the pull request description.
 
 ### 6.5.3 Requesting changes
 
@@ -789,7 +799,7 @@ The third decision on a parent's combined change, next to Approve and Reject. It
 
 ```bash
 curl -s -X POST localhost:8080/tasks/<taskId>/request-changes -H 'Content-Type: application/json' \
-  -d '{"reviewer":"dana","summary":"Also cover a 0% discount."}'
+  -d '{"summary":"Also cover a 0% discount."}'
 ```
 
 The task goes `REVIEW_PENDING → DECOMPOSING`, and the head engineer runs again (`run-<taskId>-revise-<n>`) on the parent branch as it stands. It is shown the requirement, the subtasks done so far, your summary, the open threads as T1, T2, … and the combined diff, and submits a follow-up task graph. Each follow-up subtask lists the threads it deals with (`addresses`); a thread that needs no code change can be answered directly (`responses`), which posts the answer as an agent reply and marks the thread *addressed*. A graph that leaves an open thread neither addressed nor answered is refused, and the task goes back to `REVIEW_PENDING` with the reason in its events and in `followUps[].outcome`.
@@ -812,7 +822,7 @@ curl -s localhost:8080/runs/<runId>/reviews | jq '.[] | {round, reviewer, verdic
 
 # Decide: accept (integrate / go to approval), retry (one more round), or reject
 curl -s -X POST localhost:8080/tasks/<taskId>/escalation -H 'Content-Type: application/json' \
-  -d '{"decision":"retry","reviewer":"<you>","rationale":"why","guidance":"what to change"}'
+  -d '{"decision":"retry","rationale":"why","guidance":"what to change"}'
 ```
 
 `retry` sends every rejecting reviewer's defects plus your guidance to the implementer; another rejection escalates again. For a parent's combined change, `retry` goes to the head engineer instead, as a follow-up (§6.5.3) with the final reviewers' findings, your guidance and any open threads; its final review runs again as `run-<taskId>-final-review-a2` (`-a3`, …), and it counts against the revision budget. Decisions are recorded in `GET /tasks/<taskId>/approvals`. The console offers the same three decisions on the escalated task's page (§4.4).
@@ -896,6 +906,7 @@ If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, 
 | CP exits: "FORGE_ADAPTER_TOKEN is not set"; adapter exits likewise | Add `FORGE_ADAPTER_TOKEN=<openssl rand -hex 32>` to `.env` (both services read it) and restart both |
 | API answers 401 "sign in required" | Send a token (`-H "Authorization: Bearer $FORGE_TOKEN"`, §2.7) or sign in to the console. A revoked token, a disabled user, or an expired session all answer 401 |
 | The console shows the sign-in page right after signing in | The session cookie is not reaching the API: its origin must be in `FORGE_CONSOLE_ORIGINS`, and the console and API must be on the same site (`localhost` with `localhost`, not `127.0.0.1` with `localhost`) |
+| 403 "this needs the reviewer role" (or member) | Your role does not allow it (§2.7). An instance admin can change it: `forge users role <name> reviewer` |
 | A slice stops at once: "FORGE_TOKEN: export FORGE_TOKEN …" | Create a token (`forge tokens create <user> slices`) and export it |
 | Runs fail to start: "adapter: HTTP 401" | The two services have different `FORGE_ADAPTER_TOKEN` values; restart both from the same `.env` |
 | Adapter log: `callback …: HTTP 401` | The run token did not match: the control plane's callback key changed under a running agent (`FORGE_CALLBACK_SECRET` edited, or the `instance` collection cleared). Resume the run |

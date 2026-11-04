@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/store"
 )
@@ -186,18 +185,17 @@ func TestThreadRules(t *testing.T) {
 		Status:    domain.StatusReviewPending,
 		Revisions: []domain.Revision{{N: 1, Commit: r1, BaseCommit: base}},
 	}
-	reg := agent.NewRegistry("../../../../../agents", "../../../../../skills", nil)
-	if err := reg.Load(context.Background()); err != nil {
-		t.Fatalf("load agents: %v", err)
-	}
 	threads := &memThreads{m: map[string]*domain.Thread{}}
-	h := &Handlers{Tasks: oneTask{task: task}, Threads: threads, Events: noEvents{}, Registry: reg}
+	h := &Handlers{Tasks: oneTask{task: task}, Threads: threads, Events: noEvents{}}
+	dana := &domain.User{ID: "usr-dana", Name: "dana", Role: domain.RoleReviewer}
 
 	call := func(handler http.HandlerFunc, path, tid string, body any) (int, string) {
 		b, _ := json.Marshal(body)
 		req := httptest.NewRequest(http.MethodPost, "/tasks/p/threads"+path, bytes.NewReader(b))
 		req.SetPathValue("id", "p")
 		req.SetPathValue("tid", tid)
+		// Signed in as dana; a body's author or kind is ignored (13.3).
+		req = req.WithContext(context.WithValue(req.Context(), principalKey{}, &Principal{User: dana, Via: "session"}))
 		w := httptest.NewRecorder()
 		handler(w, req)
 		return w.Code, w.Body.String()
@@ -209,7 +207,8 @@ func TestThreadRules(t *testing.T) {
 		t.Fatalf("open anchored thread: %d %s", code, out)
 	}
 	th := threads.m["thr-a"]
-	if th.Revision != 1 || th.Commit != r1 || th.Anchor.LineText != "two" || th.Status != domain.ThreadOpen || th.Comments[0].Kind != domain.CommentHuman {
+	if th.Revision != 1 || th.Commit != r1 || th.Anchor.LineText != "two" || th.Status != domain.ThreadOpen || th.Comments[0].Kind != domain.CommentHuman ||
+		th.Comments[0].Author != "dana" || th.Comments[0].AuthorID != "usr-dana" {
 		t.Errorf("thread %+v anchor %+v", th, th.Anchor)
 	}
 	if code, out := open(map[string]any{"author": "dana", "body": "general remark"}); code != http.StatusCreated {
@@ -224,28 +223,21 @@ func TestThreadRules(t *testing.T) {
 		"file not in the diff": {map[string]any{"author": "dana", "body": "x", "anchor": map[string]any{"path": "b.txt", "line": 1}}, 400},
 		"unknown revision":     {map[string]any{"author": "dana", "body": "x", "revision": 2}, 400},
 		"no body":              {map[string]any{"author": "dana", "body": " "}, 400},
-		"no author":            {map[string]any{"body": "x"}, 400},
-		"an agent's name":      {map[string]any{"author": "implementer", "body": "x"}, 403},
-		"an agent's kind":      {map[string]any{"author": "bot", "kind": "agent", "body": "x"}, 403},
 	} {
 		if code, out := open(c.body); code != c.code {
 			t.Errorf("%s: %d %s, want %d", name, code, out, c.code)
 		}
 	}
 
-	if code, out := call(h.AddThreadComment, "", "thr-a", map[string]any{"author": "dana", "body": "also this"}); code != 200 || len(threads.m["thr-a"].Comments) != 2 {
+	// Whatever the body claims, the comment is the signed-in user's.
+	if code, out := call(h.AddThreadComment, "", "thr-a", map[string]any{"author": "implementer", "kind": "agent", "body": "also this"}); code != 200 ||
+		len(threads.m["thr-a"].Comments) != 2 || threads.m["thr-a"].Comments[1].Author != "dana" || threads.m["thr-a"].Comments[1].Kind != domain.CommentHuman {
 		t.Errorf("reply: %d %s", code, out)
 	}
 	if code, _ := call(h.AddThreadComment, "", "thr-z", map[string]any{"author": "dana", "body": "x"}); code != 404 {
 		t.Errorf("reply to an unknown thread: %d", code)
 	}
 
-	// Only humans resolve.
-	for _, who := range []map[string]any{{"author": "reviewer"}, {"author": "head-engineer"}, {"author": "x", "kind": "agent"}} {
-		if code, _ := call(h.ResolveThread, "", "thr-a", who); code != http.StatusForbidden {
-			t.Errorf("resolve by %v: %d, want 403", who, code)
-		}
-	}
 	if code, out := call(h.ResolveThread, "", "thr-a", map[string]any{"author": "dana"}); code != 200 || threads.m["thr-a"].Status != domain.ThreadResolved || threads.m["thr-a"].ResolvedBy != "dana" {
 		t.Errorf("resolve: %d %s", code, out)
 	}

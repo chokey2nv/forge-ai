@@ -20,16 +20,13 @@ const (
 
 type escalationRequest struct {
 	Decision  string `json:"decision"`
-	Reviewer  string `json:"reviewer"`
+	Reviewer  string `json:"-"` // the signed-in reviewer (13.3), never the body
 	Rationale string `json:"rationale,omitempty"`
 	Guidance  string `json:"guidance,omitempty"`
 }
 
 // validateEscalation checks a decision against the task it targets.
 func validateEscalation(task *domain.Task, req escalationRequest) (status int, msg string) {
-	if req.Reviewer == "" {
-		return http.StatusBadRequest, "reviewer is required"
-	}
 	switch req.Decision {
 	case EscalationAccept, EscalationReject:
 	case EscalationRetry:
@@ -59,6 +56,8 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	who := actorOf(r)
+	req.Reviewer = who.Name
 
 	task, err := h.Tasks.Get(ctx, r.PathValue("id"))
 	if err != nil {
@@ -86,10 +85,10 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = h.Approvals.Create(ctx, &domain.Approval{
 		TaskID: task.ID, RunID: run.ID, Action: "escalation-" + req.Decision,
-		Reviewer: req.Reviewer, Rationale: req.Rationale, DecidedAt: now,
+		Reviewer: who.Name, ReviewerID: who.ID, Rationale: req.Rationale, DecidedAt: now,
 	})
 	_ = h.Events.Append(ctx, &domain.Event{
-		TaskID: task.ID, RunID: run.ID, Type: "escalation." + req.Decision, Reason: reason, At: now,
+		TaskID: task.ID, RunID: run.ID, Type: "escalation." + req.Decision, Reason: reason, Actor: who.Name, ActorID: who.ID, At: now,
 	})
 
 	bg := context.WithoutCancel(ctx)
@@ -121,7 +120,7 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 		if isParentReview(task) {
 			// The combined change has no single implementer: the head
 			// engineer plans the follow-up work, as for requested changes.
-			if _, code, err := h.startFollowUp(bg, task, domain.FollowUpEscalationRetry, req.Reviewer, req.Guidance, "# Final review (escalated)\n\n"+rejectionFeedback(roundOf(ctx, h, run))); err != nil {
+			if _, code, err := h.startFollowUp(bg, task, domain.FollowUpEscalationRetry, who, req.Guidance, "# Final review (escalated)\n\n"+rejectionFeedback(roundOf(ctx, h, run))); err != nil {
 				http.Error(w, err.Error(), code)
 				return
 			}

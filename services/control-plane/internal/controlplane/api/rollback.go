@@ -19,18 +19,15 @@ import (
 // pull request opened. A rollback that fails leaves the task MERGED with
 // the reason, and can be asked for again.
 
-// RollbackTask: POST /tasks/{id}/rollback {reviewer, rationale} on a MERGED task.
+// RollbackTask: POST /tasks/{id}/rollback {rationale} on a MERGED task,
+// recorded as the signed-in reviewer (13.3).
 func (h *Handlers) RollbackTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var body struct {
-		Reviewer  string `json:"reviewer"`
 		Rationale string `json:"rationale,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Reviewer == "" {
-		http.Error(w, "reviewer is required", http.StatusBadRequest)
-		return
-	}
+	who := actorOf(r)
 	task, err := h.Tasks.Get(ctx, r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)
@@ -40,15 +37,15 @@ func (h *Handlers) RollbackTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only a delivered (MERGED) task can be rolled back (status "+string(task.Status)+")", http.StatusConflict)
 		return
 	}
-	if err := h.SM.Transition(ctx, task, domain.StatusRollingBack, "rollback by "+body.Reviewer+": "+body.Rationale); err != nil {
+	if err := h.SM.Transition(ctx, task, domain.StatusRollingBack, "rollback by "+who.Name+": "+body.Rationale); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	_ = h.Approvals.Create(ctx, &domain.Approval{
 		TaskID: task.ID, RunID: task.LatestRunID, Action: "rollback",
-		Reviewer: body.Reviewer, Rationale: body.Rationale, DecidedAt: time.Now().UTC(),
+		Reviewer: who.Name, ReviewerID: who.ID, Rationale: body.Rationale, DecidedAt: time.Now().UTC(),
 	})
-	rb := &domain.Rollback{Reviewer: body.Reviewer, Rationale: body.Rationale, StartedAt: time.Now().UTC()}
+	rb := &domain.Rollback{Reviewer: who.Name, ReviewerID: who.ID, Rationale: body.Rationale, StartedAt: time.Now().UTC()}
 	go h.rollback(context.WithoutCancel(ctx), task, rb)
 	writeJSON(w, http.StatusAccepted, map[string]string{"taskId": task.ID, "status": string(domain.StatusRollingBack)})
 }

@@ -49,15 +49,11 @@ func (h *Handlers) budgetSpent(task *domain.Task) string {
 func (h *Handlers) RequestChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var body struct {
-		Reviewer string `json:"reviewer"`
-		Summary  string `json:"summary,omitempty"`
+		Summary string `json:"summary,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	body.Summary = strings.TrimSpace(body.Summary)
-	if strings.TrimSpace(body.Reviewer) == "" {
-		http.Error(w, "reviewer is required", http.StatusBadRequest)
-		return
-	}
+	who := actorOf(r)
 	task, err := h.Tasks.Get(ctx, r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)
@@ -84,13 +80,13 @@ func (h *Handlers) RequestChanges(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	_ = h.Approvals.Create(ctx, &domain.Approval{
 		TaskID: task.ID, RunID: approvedReviewRunID(task), Action: "request_changes",
-		Reviewer: body.Reviewer, Rationale: body.Summary, UnresolvedThreads: open, DecidedAt: now,
+		Reviewer: who.Name, ReviewerID: who.ID, Rationale: body.Summary, UnresolvedThreads: open, DecidedAt: now,
 	})
 	_ = h.Events.Append(ctx, &domain.Event{
 		TaskID: task.ID, Type: "approval.request_changes",
-		Reason: fmt.Sprintf("%d open thread(s); %s", len(open), body.Summary), At: now,
+		Reason: fmt.Sprintf("%d open thread(s); %s", len(open), body.Summary), Actor: who.Name, ActorID: who.ID, At: now,
 	})
-	f, code, err := h.startFollowUp(context.WithoutCancel(ctx), task, domain.FollowUpRequestChanges, body.Reviewer, body.Summary, "")
+	f, code, err := h.startFollowUp(context.WithoutCancel(ctx), task, domain.FollowUpRequestChanges, who, body.Summary, "")
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -104,7 +100,7 @@ func (h *Handlers) RequestChanges(w http.ResponseWriter, r *http.Request) {
 // it records the follow-up, moves the task to DECOMPOSING and starts the
 // head engineer on the change as it stands. extra is more context for the
 // prompt (an escalated final review's rejections).
-func (h *Handlers) startFollowUp(ctx context.Context, task *domain.Task, kind, reviewer, summary, extra string) (*domain.FollowUp, int, error) {
+func (h *Handlers) startFollowUp(ctx context.Context, task *domain.Task, kind string, reviewer *domain.User, summary, extra string) (*domain.FollowUp, int, error) {
 	tip, err := workspace.ResolveCommit(ctx, task.RepoPath, task.IntegrationBranch)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("resolve the parent branch: %w", err)
@@ -118,12 +114,12 @@ func (h *Handlers) startFollowUp(ctx context.Context, task *domain.Task, kind, r
 
 	n := len(task.FollowUps) + 1
 	f := domain.FollowUp{
-		N: n, Kind: kind, Revision: len(task.Revisions), Reviewer: reviewer, Summary: summary,
+		N: n, Kind: kind, Revision: len(task.Revisions), Reviewer: reviewer.Name, ReviewerID: reviewer.ID, Summary: summary,
 		RunID: fmt.Sprintf("run-%s-revise-%d", task.ID, n), At: time.Now().UTC(),
 	}
 	prompt := buildFollowUpTask(task, &f, children, threads, diff, extra, h.assignableAgents())
 
-	if err := h.SM.Transition(ctx, task, domain.StatusDecomposing, fmt.Sprintf("follow-up %d (%s) by %s", n, kind, reviewer)); err != nil {
+	if err := h.SM.Transition(ctx, task, domain.StatusDecomposing, fmt.Sprintf("follow-up %d (%s) by %s", n, kind, reviewer.Name)); err != nil {
 		return nil, http.StatusConflict, err
 	}
 	if err := h.Tasks.AddFollowUp(ctx, task.ID, f, f.At); err != nil {
