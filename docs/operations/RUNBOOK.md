@@ -734,6 +734,23 @@ The same flow from the console: *New task* → wait for review → click the `re
 
 ---
 
+### 5.13 Eval suite
+
+The scripted scenarios test Forge's pipeline. This tests how well a model does the work:
+
+```bash
+make eval              # every case in tests/evaluations
+make eval CASE=0002    # cases whose file name contains this
+```
+
+Forge must be running. Each case runs in a project named `evals`, on a fresh copy of its fixture, with the model in `MODEL_PROVIDER` and `MODEL_NAME`; set `EVAL_PROVIDER` and `EVAL_MODEL` in the environment to compare another (`.env`'s `EVAL_` lines aren't used). A case passes when the task reaches `REVIEW_PENDING` and its `checks` hold: `commands` run offline in a worker container on the resulting tree, and every changed file is covered by `onlyChanged`. The agent never sees them. The task is then rejected, so nothing is delivered and its workspaces are released. Results appear on the console's Evals page.
+
+**This spends real money with a paid model:** at most `EVAL_TASK_MAX_COST_USD` (`0.50`) a case, and no new case starts once a run has spent `EVAL_MAX_COST_USD` (`2`). Run it when you change a prompt or a model. The first run creates an API token for the first instance admin, kept in `.forge/run/eval-token`.
+
+To test the runner itself without a model, start a private stack with `MODEL_PROVIDER=scripted MODEL_NAME=scripted FORGE_ALLOWED_PROVIDERS=scripted SCRIPTED_PROVIDER_FILE=$PWD/tests/failure-paths/evals-scripted.json`: every case passes except `0004-add-a-helper`, whose scripted change is wrong on purpose, passes Forge's reviewers, and has to be caught by the case's own checks.
+
+---
+
 ## 6. Observing state
 
 Every API call below needs your token (§2.7): add `-H "Authorization: Bearer $FORGE_TOKEN"`, or set up `CURL_HOME` once as shown there.
@@ -1131,7 +1148,7 @@ rm -rf .forge
 | 3. Control plane + persistence | Verified | Lifecycle to `REVIEW_PENDING`; recovery after crash | §5.9 `crash-resume`; the older `phase3-*` demos are not re-checked |
 | 4. Verification gates | Verified | Gates run and block failing changes | §5.9 `verify-retry`, `exhaustion` |
 | 5. Planner + Reviewer roles | Reviewer verified; planner not | Reviewer gates integration and sends work back | §5.9 `split-verdict`; the planner path is unexercised |
-| 6. Eval suite formalized + console | Console verified; eval harness not | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
+| 6. Eval suite formalized + console | Console verified; eval suite with the scripted model only | Console drives approval and escalation decisions | Phase 9.4: escalated subtask accepted and parent approved from the UI against a live control plane |
 | 7. Agent registry, skills, composer | Verified | A new agent is a markdown file and a reload | §5.9 `add-agent` |
 | 8. Head engineer + task graph + integrator | Verified | Decomposition → dependent children → integration → combined verification → final review | §5.7, §5.8 with Claude; §5.9 |
 | 9. Cross-review and escalation | Verified | Every listed reviewer reviews; all must pass; rejections consolidated; repeated rejection escalates to a human, who decides from the API or console | §5.9 `two-reviewers-pass`, `split-verdict`, `reviewer-timeout`, `escalate-accept`, `escalate-retry`, `final-review-escalates`; §5.7–§5.8 with Claude (a Claude `test-reviewer` rejected and passed a rework on its own); console decision (§4.4) |
@@ -1142,7 +1159,7 @@ rm -rf .forge
 
 Real GitHub pull requests were checked once by hand on 4 Nov 2026 with the scripted model, on a private repository: approve → PR opened → merged on GitHub → `MERGED`; roll back → revert PR → merged → `ROLLED_BACK`, with the target's files back as they were; a PR closed without merging → `REJECTED`. The suite still uses a stub `gh`.
 
-Not covered yet: resuming a rollback interrupted by a restart. The Phase 6 eval harness has not been re-run.
+Not covered yet: resuming a rollback interrupted by a restart. The eval suite (§5.13) has been run with the scripted model only.
 
 A repository with a remote: Forge fetches the target when creating a task and again before opening its pull request, and never moves your local branch. A local target that's behind doesn't affect the work (also checked on that repository, with `main` moving on GitHub before the task and again during review). The `branch.created` event says which commit a task started from and why. If the local target and the remote's have diverged, creating a task answers 409 until you pull or push. If the fetch fails when creating a task, it starts from the local branch and the event says so; if it fails during delivery, the task is `BLOCKED` and delivery can be retried.
 

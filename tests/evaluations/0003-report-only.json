@@ -1,0 +1,18 @@
+{
+  "id": "0003-report-only",
+  "fixtureRepo": "tests/evaluations/fixtures/parallel-features",
+  "requirement": "Review this package and list the functions it exports, what each does, and whether its tests cover it. Return a summary.",
+  "acceptance": [
+    "The summary names every exported function",
+    "It says whether each one is tested"
+  ],
+  "checks": {
+    "commands": [
+      "grep -rl --include='*.md' applyDiscount ."
+    ],
+    "onlyChanged": [
+      "*.md",
+      "docs/"
+    ]
+  }
+}

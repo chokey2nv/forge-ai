@@ -1,0 +1,20 @@
+{
+  "id": "0002-discount-bug",
+  "fixtureRepo": "tests/evaluations/fixtures/cart-pricing",
+  "requirement": "applyDiscount in src/price.js subtracts the percentage as if it were an amount. Fix it so it applies a percentage discount rounded to cents.",
+  "acceptance": [
+    "applyDiscount(200, 10) returns 180",
+    "applyDiscount(19.99, 25) returns 14.99",
+    "npm test passes"
+  ],
+  "checks": {
+    "commands": [
+      "node -e \"const a=require('assert'),{applyDiscount:d}=require('./src/price');a.equal(d(200,10),180);a.equal(d(19.99,25),14.99);a.equal(d(50,0),50);a.equal(d(50,100),0)\"",
+      "node --test"
+    ],
+    "onlyChanged": [
+      "src/price.js",
+      "tests/"
+    ]
+  }
+}

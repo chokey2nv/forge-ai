@@ -77,8 +77,9 @@ phase12-feedback-slice:
 
 .PHONY: eval console-install console-dev
 
+# make eval [CASE=0002]; needs Forge running, and spends real money with a paid model.
 eval:
-	cd services/control-plane && go run ./cmd/eval
+	@bash scripts/forge.sh eval $(CASE)
 
 console-install:
 	cd apps/console && pnpm install

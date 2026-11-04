@@ -1,0 +1,20 @@
+{
+  "id": "0004-add-a-helper",
+  "fixtureRepo": "tests/evaluations/fixtures/parallel-features",
+  "requirement": "Add taxFor(amount, ratePercent) in src/tax.js, returning the tax rounded to cents, with tests in tests/tax.test.js.",
+  "acceptance": [
+    "taxFor(50, 8) returns 4",
+    "taxFor(19.99, 7.5) returns 1.5",
+    "npm test passes"
+  ],
+  "checks": {
+    "commands": [
+      "node -e \"const a=require('assert'),{taxFor:t}=require('./src/tax');a.equal(t(50,8),4);a.equal(t(19.99,7.5),1.5);a.equal(t(10,0),0)\"",
+      "node --test"
+    ],
+    "onlyChanged": [
+      "src/tax.js",
+      "tests/tax.test.js"
+    ]
+  }
+}

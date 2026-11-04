@@ -725,10 +725,14 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
 
 function Evals() {
   const [results, setResults] = useState<EvalResult[]>([]);
+  const [costs, setCosts] = useState<Record<string, number>>({});
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    api.listEvals().then(setResults).catch((e) => setErr(String(e)));
+    api.listEvals().then((rs) => {
+      setResults(rs);
+      rs.forEach((r) => api.getTaskSpend(r.taskId).then((s) => setCosts((c) => ({ ...c, [r.taskId]: s.task.spend.costUsd }))).catch(() => {}));
+    }).catch((e) => setErr(String(e)));
   }, []);
 
   const byModel = new Map<string, EvalResult[]>();
@@ -741,19 +745,29 @@ function Evals() {
   return (
     <div>
       {err && <p className="error">{err}</p>}
+      <p className="hint">
+        How well the agents do real work: each case runs through Forge on a fresh copy of a small repository, then its result is
+        checked separately from Forge's own checks and reviewers. Run it from the repository's folder with <code>make eval</code> (or <code>make eval CASE=0002</code>).
+        It spends real money with a paid model, up to $0.50 a case and $2 a run, so run it when you change a prompt or a model.
+      </p>
+      {results.length === 0 && !err && <p className="hint">No results yet.</p>}
       {Array.from(byModel.entries()).map(([k, list]) => {
         const passed = list.filter((r) => r.passed).length;
         return (
           <section key={k}>
             <h3>{k} — {passed}/{list.length} passing</h3>
             <table>
-              <thead><tr><th>Case</th><th>Status</th><th>Result</th><th>Duration</th><th>Started</th></tr></thead>
+              <thead><tr><th>Case</th><th>Status</th><th>Result</th><th>Cost</th><th>Duration</th><th>Started</th></tr></thead>
               <tbody>
                 {list.map((r) => (
                   <tr key={r.id}>
                     <td>{r.caseId}</td>
                     <td>{r.status}</td>
-                    <td className={r.passed ? "passed" : "failed"}>{r.passed ? "PASS" : "FAIL"}</td>
+                    <td className={r.passed ? "passed" : "failed"}>
+                      {r.passed ? "PASS" : "FAIL"}
+                      {r.reason && <div className="warning blocked-why">{r.reason}</div>}
+                    </td>
+                    <td>{costs[r.taskId] !== undefined ? `$${costs[r.taskId].toFixed(4)}` : "—"}</td>
                     <td>{(r.durationMs / 1000).toFixed(1)}s</td>
                     <td>{new Date(r.startedAt).toLocaleString()}</td>
                   </tr>

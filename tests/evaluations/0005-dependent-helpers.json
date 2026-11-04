@@ -1,0 +1,25 @@
+{
+  "id": "0005-dependent-helpers",
+  "fixtureRepo": "tests/evaluations/fixtures/parallel-features",
+  "requirement": "Add three pricing helpers, each in its own module with its own test file. (1) taxFor(amount, ratePercent) in src/tax.js, returning the tax rounded to cents, tested in tests/tax.test.js. (2) formatPrice(amount) in src/format.js, returning a dollar string with two decimals, tested in tests/format.test.js. (3) priceLabel(amount, ratePercent) in src/label.js, using the other two to return the taxed price followed by ' incl. tax', tested in tests/label.test.js.",
+  "acceptance": [
+    "taxFor(50, 8) returns 4",
+    "formatPrice(4) returns '$4.00'",
+    "priceLabel(50, 8) returns '$54.00 incl. tax'",
+    "npm test passes"
+  ],
+  "checks": {
+    "commands": [
+      "node -e \"const a=require('assert'),{taxFor:t}=require('./src/tax'),{formatPrice:f}=require('./src/format'),{priceLabel:l}=require('./src/label');a.equal(t(50,8),4);a.equal(f(4),'\\$4.00');a.equal(l(50,8),'\\$54.00 incl. tax')\"",
+      "node --test"
+    ],
+    "onlyChanged": [
+      "src/tax.js",
+      "src/format.js",
+      "src/label.js",
+      "tests/tax.test.js",
+      "tests/format.test.js",
+      "tests/label.test.js"
+    ]
+  }
+}

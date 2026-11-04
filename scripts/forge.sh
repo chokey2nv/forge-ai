@@ -8,6 +8,7 @@
 #   scripts/forge.sh logs [control-plane|adapter|console]
 #   scripts/forge.sh user <name> [--role viewer|member|reviewer] [--admin] [--email <address>]
 #   scripts/forge.sh users
+#   scripts/forge.sh eval [case ...]   score the agents on tests/evaluations; spends real money with a paid model
 #
 # Everything else comes from .env. The ports are set here and win over .env, so
 # Forge stays off 8080/5173 on a machine where something else uses them:
@@ -268,6 +269,32 @@ cmd_user() { # asks for the password, so it stays out of the shell's history and
   say "Sign in at $CONSOLE_URL. Unless they're an instance admin, add them to a project on its Project page."
 }
 
+# An API token for the runner, made once for the first instance admin.
+eval_token() {
+  local file="$RUN/eval-token" admin token
+  if [ -s "$file" ] && [ "$(curl -q -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat "$file")" "http://localhost:$CP_PORT/auth/me")" = 200 ]; then
+    cat "$file"
+    return 0
+  fi
+  admin="$(admin_command users list | awk -F'\t' '$4 == "admin=true" && $5 == "disabled=false" {print $2; exit}')"
+  [ -n "$admin" ] || die "no instance admin to run evals as; add one with make user NAME=... ADMIN=1"
+  token="$(admin_command tokens create "$admin" "evals" | grep '^fgt_')" || die "could not create a token for $admin"
+  (umask 077 && printf '%s' "$token" >"$file")
+  printf '%s' "$token"
+}
+
+cmd_eval() {
+  is_running control-plane && is_running adapter || { say "Forge is not running; start it first (scripts/forge.sh up)."; exit 1; }
+  (cd "$ROOT/services/control-plane" && go build -o "$RUN/eval" ./cmd/eval) || exit 1
+  local token
+  token="$(eval_token)" || exit 1
+  # The model Forge's adapter is set up with, not .env's EVAL_ values; set them
+  # in the environment to compare another.
+  cd "$ROOT" && FORGE_TOKEN="$token" CONTROL_PLANE_URL="http://localhost:$CP_PORT" \
+    MODEL_PROVIDER="$(env_value MODEL_PROVIDER)" MODEL_NAME="$(env_value MODEL_NAME)" \
+    "$RUN/eval" "$@"
+}
+
 case "${1:-up}" in
   up) cmd_up ;;
   down) cmd_down ;;
@@ -276,5 +303,6 @@ case "${1:-up}" in
   logs) cmd_logs "${2:-}" ;;
   user) shift; cmd_user "$@" ;;
   users) admin_command users list ;;
+  eval) shift; cmd_eval "$@" ;;
   *) say "usage: scripts/forge.sh up|down|restart|status|logs [control-plane|adapter|console]|user <name>|users"; exit 2 ;;
 esac

@@ -274,6 +274,7 @@ export interface Event {
 export interface EvalResult {
   id: string;
   caseId: string;
+  taskId: string;
   model: string;
   provider: string;
   passed: boolean;
