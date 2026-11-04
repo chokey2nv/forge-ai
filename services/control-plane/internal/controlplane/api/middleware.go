@@ -1,14 +1,33 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
-// Dev-only: allow any origin. Phase 7 replaces with a configured allow-list.
-func WithCORS(h http.Handler) http.Handler {
+// WithCORS lets browsers call the API only from the console's origins
+// (FORGE_CONSOLE_ORIGINS). CORS is not authentication: it keeps other web
+// pages a person visits from driving Forge through their browser.
+func WithCORS(origins []string, h http.Handler) http.Handler {
+	allowed := map[string]bool{}
+	for _, o := range origins {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
+			allowed[o] = true
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if r.Method == "OPTIONS" {
+		origin := r.Header.Get("Origin")
+		if origin != "" && allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			if origin != "" && !allowed[origin] {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}

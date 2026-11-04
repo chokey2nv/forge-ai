@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 
 	"log"
@@ -31,7 +32,14 @@ import (
 func main() {
 	loadDotenv()
 	// ---- config ----
-	addr := envOr("CONTROL_PLANE_ADDR", ":8080")
+	// Localhost unless told otherwise (Phase 13.1): exposing Forge is a choice.
+	addr := envOr("CONTROL_PLANE_ADDR", "127.0.0.1:8080")
+	adapterToken := os.Getenv("FORGE_ADAPTER_TOKEN")
+	if adapterToken == "" {
+		log.Fatal("FORGE_ADAPTER_TOKEN is not set: the adapter only accepts runs from a control plane that presents it. " +
+			"Put the same random value in both services' environment (e.g. FORGE_ADAPTER_TOKEN=$(openssl rand -hex 32) in .env)")
+	}
+	consoleOrigins := strings.Split(envOr("FORGE_CONSOLE_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), ",")
 	selfURL := envOr("CONTROL_PLANE_SELF_URL", "http://localhost:8080")
 	adapterURL := envOr("ADAPTER_URL", "http://localhost:8081")
 	workerImage := envOr("WORKER_IMAGE", "forge-worker:dev")
@@ -66,6 +74,15 @@ func main() {
 	}
 	db := mc.Database(mongoDB)
 
+	// Signs each run's callback token; kept in Mongo unless set, so tokens
+	// handed to running agents stay valid across restarts.
+	callbackKey := []byte(os.Getenv("FORGE_CALLBACK_SECRET"))
+	if len(callbackKey) == 0 {
+		if callbackKey, err = mongo_store.LoadOrCreateSecret(ctx, db, "callback-key"); err != nil {
+			log.Fatalf("callback key: %v", err)
+		}
+	}
+
 	registryColl := db.Collection("agentRegistry")
 	registry := agent.NewRegistry(agentsDir, skillsDir, registryColl)
 	if err := registry.Load(ctx); err != nil {
@@ -87,7 +104,10 @@ func main() {
 
 	// ---- services ----
 	sm := &statemachine.Service{Tasks: taskRepo, Events: eventRepo}
-	adapterClient := &adapter.Client{BaseURL: adapterURL}
+	adapterClient := &adapter.Client{
+		BaseURL: adapterURL, Token: adapterToken,
+		CallbackToken: func(runID string) string { return api.RunToken(callbackKey, runID) },
+	}
 
 	// ---- handler & router ----
 	verifier := verification.NewRunner()
@@ -106,6 +126,7 @@ func main() {
 	h.PlannerEnabled = parseBool(envOr("PLANNER_ENABLED", "true"))
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
 	h.Reviews = reviewRepo
+	h.CallbackKey = callbackKey
 	h.Threads = mongo_store.NewThreadRepo(db)
 	h.Delivery = delivery.NewInspector(envOr("FORGE_GH", "gh"))
 	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
@@ -193,8 +214,9 @@ func main() {
 	mux.HandleFunc("POST /runs/{id}/resume", h.ResumeRun)
 
 	// callbacks from adapter
-	mux.HandleFunc("POST /runs/{id}/checkpoint", h.RecordCheckpoint)
-	mux.HandleFunc("POST /runs/{id}/complete", h.RecordComplete)
+	// The adapter's callbacks: only with the run's token (Phase 13.1).
+	mux.HandleFunc("POST /runs/{id}/checkpoint", h.RequireRunToken(h.RecordCheckpoint))
+	mux.HandleFunc("POST /runs/{id}/complete", h.RequireRunToken(h.RecordComplete))
 
 	// ---- watcher ----
 	watcher := runner.NewWatcher(runRepo, taskRepo, sm, staleAfter)
@@ -225,9 +247,12 @@ func main() {
 	go reaper.Run(ctx)
 
 	// ---- server ----
-	srv := &http.Server{Addr: addr, Handler: api.WithCORS(mux)}
+	srv := &http.Server{Addr: addr, Handler: api.WithCORS(consoleOrigins, mux)}
 	go func() {
-		log.Printf("control-plane listening on %s (adapter=%s, worker=%s, allowed=%v)", addr, adapterURL, workerImage, allowed)
+		log.Printf("control-plane listening on %s (adapter=%s, worker=%s, allowed=%v, console origins=%v)", addr, adapterURL, workerImage, allowed, consoleOrigins)
+		if !loopback(addr) {
+			log.Printf("WARNING: %s is reachable from other machines, and the API has no sign-in yet (Phase 13.2). Use 127.0.0.1:<port> unless that is intended.", addr)
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}
@@ -313,4 +338,17 @@ func loadDotenv() {
 		}
 		dir = parent
 	}
+}
+
+// loopback reports whether a listen address only accepts local connections.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

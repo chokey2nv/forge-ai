@@ -10,7 +10,14 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/agent"
 )
 
-type Client struct{ BaseURL string }
+type Client struct {
+	BaseURL string
+	// Token is the secret the adapter requires on /runs (FORGE_ADAPTER_TOKEN).
+	Token string
+	// CallbackToken gives a run's callback token; the adapter presents it
+	// on that run's checkpoints and completion (Phase 13.1).
+	CallbackToken func(runID string) string
+}
 
 type ToolSchema struct {
 	Name        string         `json:"name"`
@@ -28,7 +35,8 @@ type StartRunRequest struct {
 	SystemPrompt   string             `json:"systemPrompt"`
 	Tools          []agent.ToolSchema `json:"tools,omitempty"` // TODO: rename to ToolSchema `json:"tools"`
 	SubmissionTool string             `json:"submissionTool,omitempty"`
-	CallbackURL    string             `json:"callbackUrl"`
+	CallbackURL    string             `json:"callbackUrl"` // ignored by the adapter since 13.1: it reports to its configured control plane
+	CallbackToken  string             `json:"callbackToken,omitempty"`
 	Provider       string             `json:"provider"`
 	Model          string             `json:"model"`
 	MaxSteps       int                `json:"maxSteps"`
@@ -43,14 +51,25 @@ type StartRunResponse struct {
 }
 
 func (c *Client) StartRun(ctx context.Context, req *StartRunRequest) (*StartRunResponse, error) {
+	if c.CallbackToken != nil {
+		id := req.CallbackRunID
+		if id == "" {
+			id = req.RunID
+		}
+		req.CallbackToken = c.CallbackToken(id)
+	}
 	body, _ := json.Marshal(req)
 	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/runs", bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.Token)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs between the control plane and the adapter")
+	}
 	if resp.StatusCode != 202 && resp.StatusCode != 200 {
 		return nil, fmt.Errorf("adapter: HTTP %d", resp.StatusCode)
 	}
@@ -63,6 +82,7 @@ func (c *Client) StartRun(ctx context.Context, req *StartRunRequest) (*StartRunR
 // adapter no longer knows (404) is already stopped.
 func (c *Client) CancelRun(ctx context.Context, runID string) error {
 	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/runs/"+runID+"/cancel", nil)
+	httpReq.Header.Set("Authorization", "Bearer "+c.Token)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return err

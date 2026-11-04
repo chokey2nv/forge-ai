@@ -7,6 +7,7 @@ import process from "process";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
+import { timingSafeEqual } from "crypto";
 
 (function loadRootEnv() {
   let dir = process.cwd();
@@ -36,8 +37,32 @@ Rules:
 - When finished, reply with a short summary.
 - If blocked, reply with a clear explanation.`;
 
+// Phase 13.1: the adapter takes runs only from the control plane (shared
+// secret) and reports only to it (its configured URL, not one a request names).
+const ADAPTER_TOKEN = process.env.FORGE_ADAPTER_TOKEN ?? "";
+const CONTROL_PLANE_URL = (process.env.CONTROL_PLANE_URL ?? process.env.CONTROL_PLANE_SELF_URL ?? "").replace(/\/+$/, "");
+if (!ADAPTER_TOKEN) {
+  console.error("[adapter] FORGE_ADAPTER_TOKEN is not set. Put the same random value the control plane uses in the environment (e.g. in .env).");
+  process.exit(2);
+}
+if (!CONTROL_PLANE_URL) {
+  console.error("[adapter] CONTROL_PLANE_URL (or CONTROL_PLANE_SELF_URL) is not set: the adapter reports runs only to that control plane.");
+  process.exit(2);
+}
+
+/** Constant-time check of the "Authorization: Bearer" secret. */
+export function authorized(header: string | undefined, secret: string): boolean {
+  const got = Buffer.from((header ?? "").startsWith("Bearer ") ? header!.slice(7).trim() : "");
+  const want = Buffer.from(secret);
+  return secret.length > 0 && got.length === want.length && timingSafeEqual(got, want);
+}
+
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+app.use((req: Request, res: Response, next: express.NextFunction) => {
+  if (req.path === "/health" || authorized(req.headers.authorization, ADAPTER_TOKEN)) return next();
+  res.status(401).json({ error: "missing or wrong adapter token" });
+});
 
 interface ActiveRun {
   runId: string;
@@ -60,7 +85,10 @@ interface StartBody {
   task: string;
   systemPrompt: string;
   tools: ToolSchema[];
-  callbackUrl: string;
+  /** Ignored since 13.1: callbacks go to CONTROL_PLANE_URL. */
+  callbackUrl?: string;
+  /** Presented on this run's callbacks; the control plane issued it. */
+  callbackToken?: string;
   provider?: string;
   model?: string;
   maxSteps?: number;
@@ -80,9 +108,13 @@ interface StartBody {
 app.post("/runs", async (req: express.Request, res: express.Response) => {
   const body = req.body as StartBody;
   console.log(`[adapter] /runs received runId=${body.runId} role=${body.role ?? "implementer"} container=${body.containerName} taskLen=${(body.task || "").length} tools=${(body.tools || []).length} model=${body.model ?? ""}`);
-  if (!body.runId || !body.containerName || !body.worktreePath || !body.task || !body.callbackUrl) {
-    return res.status(400).json({ error: "runId, containerName, worktreePath, task, callbackUrl are required" });
+  if (!body.runId || !body.containerName || !body.worktreePath || !body.task || !body.callbackToken) {
+    return res.status(400).json({ error: "runId, containerName, worktreePath, task, callbackToken are required" });
   }
+  if (body.callbackUrl && body.callbackUrl.replace(/\/+$/, "") !== CONTROL_PLANE_URL) {
+    console.warn(`[adapter] run ${body.runId}: ignoring callbackUrl ${body.callbackUrl}; reporting to ${CONTROL_PLANE_URL}`);
+  }
+  const callback = (path: string, payload: unknown) => postCallback(CONTROL_PLANE_URL + path, body.callbackToken!, payload);
   if (active.has(body.runId)) {
     return res.status(409).json({ error: "run already active" });
   }
@@ -142,7 +174,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       onCheckpoint: async (state) => {
         const diff = await workspaceDiff();
         const callbackId = body.callbackRunId ?? body.runId;
-        await postCallback(body.callbackUrl + `/runs/${callbackId}/checkpoint`, {
+        await callback(`/runs/${callbackId}/checkpoint`, {
           role,
           messages: state.messages,
           stepCount: state.stepCount,
@@ -155,7 +187,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
 
     const diff = await workspaceDiff();
     const callbackId = body.callbackRunId ?? body.runId;
-    await postCallback(body.callbackUrl + `/runs/${callbackId}/complete`, {
+    await callback(`/runs/${callbackId}/complete`, {
       role,
       status: result.state.status,
       finalMessage: result.finalMessage,
@@ -203,10 +235,10 @@ async function getWorkspaceDiff(containerName: string): Promise<string> {
   return r.stdout;
 }
 
-async function postCallback(url: string, body: unknown) {
+async function postCallback(url: string, token: string, body: unknown) {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`callback ${url}: HTTP ${res.status}`);
@@ -218,4 +250,6 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 const port = Number(process.env.ADAPTER_PORT ?? 8081);
-app.listen(port, () => console.log(`adapter listening on :${port}`));
+// Localhost unless ADAPTER_HOST says otherwise: only the control plane calls it.
+const host = process.env.ADAPTER_HOST ?? "127.0.0.1";
+app.listen(port, host, () => console.log(`adapter listening on ${host}:${port}, reporting to ${CONTROL_PLANE_URL}`));

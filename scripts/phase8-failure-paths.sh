@@ -52,7 +52,10 @@ for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
 done
 
-export CONTROL_PLANE_ADDR=":$CP_PORT" CONTROL_PLANE_SELF_URL="$CP" ADAPTER_URL="http://localhost:$AD_PORT"
+export CONTROL_PLANE_ADDR="127.0.0.1:$CP_PORT" CONTROL_PLANE_SELF_URL="$CP" ADAPTER_URL="http://localhost:$AD_PORT"
+# Phase 13.1: the services trust each other through these; fresh for every run.
+export FORGE_ADAPTER_TOKEN=$(openssl rand -hex 32) FORGE_CALLBACK_SECRET=$(openssl rand -hex 32)
+export FORGE_CONSOLE_ORIGINS="http://localhost:5173"
 export ADAPTER_PORT=$AD_PORT MONGODB_DATABASE=$DB
 export MODEL_PROVIDER=scripted MODEL_NAME=scripted DEFAULT_PROVIDER=scripted DEFAULT_MODEL=scripted
 export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPTS=2 MAX_REVIEW_ROUNDS=2
@@ -219,6 +222,20 @@ run_scenario() {
       check "a human replies" "$([ "$(thread_post "$task" "$tid/comments" '{"author":"lee","body":"Cents."}')" = 200 ]; echo $?)"
       check "an agent cannot resolve (403)" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"reviewer"}')" = 403 ]; echo $?)"
       check "a human resolves" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"dana"}')" = 200 ]; echo $?)"
+      # Phase 13.1: only the adapter that was given a run's token may report on it.
+      local fr="run-$task-final-review"
+      check "a forged completion without the run's token is refused (401)" \
+        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/complete" -H 'Content-Type: application/json' -d '{"status":"complete","workspaceDiff":"x"}')" = 401 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/checkpoint" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 401 ]; echo $?)"
+      check "the right token on a complete run is refused too (409)" \
+        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/$fr/complete" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 409 ]; echo $?)"
+      start_adapter "$SCEN/$SC.json" # stopped once the scenario settled; nothing is run on it
+      check "the adapter refuses runs without its secret (401), health stays open" \
+        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Content-Type: application/json' -d '{}')" = 401 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' -d '{}')" = 401 ] && curl -sf "http://localhost:$AD_PORT/health" >/dev/null; echo $?)"
+      check "both services listen on loopback only" \
+        "$(lsof -nP -iTCP:"$CP_PORT" -sTCP:LISTEN | grep -q '127.0.0.1:' && lsof -nP -iTCP:"$AD_PORT" -sTCP:LISTEN | grep -q '127.0.0.1:' && ! lsof -nP -iTCP:"$CP_PORT" -iTCP:"$AD_PORT" -sTCP:LISTEN | grep -qE '\*:|0\.0\.0\.0'; echo $?)"
+      stop_adapter
+      check "CORS answers the console's origin only" \
+        "$(curl -sI "$CP/tasks" -H 'Origin: http://localhost:5173' | grep -qi '^access-control-allow-origin: http://localhost:5173' && ! curl -sI "$CP/tasks" -H 'Origin: https://evil.example' | grep -qi '^access-control-allow-origin'; echo $?)"
       check "GET threads: one resolved with two comments, one open general" \
         "$(curl -sf "$CP/tasks/$task/threads" | jq -e --arg t "$tid" '(.threads | length == 2) and (.threads[] | select(.id == $t) | .status == "resolved" and .resolvedBy == "dana" and (.comments | length == 2)) and ([.threads[] | select(.anchor == null and .status == "open")] | length == 1) and (.notes | type == "array")' >/dev/null; echo $?)"
       ;;
@@ -661,6 +678,7 @@ rollback_delivery() { # local | pr  (task, repo, target, branch, origin from run
 request_changes() { # task json -> HTTP code (body in $WORK/rc.out)
   curl -s -o "$WORK/rc.out" -w '%{http_code}' -X POST "$CP/tasks/$1/request-changes" -H 'Content-Type: application/json' -d "$2"
 }
+run_token() { printf 'run:%s' "$1" | openssl dgst -sha256 -hmac "$FORGE_CALLBACK_SECRET" | awk '{print $NF}'; }
 has_event() { [ "$(event_count "$1" "$2" "$3")" -ge 1 ]; } # task type reason-substring
 thread_ids() { curl -sf "$CP/tasks/$1/threads" | jq -r '.threads[].id'; }
 

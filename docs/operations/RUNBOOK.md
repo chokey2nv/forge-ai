@@ -182,13 +182,18 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `MONGODB_DATABASE` | `forge_ai` | Control plane | Database name |
 | `WORKER_IMAGE` | `forge-worker:dev` | Control plane | Container image per run |
 | `ADAPTER_URL` | `http://localhost:8081` | Control plane | Adapter base URL |
-| `CONTROL_PLANE_ADDR` | `:8080` | Control plane | HTTP bind address |
+| `CONTROL_PLANE_ADDR` | `127.0.0.1:8080` | Control plane | HTTP bind address. Localhost by default; a non-loopback address (`:8080`) logs a warning, since the API has no sign-in until 13.2 |
+| `FORGE_ADAPTER_TOKEN` | — (required) | Both | Shared secret: the adapter accepts `/runs` and cancels only with it. Same value in both services' environment; `openssl rand -hex 32` |
+| `FORGE_CALLBACK_SECRET` | random, kept in Mongo | Control plane | Signs each run's callback token (§6.8). Unset, one is generated on first start and stored in the `instance` collection |
+| `FORGE_CONSOLE_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Control plane | Browser origins allowed by CORS (the console's). Others get no CORS headers |
 | `CONTROL_PLANE_SELF_URL` | `http://localhost:8080` | Control plane | Callback base URL passed to adapter |
 | `STALE_AFTER` | `60s` | Control plane | Heartbeat gap before a run becomes `RESUMABLE` |
 | `MAX_AGENT_STEPS` | `20` | Adapter | Per-run step cap (overridable per task) |
 | `MAX_RETRIES` | `2` | Adapter | Model-call retry cap |
 | `TASK_TIMEOUT_SECONDS` | `1800` | Adapter | Wall-clock cap |
 | `ADAPTER_PORT` | `8081` | Adapter | Adapter HTTP port |
+| `ADAPTER_HOST` | `127.0.0.1` | Adapter | Address the adapter listens on; only the control plane calls it |
+| `CONTROL_PLANE_URL` | `CONTROL_PLANE_SELF_URL` | Adapter | Where the adapter reports runs. A `callbackUrl` in a run request is ignored |
 | `AGENTS_DIR` / `SKILLS_DIR` | `agents` / `skills` | Control plane | Agent and skill markdown, re-read on `POST /agents/reload` |
 | `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
@@ -798,6 +803,18 @@ Non-empty output means the watcher hasn't caught them yet — check the CP log.
 
 A run with no heartbeat for `STALE_AFTER` is marked `RESUMABLE`, and so is its task. If the agent was in fact finishing (a slow diff capture under load can leave no heartbeat for a while), its completion may arrive moments later. It is then used: the task goes `RESUMABLE → RUNNING → VERIFYING` with a `run.revived` event. If the reaper has already released the run's workspace, the task stays `RESUMABLE`; `POST /runs/<runId>/resume` rebuilds the workspace from the checkpoint the completion saved.
 
+### 6.8 Service trust
+
+The adapter takes runs only from the control plane: `/runs` and `/runs/<id>/cancel` need `Authorization: Bearer $FORGE_ADAPTER_TOKEN` (401 otherwise; `/health` is open). It reports only to `CONTROL_PLANE_URL` (default `CONTROL_PLANE_SELF_URL`), never to a URL a request names.
+
+Each run's checkpoint and completion callbacks need that run's token, `HMAC-SHA256(callback key, "run:" + runId)` in hex, which the control plane hands the adapter with the run. A missing or wrong token answers 401, and a run that is `COMPLETE` answers 409. Retries, resumes and reviewers of a run get the same token. To check a token by hand while debugging:
+
+```bash
+printf 'run:%s' <runId> | openssl dgst -sha256 -hmac "$FORGE_CALLBACK_SECRET" | awk '{print $NF}'
+```
+
+If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, the two services were started with different values.
+
 ---
 
 ## 7. Troubleshooting
@@ -849,6 +866,10 @@ A run with no heartbeat for `STALE_AFTER` is marked `RESUMABLE`, and so is its t
 | Log: `checkpoint … save failed (diff N bytes)` | Diff over Mongo's 16MB limit — usually untracked build output. `node_modules/` and lockfiles are excluded automatically; add others to the repo's `.gitignore` |
 | `fatal: not a git repository` inside a container | Workspace created by an old build as a `git worktree`. Current builds use standalone clones; restart the CP |
 | `model call failed after N retries` | Adapter log shows the provider error (`[adapter] model call failed`) |
+| CP exits: "FORGE_ADAPTER_TOKEN is not set"; adapter exits likewise | Add `FORGE_ADAPTER_TOKEN=<openssl rand -hex 32>` to `.env` (both services read it) and restart both |
+| Runs fail to start: "adapter: HTTP 401" | The two services have different `FORGE_ADAPTER_TOKEN` values; restart both from the same `.env` |
+| Adapter log: `callback …: HTTP 401` | The run token did not match: the control plane's callback key changed under a running agent (`FORGE_CALLBACK_SECRET` edited, or the `instance` collection cleared). Resume the run |
+| The console shows network errors after an upgrade to 13.1 | Its origin is not in `FORGE_CONSOLE_ORIGINS` (e.g. a dev server on another port); add it |
 
 ### 7.4 Cross-service debugging
 

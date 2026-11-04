@@ -23,6 +23,8 @@ type Handlers struct {
 	Delivery         *delivery.Inspector
 	Approvals        store.ApprovalRepo
 	Threads          store.ThreadRepo // Phase 12: human review threads
+	// CallbackKey signs each run's callback token (Phase 13.1, RunToken).
+	CallbackKey []byte
 	EvalResults      store.EvalResultRepo
 	SM               *statemachine.Service
 	Adapter          *adapter.Client
