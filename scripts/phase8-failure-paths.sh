@@ -56,6 +56,8 @@ export CONTROL_PLANE_ADDR="127.0.0.1:$CP_PORT" CONTROL_PLANE_SELF_URL="$CP" ADAP
 # Phase 13.1: the services trust each other through these; fresh for every run.
 export FORGE_ADAPTER_TOKEN=$(openssl rand -hex 32) FORGE_CALLBACK_SECRET=$(openssl rand -hex 32)
 export FORGE_CONSOLE_ORIGINS="http://localhost:5173"
+# Phase 13.2: until the first user exists this acts as an instance admin.
+export FORGE_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)
 export ADAPTER_PORT=$AD_PORT MONGODB_DATABASE=$DB
 export MODEL_PROVIDER=scripted MODEL_NAME=scripted DEFAULT_PROVIDER=scripted DEFAULT_MODEL=scripted
 export FORGE_ALLOWED_PROVIDERS=scripted STALE_AFTER=15s MAX_VERIFICATION_ATTEMPTS=2 MAX_REVIEW_ROUNDS=2
@@ -104,10 +106,45 @@ wait_http() { for _ in $(seq 1 60); do curl -sf -m1 "$1" >/dev/null 2>&1 && retu
 start_cp() { # [VAR=value ...] extra environment for this control plane
   (cd "$ROOT/services/control-plane" && exec env "$@" "$WORK/forge") >>"$WORK/cp.log" 2>&1 &
   CP_PID=$!
-  wait_http "$CP/tasks"
+  wait_http "$CP/health"
 }
 stop_cp() { kill "$CP_PID" 2>/dev/null || true; wait "$CP_PID" 2>/dev/null || true; CP_PID=""; }
 start_cp
+
+FAILED=()
+check() { # description, condition result (0 = ok)
+  if [ "$2" -eq 0 ]; then echo "    ok   $1"; else echo "    FAIL $1"; FAILED+=("$SC: $1"); fi
+}
+
+# Phase 13.2: sign in once. The bootstrap token creates the harness's admin,
+# which signs in and makes the API token every later call uses.
+SC=sign-in; echo "== $SC"
+code() { command curl -s -o "$WORK/code.out" -w '%{http_code}' "$@"; }
+check "without credentials the API answers 401; health stays open" \
+  "$([ "$(code "$CP/tasks")" = 401 ] && [ "$(code "$CP/health")" = 200 ]; echo $?)"
+check "the bootstrap token creates the first user, an instance admin" \
+  "$([ "$(code -X POST "$CP/users" -H "Authorization: Bearer $FORGE_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' -d '{"name":"harness","password":"harness-password"}')" = 201 ] && jq -e '.instanceAdmin' "$WORK/code.out" >/dev/null; echo $?)"
+check "and stops working once a user exists" \
+  "$([ "$(code "$CP/auth/me" -H "Authorization: Bearer $FORGE_BOOTSTRAP_TOKEN")" = 401 ]; echo $?)"
+check "a wrong password is refused" \
+  "$([ "$(code -X POST "$CP/auth/login" -H 'Content-Type: application/json' -d '{"name":"harness","password":"not-the-password"}')" = 401 ]; echo $?)"
+JAR="$WORK/cookies"
+check "signing in sets an HttpOnly, SameSite=Strict session cookie" \
+  "$([ "$(code -c "$JAR" -X POST "$CP/auth/login" -H 'Content-Type: application/json' -d '{"name":"harness","password":"harness-password"}')" = 200 ] && grep -q '#HttpOnly_.*forge_session' "$JAR" && command curl -s -D - -o /dev/null -X POST "$CP/auth/login" -H 'Content-Type: application/json' -d '{"name":"harness","password":"harness-password"}' | grep -i '^set-cookie: forge_session' | grep -qi 'samesite=strict'; echo $?)"
+FORGE_TOKEN=$(command curl -sf -b "$JAR" -X POST "$CP/auth/tokens" -H 'Content-Type: application/json' -d '{"name":"failure-path harness"}' | jq -r .token)
+check "the session makes an API token, which works" \
+  "$([[ "$FORGE_TOKEN" == fgt_* ]] && [ "$(code "$CP/auth/me" -H "Authorization: Bearer $FORGE_TOKEN")" = 200 ] && jq -e '.user.name == "harness" and .via == "token"' "$WORK/code.out" >/dev/null; echo $?)"
+spare=$(command curl -sf -b "$JAR" -X POST "$CP/auth/tokens" -H 'Content-Type: application/json' -d '{"name":"spare"}')
+check "a revoked token stops working" \
+  "$([ "$(code -X DELETE "$CP/auth/tokens/$(echo "$spare" | jq -r .id)" -H "Authorization: Bearer $FORGE_TOKEN")" = 204 ] && [ "$(code "$CP/auth/me" -H "Authorization: Bearer $(echo "$spare" | jq -r .token)")" = 401 ]; echo $?)"
+check "signing out ends the session" \
+  "$([ "$(code -b "$JAR" -X POST "$CP/auth/logout")" = 204 ] && [ "$(code -b "$JAR" "$CP/auth/me")" = 401 ]; echo $?)"
+export FORGE_TOKEN
+# Every later curl carries the token through its config file; a call that
+# sends its own Authorization starts with -q, which skips the file. (A shell
+# function wrapper does not work: bash 3.2 exits on its failing return.)
+export CURL_HOME="$WORK/curl"; mkdir -p "$CURL_HOME"
+printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
 
 start_adapter() { # script.json
   (cd "$ROOT/services/runtime-adapter" && SCRIPTED_PROVIDER_FILE="$1" exec npx tsx src/server.ts) >>"$WORK/adapter.log" 2>&1 &
@@ -163,10 +200,6 @@ reasons() { # task -> transition reasons, oldest first
     .forEach(e => print(e.from + ' -> ' + e.to + ': ' + (e.reason || '').slice(0, 160)))"
 }
 
-FAILED=()
-check() { # description, condition result (0 = ok)
-  if [ "$2" -eq 0 ]; then echo "    ok   $1"; else echo "    FAIL $1"; FAILED+=("$SC: $1"); fi
-}
 has_reason() { reasons "$1" | grep -qF "$2"; }
 verdicts() { # run -> "round reviewer verdict,..." in review order
   curl -sf "$CP/runs/$1/reviews" | jq -r '[.[] | "\(.round) \(.reviewer) \(.verdict)"] | join(",")'
@@ -224,13 +257,13 @@ run_scenario() {
       check "a human resolves" "$([ "$(thread_post "$task" "$tid/resolve" '{"author":"dana"}')" = 200 ]; echo $?)"
       # Phase 13.1: only the adapter that was given a run's token may report on it.
       local fr="run-$task-final-review"
-      check "a forged completion without the run's token is refused (401)" \
-        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/complete" -H 'Content-Type: application/json' -d '{"status":"complete","workspaceDiff":"x"}')" = 401 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/checkpoint" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 401 ]; echo $?)"
+      check "a forged completion without the run's token is refused (401), even with a user's token" \
+        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/complete" -H 'Content-Type: application/json' -d '{"status":"complete","workspaceDiff":"x"}')" = 401 ] && [ "$(curl -q -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/checkpoint" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 401 ]; echo $?)"
       check "the right token on a complete run is refused too (409)" \
-        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/$fr/complete" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 409 ]; echo $?)"
+        "$([ "$(curl -q -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/$fr/complete" -H "Authorization: Bearer $(run_token "$fr")" -H 'Content-Type: application/json' -d '{}')" = 409 ]; echo $?)"
       start_adapter "$SCEN/$SC.json" # stopped once the scenario settled; nothing is run on it
       check "the adapter refuses runs without its secret (401), health stays open" \
-        "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Content-Type: application/json' -d '{}')" = 401 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' -d '{}')" = 401 ] && curl -sf "http://localhost:$AD_PORT/health" >/dev/null; echo $?)"
+        "$([ "$(curl -q -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Content-Type: application/json' -d '{}')" = 401 ] && [ "$(curl -q -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$AD_PORT/runs" -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' -d '{}')" = 401 ] && curl -sf "http://localhost:$AD_PORT/health" >/dev/null; echo $?)"
       check "both services listen on loopback only" \
         "$(lsof -nP -iTCP:"$CP_PORT" -sTCP:LISTEN | grep -q '127.0.0.1:' && lsof -nP -iTCP:"$AD_PORT" -sTCP:LISTEN | grep -q '127.0.0.1:' && ! lsof -nP -iTCP:"$CP_PORT" -iTCP:"$AD_PORT" -sTCP:LISTEN | grep -qE '\*:|0\.0\.0\.0'; echo $?)"
       stop_adapter

@@ -310,13 +310,32 @@ export interface NewTask {
   budget: { maxSteps: number; maxRetries: number; wallClockMs: number };
 }
 
+/** Phase 13.2: the signed-in person. */
+export interface User {
+  id: string;
+  name: string;
+  email?: string;
+  instanceAdmin: boolean;
+}
+
+/** Fired when the API answers 401: the session ended, so the console shows sign-in. */
+export const SIGNED_OUT = "forge:signed-out";
+
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + path, init);
+  // The session cookie goes with every request (the API is on another port).
+  const res = await fetch(BASE + path, { ...init, credentials: "include" });
+  if (res.status === 401 && path !== "/auth/login") window.dispatchEvent(new Event(SIGNED_OUT));
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status} — ${await res.text().catch(() => "")}`);
   return res.json();
 }
 
 export const api = {
+    me: () => j<{ user: User; via: string }>("/auth/me"),
+    login: (name: string, password: string) =>
+        j<{ user: User }>("/auth/login", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, password }),
+        }),
+    logout: () => fetch(BASE + "/auth/logout", { method: "POST", credentials: "include" }),
     getConfig: () => j<Config>("/config"),
     inspectRepo: (path: string, targetBranch: string, requirement: string) =>
         j<RepoInspection>(`/repos/inspect?${new URLSearchParams({ path, targetBranch, requirement })}`),
@@ -341,7 +360,7 @@ export const api = {
     getRun: (id: string) => j<Run>(`/runs/${id}`),
     getEvents: (runId: string) => j<Event[]>(`/runs/${runId}/events`),
     getVerification: (runId: string) =>
-        fetch(`${BASE}/runs/${runId}/verification`).then((r) => (r.ok ? (r.json() as Promise<VerificationRun>) : null)),
+        fetch(`${BASE}/runs/${runId}/verification`, { credentials: "include" }).then((r) => (r.ok ? (r.json() as Promise<VerificationRun>) : null)),
     listApprovals: (taskId: string) => j<Approval[]>(`/tasks/${taskId}/approvals`),
     approve: (taskId: string, reviewer: string, rationale: string) =>
         j<{ status: string }>(`/tasks/${taskId}/approve`, {

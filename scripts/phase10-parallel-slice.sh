@@ -8,6 +8,13 @@
 # the subtasks' own durations: the gain from running them in parallel.
 set -euo pipefail
 
+# Phase 13.2: the API needs a signed-in caller. Create a token with
+# `forge tokens create <user> slices` and export FORGE_TOKEN; every curl
+# below sends it (through a private curl config file).
+: "${FORGE_TOKEN:?export FORGE_TOKEN (an API token: forge tokens create <user> <name>)}"
+export CURL_HOME=$(mktemp -d "${TMPDIR:-/tmp}/forge-curl.XXXXXX")
+printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
+
 CP=${CP:-http://localhost:8080}
 PROVIDER=${PROVIDER:-claude}
 MODEL=${MODEL:-claude-haiku-5-5}

@@ -15,16 +15,23 @@ import (
 )
 
 type Handlers struct {
-	Tasks            store.TaskRepo
-	Runs             store.RunRepo
-	Events           store.EventRepo
-	Verifications    store.VerificationRepo
-	Reviews          store.ReviewRepo
-	Delivery         *delivery.Inspector
-	Approvals        store.ApprovalRepo
-	Threads          store.ThreadRepo // Phase 12: human review threads
+	Tasks         store.TaskRepo
+	Runs          store.RunRepo
+	Events        store.EventRepo
+	Verifications store.VerificationRepo
+	Reviews       store.ReviewRepo
+	Delivery      *delivery.Inspector
+	Approvals     store.ApprovalRepo
+	Threads       store.ThreadRepo // Phase 12: human review threads
 	// CallbackKey signs each run's callback token (Phase 13.1, RunToken).
 	CallbackKey []byte
+	// Phase 13.2: sign-in.
+	Users            store.UserRepo
+	Sessions         store.SessionRepo
+	Tokens           store.TokenRepo
+	BootstrapToken   string        // FORGE_BOOTSTRAP_TOKEN: an instance admin until the first user exists
+	SessionTTL       time.Duration // idle expiry of a console session (default 12h)
+	SecureCookies    bool          // mark the session cookie Secure (behind HTTPS)
 	EvalResults      store.EvalResultRepo
 	SM               *statemachine.Service
 	Adapter          *adapter.Client

@@ -171,3 +171,12 @@ button.link { background: none; border: none; color: #0066cc; cursor: pointer; p
 .thread-context mark { background: #fff8c5; display: inline-block; min-width: 100%; }
 .off-diff { margin: 6px 0; }
 .off-diff > summary { cursor: pointer; font-size: 13px; color: #57606a; }
+
+/* Phase 13.2: sign-in */
+.sign-in { max-width: 360px; margin: 12vh auto; background: #fff; border: 1px solid #e3e5e8; border-radius: 8px; padding: 24px; }
+.sign-in h1 { margin: 0 0 16px; font-size: 22px; }
+.sign-in label { display: block; margin: 10px 0; font-size: 13px; font-weight: 600; }
+.sign-in input { display: block; width: 100%; margin-top: 4px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; font-weight: normal; }
+.sign-in button { width: 100%; margin-top: 8px; padding: 8px; border: none; border-radius: 6px; background: #2e8b2e; color: #fff; font-weight: 600; cursor: pointer; }
+.sign-in button:disabled { opacity: 0.5; cursor: default; }
+header .signed-in { font-size: 13px; color: #555; margin-right: 4px; }

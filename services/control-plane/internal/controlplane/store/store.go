@@ -107,3 +107,27 @@ type ThreadRepo interface {
 	// anchor on shownOn at commit, or outdated on revision outdatedOn.
 	SavePlacement(ctx context.Context, id string, anchor *domain.Anchor, shownOn int, commit string, outdatedOn int, at time.Time) error
 }
+
+// Phase 13.2: people, their console sessions and their API tokens.
+type UserRepo interface {
+	Create(ctx context.Context, u *domain.User) error // fails if the name is taken
+	Get(ctx context.Context, id string) (*domain.User, error)
+	GetByName(ctx context.Context, name string) (*domain.User, error)
+	List(ctx context.Context) ([]*domain.User, error)
+	Count(ctx context.Context) (int64, error)
+}
+
+type SessionRepo interface {
+	Create(ctx context.Context, s *domain.Session) error
+	Get(ctx context.Context, hash string) (*domain.Session, error)
+	Touch(ctx context.Context, hash string, seen, expires time.Time) error
+	Delete(ctx context.Context, hash string) error
+}
+
+type TokenRepo interface {
+	Create(ctx context.Context, t *domain.APIToken) error
+	GetByHash(ctx context.Context, hash string) (*domain.APIToken, error)
+	ListByUser(ctx context.Context, userID string) ([]*domain.APIToken, error)
+	Touch(ctx context.Context, id string, at time.Time) error
+	Revoke(ctx context.Context, id, userID string, at time.Time) (bool, error)
+}

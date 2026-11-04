@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
-  api, isParent, reviewRunId, TASK_STATUSES,
+  api, SIGNED_OUT, type User, isParent, reviewRunId, TASK_STATUSES,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
   type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, AgentDefinition, Skill,
 } from "./api";
@@ -8,16 +8,35 @@ import { DiffView } from "./DiffView";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" };
 
+/** The signed-in person (Phase 13.2). */
+const CurrentUser = createContext<User | null>(null);
+
 export default function App() {
   const [view, setView] = useState<View>({ kind: "tasks" });
+  // undefined: still asking who is signed in; null: nobody.
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    api.me().then((m) => setUser(m.user)).catch(() => setUser(null));
+    const out = () => setUser(null);
+    window.addEventListener(SIGNED_OUT, out);
+    return () => window.removeEventListener(SIGNED_OUT, out);
+  }, []);
+
+  if (user === undefined) return <div className="app"><p className="hint">Loading…</p></div>;
+  if (user === null) return <SignIn onSignedIn={setUser} />;
+  const signOut = async () => { await api.logout().catch(() => undefined); setUser(null); };
+
   return (
+    <CurrentUser.Provider value={user}>
     <div className="app">
       <header>
         <h1>Forge</h1>
         <nav>
+          <span className="signed-in">{user.name}{user.instanceAdmin ? " (admin)" : ""}</span>
           <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>
           <button className={view.kind === "tasks" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Tasks</button>
           <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
+          <button onClick={signOut}>Sign out</button>
         </nav>
       </header>
       <main>
@@ -28,6 +47,33 @@ export default function App() {
         {view.kind === "evals" && <Evals />}
         {view.kind === "new" && <NewTaskForm onCreated={(id) => setView({ kind: "task", id })} onCancel={() => setView({ kind: "tasks" })} />}
       </main>
+    </div>
+    </CurrentUser.Provider>
+  );
+}
+
+function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try { onSignedIn((await api.login(name, password)).user); }
+    catch { setErr("Wrong name or password."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="app">
+      <form className="sign-in" onSubmit={submit}>
+        <h1>Forge</h1>
+        <label>Name <input autoFocus autoComplete="username" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label>Password <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        {err && <p className="error">{err}</p>}
+        <button className="approve" disabled={busy || !name || !password}>{busy ? "Signing in…" : "Sign in"}</button>
+        <p className="hint">No account yet? An instance admin creates one: <code>forge users add &lt;name&gt;</code>.</p>
+      </form>
     </div>
   );
 }
@@ -328,7 +374,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [threads, setThreads] = useState<ThreadList | null>(null);
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
-  const [reviewer, setReviewer] = useState("human");
+  // The decision fields still take a name until 13.3 records the signed-in user.
+  const [reviewer, setReviewer] = useState(useContext(CurrentUser)?.name ?? "human");
   const [rationale, setRationale] = useState("");
   const [guidance, setGuidance] = useState("");
   const [err, setErr] = useState("");

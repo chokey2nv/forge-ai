@@ -161,6 +161,27 @@ mongosh forge_ai --eval '
 '
 ```
 
+### 2.7 Users and tokens (Phase 13.2)
+
+The API and the console need a signed-in user. Create the first one (an instance admin) directly in the database; the password is the first line of stdin:
+
+```bash
+cd services/control-plane
+echo '<a password of 10+ characters>' | go run ./cmd/forge users add <name>     # first user: instance admin
+echo '<password>' | go run ./cmd/forge users add <other> [--admin] [--email a@b]
+go run ./cmd/forge users list
+go run ./cmd/forge tokens create <name> "my scripts"                            # prints an API token once
+```
+
+The console signs in with the name and password (a session cookie). Scripts send the token as `Authorization: Bearer fgt_…`, either with `-H` or once for every `curl` through a private config file:
+
+```bash
+export FORGE_TOKEN=fgt_…
+export CURL_HOME=$(mktemp -d); printf 'header = "Authorization: Bearer %s"\n' "$FORGE_TOKEN" >"$CURL_HOME/.curlrc"
+```
+
+`GET /auth/me` says who you are; `GET|POST /auth/tokens` and `DELETE /auth/tokens/<id>` list, create and revoke your tokens; instance admins create users with `POST /users`. Without a user, setting `FORGE_BOOTSTRAP_TOKEN` lets you `POST /users` once with it instead.
+
 ---
 
 ## 3. Configuration reference
@@ -185,7 +206,11 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `CONTROL_PLANE_ADDR` | `127.0.0.1:8080` | Control plane | HTTP bind address. Localhost by default; a non-loopback address (`:8080`) logs a warning, since the API has no sign-in until 13.2 |
 | `FORGE_ADAPTER_TOKEN` | — (required) | Both | Shared secret: the adapter accepts `/runs` and cancels only with it. Same value in both services' environment; `openssl rand -hex 32` |
 | `FORGE_CALLBACK_SECRET` | random, kept in Mongo | Control plane | Signs each run's callback token (§6.8). Unset, one is generated on first start and stored in the `instance` collection |
-| `FORGE_CONSOLE_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Control plane | Browser origins allowed by CORS (the console's). Others get no CORS headers |
+| `FORGE_CONSOLE_ORIGINS` | `http://localhost:5173,…:5174` (localhost and 127.0.0.1) | Control plane | Browser origins allowed by CORS, with credentials (the console's session cookie). Others get no CORS headers |
+| `FORGE_BOOTSTRAP_TOKEN` | — | Control plane | Acts as an instance admin only while no user exists, to create the first one (`POST /users`). Prefer `forge users add` (§2.7) |
+| `FORGE_SESSION_TTL` | `12h` | Control plane | A console session ends after this long unused (and 7 days after sign-in at most) |
+| `FORGE_SECURE_COOKIES` | `false` | Control plane | Mark the session cookie `Secure`; set behind HTTPS |
+| `FORGE_TOKEN` | — | Scripts, `cmd/eval` | An API token (`forge tokens create`) the slices and the eval runner send |
 | `CONTROL_PLANE_SELF_URL` | `http://localhost:8080` | Control plane | Callback base URL passed to adapter |
 | `STALE_AFTER` | `60s` | Control plane | Heartbeat gap before a run becomes `RESUMABLE` |
 | `MAX_AGENT_STEPS` | `20` | Adapter | Per-run step cap (overridable per task) |
@@ -644,6 +669,8 @@ The same flow from the console: *New task* → wait for review → click the `re
 
 ## 6. Observing state
 
+Every API call below needs your token (§2.7): add `-H "Authorization: Bearer $FORGE_TOKEN"`, or set up `CURL_HOME` once as shown there.
+
 ### 6.1 Event trail
 
 ```bash
@@ -867,6 +894,9 @@ If the control plane logs `adapter: HTTP 401: FORGE_ADAPTER_TOKEN differs …`, 
 | `fatal: not a git repository` inside a container | Workspace created by an old build as a `git worktree`. Current builds use standalone clones; restart the CP |
 | `model call failed after N retries` | Adapter log shows the provider error (`[adapter] model call failed`) |
 | CP exits: "FORGE_ADAPTER_TOKEN is not set"; adapter exits likewise | Add `FORGE_ADAPTER_TOKEN=<openssl rand -hex 32>` to `.env` (both services read it) and restart both |
+| API answers 401 "sign in required" | Send a token (`-H "Authorization: Bearer $FORGE_TOKEN"`, §2.7) or sign in to the console. A revoked token, a disabled user, or an expired session all answer 401 |
+| The console shows the sign-in page right after signing in | The session cookie is not reaching the API: its origin must be in `FORGE_CONSOLE_ORIGINS`, and the console and API must be on the same site (`localhost` with `localhost`, not `127.0.0.1` with `localhost`) |
+| A slice stops at once: "FORGE_TOKEN: export FORGE_TOKEN …" | Create a token (`forge tokens create <user> slices`) and export it |
 | Runs fail to start: "adapter: HTTP 401" | The two services have different `FORGE_ADAPTER_TOKEN` values; restart both from the same `.env` |
 | Adapter log: `callback …: HTTP 401` | The run token did not match: the control plane's callback key changed under a running agent (`FORGE_CALLBACK_SECRET` edited, or the `instance` collection cleared). Resume the run |
 | The console shows network errors after an upgrade to 13.1 | Its origin is not in `FORGE_CONSOLE_ORIGINS` (e.g. a dev server on another port); add it |

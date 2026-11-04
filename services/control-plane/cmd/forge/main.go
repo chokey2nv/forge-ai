@@ -31,6 +31,10 @@ import (
 
 func main() {
 	loadDotenv()
+	// `forge users …` / `forge tokens …`: administration, then exit.
+	if len(os.Args) > 1 {
+		os.Exit(runAdmin(os.Args[1:]))
+	}
 	// ---- config ----
 	// Localhost unless told otherwise (Phase 13.1): exposing Forge is a choice.
 	addr := envOr("CONTROL_PLANE_ADDR", "127.0.0.1:8080")
@@ -39,7 +43,7 @@ func main() {
 		log.Fatal("FORGE_ADAPTER_TOKEN is not set: the adapter only accepts runs from a control plane that presents it. " +
 			"Put the same random value in both services' environment (e.g. FORGE_ADAPTER_TOKEN=$(openssl rand -hex 32) in .env)")
 	}
-	consoleOrigins := strings.Split(envOr("FORGE_CONSOLE_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), ",")
+	consoleOrigins := strings.Split(envOr("FORGE_CONSOLE_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"), ",")
 	selfURL := envOr("CONTROL_PLANE_SELF_URL", "http://localhost:8080")
 	adapterURL := envOr("ADAPTER_URL", "http://localhost:8081")
 	workerImage := envOr("WORKER_IMAGE", "forge-worker:dev")
@@ -127,6 +131,17 @@ func main() {
 	h.ReviewerEnabled = parseBool(envOr("REVIEWER_ENABLED", "true"))
 	h.Reviews = reviewRepo
 	h.CallbackKey = callbackKey
+	h.Users, h.Sessions, h.Tokens = mongo_store.NewUserRepo(db), mongo_store.NewSessionRepo(db), mongo_store.NewTokenRepo(db)
+	h.BootstrapToken = os.Getenv("FORGE_BOOTSTRAP_TOKEN")
+	h.SessionTTL = parseDuration(envOr("FORGE_SESSION_TTL", "12h"), 12*time.Hour)
+	h.SecureCookies = parseBool(envOr("FORGE_SECURE_COOKIES", "false"))
+	if n, err := h.Users.Count(ctx); err == nil && n == 0 {
+		if h.BootstrapToken == "" {
+			log.Printf("no users yet: create the first with `forge users add <name>` (or set FORGE_BOOTSTRAP_TOKEN and POST /users)")
+		} else {
+			log.Printf("no users yet: FORGE_BOOTSTRAP_TOKEN acts as an instance admin until the first user is created")
+		}
+	}
 	h.Threads = mongo_store.NewThreadRepo(db)
 	h.Delivery = delivery.NewInspector(envOr("FORGE_GH", "gh"))
 	h.MaxReviewRounds = parseInt(envOr("MAX_REVIEW_ROUNDS", "2"), 2)
@@ -162,61 +177,8 @@ func main() {
 	go scheduler.Run(ctx)
 	h.DefaultProvider, h.DefaultModel = scheduler.DefaultProvider, scheduler.DefaultModel
 
-	mux := http.NewServeMux()
-
-	// tasks
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-
-	mux.HandleFunc("GET  /agents", h.ListAgents)
-	mux.HandleFunc("GET  /agents/health", h.AgentHealth)
-	mux.HandleFunc("GET  /agents/{name}", h.GetAgent)
-	mux.HandleFunc("POST /agents/reload", h.ReloadAgents)
-	mux.HandleFunc("GET  /skills", h.ListSkills)
-	mux.HandleFunc("GET  /skills/{name}", h.GetSkill)
-
-	mux.HandleFunc("POST /tasks", h.CreateTask)
-	mux.HandleFunc("GET /repos/inspect", h.InspectRepo)
-	mux.HandleFunc("GET /config", h.GetConfig)
-	mux.HandleFunc("GET /tasks/{id}", h.GetTask)
-	mux.HandleFunc("POST /tasks/{id}/runs", h.DispatchRun)
-	mux.HandleFunc("GET  /tasks", h.ListTasks)
-	mux.HandleFunc("GET  /tasks/{id}/runs", h.ListTaskRuns)
-	mux.HandleFunc("GET  /tasks/{id}/approvals", h.ListApprovals)
-	mux.HandleFunc("POST /tasks/{id}/approve", h.ApproveTask)
-	mux.HandleFunc("POST /tasks/{id}/reject", h.RejectTask)
-	mux.HandleFunc("POST /tasks/{id}/request-changes", h.RequestChanges)
-	mux.HandleFunc("POST /tasks/{id}/escalation", h.DecideEscalation)
-	mux.HandleFunc("GET /tasks/{id}/children", h.ListTaskChildren)
-	mux.HandleFunc("GET /tasks/{id}/events", h.ListTaskEvents)
-	mux.HandleFunc("GET /tasks/{id}/delivery", h.GetDelivery)
-	mux.HandleFunc("GET /tasks/{id}/diff", h.GetTaskDiff)
-	mux.HandleFunc("GET /tasks/{id}/threads", h.ListThreads)
-	mux.HandleFunc("POST /tasks/{id}/threads", h.CreateThread)
-	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/comments", h.AddThreadComment)
-	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/resolve", h.ResolveThread)
-	mux.HandleFunc("POST /tasks/{id}/threads/{tid}/reopen", h.ReopenThread)
-	mux.HandleFunc("POST /tasks/{id}/deliver", h.RetryDelivery)
-	mux.HandleFunc("POST /tasks/{id}/rollback", h.RollbackTask)
-
-	mux.HandleFunc("POST /evals/results", h.RecordEval)
-	mux.HandleFunc("GET  /evals/results", h.ListEvals)
-	mux.HandleFunc("GET  /evals/results/{id}", h.GetEval)
-
-	// runs
-	mux.HandleFunc("GET /runs/{id}/verification", h.GetVerification)
-	mux.HandleFunc("GET /runs/{id}", h.GetRun)
-	mux.HandleFunc("GET /runs/{id}/events", h.ListEvents)
-	mux.HandleFunc("GET /runs/{id}/diff", h.GetDiff)
-	mux.HandleFunc("GET /runs/{id}/reviews", h.ListRunReviews)
-	mux.HandleFunc("POST /runs/{id}/resume", h.ResumeRun)
-
-	// callbacks from adapter
-	// The adapter's callbacks: only with the run's token (Phase 13.1).
-	mux.HandleFunc("POST /runs/{id}/checkpoint", h.RequireRunToken(h.RecordCheckpoint))
-	mux.HandleFunc("POST /runs/{id}/complete", h.RequireRunToken(h.RecordComplete))
+	// Every route and who may call it: internal/controlplane/api/routes.go.
+	mux := h.Mux()
 
 	// ---- watcher ----
 	watcher := runner.NewWatcher(runRepo, taskRepo, sm, staleAfter)

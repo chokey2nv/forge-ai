@@ -175,7 +175,11 @@ func waitTerminal(cfg Config, taskID string, timeout time.Duration) (string, tim
 }
 
 func getTaskStatus(cp, taskID string) string {
-	resp, err := http.Get(cp + "/tasks/" + taskID)
+	req, _ := http.NewRequest(http.MethodGet, cp+"/tasks/"+taskID, nil)
+	if t := os.Getenv("FORGE_TOKEN"); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "UNKNOWN"
 	}
@@ -195,7 +199,13 @@ func postEvalResult(cfg Config, r map[string]any) error {
 
 func postJSON(url string, in, out any) error {
 	buf, _ := json.Marshal(in)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(buf))
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	// The API needs a signed-in caller (Phase 13.2): an API token.
+	if t := os.Getenv("FORGE_TOKEN"); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
