@@ -124,7 +124,7 @@ func main() {
 		workerImage, selfURL, defaultImplementerSystemPrompt(),
 		allowed,
 		parseInt(envOr("MAX_VERIFICATION_ATTEMPTS", "2"), 2),
-		parseDuration(envOr("VERIFICATION_SETUP_TIMEOUT_SECONDS", "120s"), 120*time.Second),
+		parseDuration(envOr("VERIFICATION_SETUP_TIMEOUT_SECONDS", "10m"), 10*time.Minute),
 	)
 
 	h.Registry = registry

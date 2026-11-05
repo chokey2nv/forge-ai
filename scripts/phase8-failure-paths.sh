@@ -37,6 +37,7 @@
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
 #   blank-reply        the agent stops with no text and no change: blocked, and the reason says so
+#   subfolder-tests    the project is in app/ with pnpm: its tests run, a wrong fix is caught, the retry passes
 #   sandbox-postinstall an agent adds an install hook; it runs offline, unprivileged, on a read-only root (Phase 13.5)
 #
 # Usage: scripts/phase8-failure-paths.sh [scenario ...]
@@ -51,7 +52,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery cut-off-reply cut-off-always blank-reply)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -254,7 +255,7 @@ run_scenario() {
       ;;
     cut-off-always)
       check "parent and subtask BLOCKED ($final, $(status_of "$child"))" "$([ "$final" = BLOCKED ] && [ "$(status_of "$child")" = BLOCKED ]; echo $?)"
-      check "the reason says the reply was cut off" "$(has_reason "$child" "cut off even at 32768 output tokens"; echo $?)"
+      check "the reason says the reply was cut off" "$(has_reason "$child" "cut off even at"; echo $?)"
       ;;
     blank-reply)
       check "parent and subtask BLOCKED ($final, $(status_of "$child"))" "$([ "$final" = BLOCKED ] && [ "$(status_of "$child")" = BLOCKED ]; echo $?)"
@@ -1091,6 +1092,16 @@ for SC in "${SCENARIOS[@]}"; do
     sandbox-postinstall) run_sandbox ;;
     budget-tokens) run_budget ;;
     restart-mid-delivery) run_restart_delivery ;;
+    subfolder-tests)
+      repo=$(new_repo subfolder-app); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
+      final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true; stop_adapter
+      child=$(child_of "$task")
+      check "the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "the wrong fix failed the subfolder's tests, and was retried" "$(has_reason "$child" "verification failed; retrying"; echo $?)"
+      v=$(mongosh --quiet "$DB" --eval "print(JSON.stringify(db.verificationRuns.find({taskId:'$child'}).sort({startedAt:1}).toArray().map(r=>r.gates.find(g=>g.name==='test'))))")
+      check "the test gate ran in app/ with pnpm, failing then passing" \
+        "$(echo "$v" | jq -e '.[0].passed == false and (.[0].skipped | not) and (.[0].output | contains("== app") and contains("node --test")) and .[-1].passed == true and (.[-1].skipped | not)' >/dev/null; echo $?)"
+      ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

@@ -24,7 +24,7 @@ func (r *Runner) Run(ctx context.Context, containerName, worktreePath string, di
 		StartedAt: start,
 	}
 
-	pctx := detectContext(ctx, containerName, diffScope)
+	pctx := ProjectContext{Projects: workspace.Projects(worktreePath), DiffScopeAllow: diffScope}
 	vr.WorkspaceDiff = getDiff(ctx, containerName)
 
 	for _, g := range r.Gates {
@@ -44,9 +44,7 @@ func (r *Runner) Run(ctx context.Context, containerName, worktreePath string, di
 		if result.Stderr != "" {
 			out = out + "\n" + result.Stderr
 		}
-		if g.Truncate > 0 && len(out) > g.Truncate {
-			out = out[:g.Truncate] + "\n...[truncated]"
-		}
+		out = truncateOutput(out, g.Truncate)
 
 		vr.Gates = append(vr.Gates, domain.GateResult{
 			Name:       g.Name,
@@ -69,19 +67,14 @@ func (r *Runner) Run(ctx context.Context, containerName, worktreePath string, di
 	return vr
 }
 
-func detectContext(ctx context.Context, containerName string, diffScope []string) ProjectContext {
-	p := ProjectContext{DiffScopeAllow: diffScope}
-	r := workspace.RunInContainer(ctx, containerName,
-		[]string{"sh", "-c", "test -f go.mod && echo gomod; test -f package.json && echo pkgjson"}, 10*time.Second)
-	for _, line := range strings.Split(r.Stdout, "\n") {
-		switch strings.TrimSpace(line) {
-		case "gomod":
-			p.HasGoMod = true
-		case "pkgjson":
-			p.HasPackageJSON = true
-		}
+// truncateOutput keeps mostly the end: that's where a test run lists its
+// failures and totals.
+func truncateOutput(out string, limit int) string {
+	if limit <= 0 || len(out) <= limit {
+		return out
 	}
-	return p
+	head := limit / 4
+	return out[:head] + "\n...[truncated]...\n" + out[len(out)-(limit-head):]
 }
 
 func getDiff(ctx context.Context, containerName string) string {

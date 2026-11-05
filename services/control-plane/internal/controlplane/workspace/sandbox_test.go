@@ -45,7 +45,8 @@ func TestInstallScriptsRunWithoutNetwork(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := installDeps(context.Background(), "/tmp/forge-child-abc", "img", time.Minute); err != nil {
+	repo := tree(t, map[string]string{"package.json": "{}"})
+	if err := installDeps(context.Background(), repo, "img", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(log)
@@ -61,7 +62,7 @@ func TestInstallScriptsRunWithoutNetwork(t *testing.T) {
 	}
 	fetch, scripts := calls[0], calls[1]
 	for _, c := range calls {
-		for _, want := range []string{"--cap-drop=ALL", "--read-only", "--security-opt=no-new-privileges", "--user ", "-v /tmp/forge-child-abc:/workspace:rw"} {
+		for _, want := range []string{"--cap-drop=ALL", "--read-only", "--security-opt=no-new-privileges", "--user ", "-v " + repo + ":/workspace:rw"} {
 			if !strings.Contains(c, want) {
 				t.Errorf("%q lacks %q", c, want)
 			}

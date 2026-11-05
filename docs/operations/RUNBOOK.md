@@ -259,6 +259,8 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `CONTROL_PLANE_URL` | `CONTROL_PLANE_SELF_URL` | Adapter | Where the adapter reports runs. A `callbackUrl` in a run request is ignored |
 | `AGENTS_DIR` / `SKILLS_DIR` | `agents` / `skills` | Control plane | Agent and skill markdown, re-read on `POST /agents/reload` |
 | `DEFAULT_PROVIDER` / `DEFAULT_MODEL` | `MODEL_PROVIDER`, else `ollama` / `MODEL_NAME` | Control plane | Provenance recorded on child runs (the adapter still uses `MODEL_PROVIDER`) |
+| `VERIFICATION_SETUP_TIMEOUT_SECONDS` | `10m` | Control plane | How long installing a workspace's packages may take, a duration despite the name. A large repository can need minutes |
+| `VERIFICATION_TEST_TIMEOUT` | `15m` | Control plane | How long the test gate may take |
 | `MAX_VERIFICATION_ATTEMPTS` | `2` | Control plane | Consecutive verification failures before a task blocks |
 | `MAX_REVISIONS` | `3` | Control plane | Revisions of a parent's combined change a human can be shown (§6.5.3); the task's `budget.maxRevisions` overrides it. Sending a change back is refused once `maxRevisions - 1` follow-ups have been made |
 | `MAX_REVIEW_ROUNDS` | `2` | Control plane | Rejected review rounds before a task is `ESCALATED` to a human (§6.6); each round runs every listed reviewer and gets fresh verification attempts |
@@ -297,6 +299,10 @@ These ports win over the port settings in `.env`, which still apply to the manua
 Stopping Forge while agents are running leaves their runs to go stale; resume them after the next start with `POST /runs/{id}/resume`.
 
 The steps below do the same by hand.
+
+**Where verification looks.** A project is a folder with a `go.mod` or `package.json`: at the top of the repository or, when nothing above holds it, up to three folders down (not `node_modules`, `vendor`, `dist`, `build`, `target`, `fixtures`, `testdata`, `examples` or hidden folders). Every workspace except the head engineer's installs each project's packages, with pnpm or yarn when it has their lockfile, otherwise npm. The test gate runs each project's `test` script, or `go test`; a project with no test script is skipped. pnpm's packages are kept between workspaces in the user's cache folder (`forge/pnpm-store`).
+
+A failing test blocks the task, including one that already failed before the task. Keep a repository's suite passing, and passing inside a worker's limits (2 CPUs, 2 GB, no network), or every code task on it will block.
 
 Run each in its own terminal, in this order: Mongo → control plane → adapter.
 
@@ -676,6 +682,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
 | `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
 | `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |
+| `subfolder-tests` | The project is in `app/` and uses pnpm; the first fix is wrong | The test gate runs `pnpm test` in `app/`, fails, the retry passes, `REVIEW_PENDING` |
 | `blank-reply` | The implementer stops with no text and no change | `BLOCKED`; the reason says it gave no explanation and how to get a report |
 | `deliver-pr-moved` | Same, the target moves on the forge only | Delivery fetches it, merges it in and verifies again; `PR_OPEN`; the local target doesn't move; a new task starts from the forge's tip and its `branch.created` event says why |
 | `rollback-local` | A delivered local merge, then an unrelated commit on the target, then `POST /tasks/{id}/rollback` | `ROLLED_BACK`; the target is one revert commit on top ("This reverts <merge>"); the fix is gone, the later work stays, the merge is still in history; recorded in `approvals`; a second rollback → 409 |

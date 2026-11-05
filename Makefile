@@ -5,7 +5,7 @@ smoke:
 .PHONY: worker-build phase2-demo phase2-eval
 
 worker-build:
-	docker build -t forge-worker:dev -f infrastructure/docker/worker/Dockerfile .
+	docker build -t forge-worker:dev --label forge.dockerfile=$$(shasum infrastructure/docker/worker/Dockerfile | cut -d' ' -f1) -f infrastructure/docker/worker/Dockerfile .
 
 phase2-demo:
 	cd services/runtime-adapter && pnpm forge run \

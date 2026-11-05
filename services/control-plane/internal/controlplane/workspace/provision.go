@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -82,7 +83,7 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	defer cancel()
 
 	base := filepath.Base(worktreePath)
-	step := func(name, network, script string) error {
+	step := func(name, network, script string, extra ...string) error {
 		// Killing the docker CLI on timeout or shutdown does not stop the
 		// container, so name it and remove it explicitly on any failure, and
 		// before starting: one left running by a control plane that was
@@ -95,11 +96,15 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 			"-v", worktreePath + ":/workspace:rw",
 			"--network=" + network,
 		}
+		args = append(args, extra...)
 		args = append(args, sandboxArgs()...)
 		args = append(args, image, "sh", "-c", script)
 		out, err := exec.CommandContext(sctx, "docker", args...).CombinedOutput()
 		if err != nil {
 			RemoveContainer(context.WithoutCancel(ctx), name)
+			if errors.Is(sctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("dependency install took longer than %s; raise VERIFICATION_SETUP_TIMEOUT_SECONDS", timeout)
+			}
 			return fmt.Errorf("dependency install (%s network): %s: %w", network, out, err)
 		}
 		return nil
@@ -109,18 +114,14 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	// code, which may include install hooks. Packages are fetched with the
 	// network but none of their scripts run; the scripts (the dependencies'
 	// and the project's own) then run with no network.
-	if err := step("forge-setup-"+base, "bridge", `
-		if [ -f package.json ]; then npm install --no-audit --no-fund --ignore-scripts; fi
-		if [ -f go.mod ]; then go mod download; fi
-	`); err != nil {
+	projects := Projects(worktreePath)
+	if len(projects) == 0 {
+		return nil
+	}
+	if err := step("forge-setup-"+base, "bridge", ForEachProject(projects, fetchCommand), packageStoreArgs(projects)...); err != nil {
 		return err
 	}
-	return step("forge-setup-scripts-"+base, "none", `
-		if [ -f package.json ]; then
-			npm rebuild --no-audit --no-fund || exit 1
-			for s in preinstall install postinstall prepare; do npm run --if-present "$s" || exit 1; done
-		fi
-	`)
+	return step("forge-setup-scripts-"+base, "none", ForEachProject(projects, scriptsCommand))
 }
 
 func mktempDir(prefix string) (string, error) {

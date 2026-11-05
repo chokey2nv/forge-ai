@@ -225,7 +225,8 @@ func (h *Handlers) startHeadEngineer(ctx context.Context, task *domain.Task, run
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("compose head-engineer: %w", err)
 	}
-	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, base, h.WorkerImage, runID, h.SetupTimeout)
+	// It only reads and plans, so it doesn't wait for packages to install.
+	ws, err := workspace.Provision(ctx, task.RepoPath, base, h.WorkerImage, runID)
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("provision head-engineer: %w", err)
 	}

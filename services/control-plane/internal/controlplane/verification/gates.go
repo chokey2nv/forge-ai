@@ -1,8 +1,11 @@
 package verification
 
 import (
+	"os"
 	"strings"
 	"time"
+
+	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
 
 type Command struct {
@@ -11,8 +14,7 @@ type Command struct {
 }
 
 type ProjectContext struct {
-	HasGoMod       bool
-	HasPackageJSON bool
+	Projects       []workspace.Project
 	DiffScopeAllow []string
 }
 
@@ -73,20 +75,16 @@ if [ -n "$viol" ]; then echo "Files outside allowed scope:$viol"; exit 1; fi
 			Name:        "build",
 			Description: "Compile or syntax-check changed files",
 			Command: func(p ProjectContext) (Command, bool) {
-				if p.HasGoMod {
-					return Command{Bin: "go", Args: []string{"build", "./..."}}, true
+				if len(p.Projects) == 0 {
+					return Command{}, false
 				}
-				if p.HasPackageJSON {
-					script := `
-files=$( { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | grep -E '\.(js|mjs|cjs)$' || true)
-[ -z "$files" ] && { echo "no JS files changed"; exit 0; }
-fail=0
-for f in $files; do node --check "$f" || fail=1; done
-exit $fail
-`
-					return Command{Bin: "sh", Args: []string{"-c", script}}, true
-				}
-				return Command{}, false
+				script := workspace.ForEachProject(p.Projects, func(pr workspace.Project) string {
+					if pr.Go {
+						return "go build ./..."
+					}
+					return nodeSyntaxCheck
+				})
+				return Command{Bin: "sh", Args: []string{"-c", script}}, true
 			},
 			Timeout:  120 * time.Second,
 			Truncate: 8_000,
@@ -95,19 +93,43 @@ exit $fail
 			Name:        "test",
 			Description: "Run the project test suite",
 			Command: func(p ProjectContext) (Command, bool) {
-				if p.HasGoMod {
-					return Command{Bin: "go", Args: []string{"test", "./..."}}, true
+				var tested []workspace.Project
+				for _, pr := range p.Projects {
+					if pr.HasTest {
+						tested = append(tested, pr)
+					}
 				}
-				if p.HasPackageJSON {
-					return Command{Bin: "npm", Args: []string{"test"}}, true
+				if len(tested) == 0 {
+					return Command{}, false
 				}
-				return Command{}, false
+				script := workspace.ForEachProject(tested, func(pr workspace.Project) string {
+					if pr.Go {
+						return "go test ./..."
+					}
+					return pr.PM + " test"
+				})
+				return Command{Bin: "sh", Args: []string{"-c", script}}, true
 			},
-			Timeout:  180 * time.Second,
+			Timeout:  testTimeout(),
 			Truncate: 8_000,
 		},
 	}
 }
+
+// testTimeout: a real project's suite can take many minutes in a container.
+func testTimeout() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("VERIFICATION_TEST_TIMEOUT")); err == nil && d > 0 {
+		return d
+	}
+	return 15 * time.Minute
+}
+
+// nodeSyntaxCheck checks the JS changed in the project it runs in.
+const nodeSyntaxCheck = `files=$( { git diff --relative --name-only HEAD; git ls-files --others --exclude-standard; } | grep -E '\.(js|mjs|cjs)$' || true)
+if [ -z "$files" ]; then echo "no JS files changed"; exit 0; fi
+rc=0
+for f in $files; do node --check "$f" || rc=1; done
+exit $rc`
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

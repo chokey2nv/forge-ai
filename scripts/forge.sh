@@ -115,9 +115,15 @@ ensure_built() {
   local image
   image="$(env_value WORKER_IMAGE)"
   image="${image:-forge-worker:dev}"
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
-    say "Building the worker image $image (first time only)..."
-    (cd "$ROOT" && make worker-build) || die "the worker image did not build"
+  local wanted current
+  wanted="$(shasum "$ROOT/infrastructure/docker/worker/Dockerfile" | cut -d' ' -f1)"
+  current="$(docker image inspect --format '{{index .Config.Labels "forge.dockerfile"}}' "$image" 2>/dev/null)"
+  if [ "$current" != "$wanted" ]; then
+    say "Building the worker image $image..."
+    if ! (cd "$ROOT" && make worker-build); then
+      [ -n "$current" ] || docker image inspect "$image" >/dev/null 2>&1 || die "the worker image did not build"
+      say "The worker image did not build (offline?); using the one already here."
+    fi
   fi
   [ -x "$ROOT/services/runtime-adapter/node_modules/.bin/tsx" ] ||
     (cd "$ROOT/services/runtime-adapter" && pnpm install) || die "the adapter's packages did not install"
