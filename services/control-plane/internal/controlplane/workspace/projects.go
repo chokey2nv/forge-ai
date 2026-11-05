@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -127,25 +126,8 @@ func ForEachProject(projects []Project, command func(Project) string) string {
 	return b.String()
 }
 
-// pnpmStore is where the fetch step finds pnpm's packages. Most of a real
-// project's install is downloading them, and every workspace repeats it.
+// pnpmStore is where the fetch step finds pnpm's packages (pnpmStoreArgs).
 const pnpmStore = "/pnpm-store"
-
-// packageStoreArgs mounts a store kept between workspaces, for the fetch step
-// only: it runs no scripts, and nothing an agent runs ever sees the store.
-func packageStoreArgs(projects []Project) []string {
-	if !slices.ContainsFunc(projects, func(p Project) bool { return p.PM == PNPM }) {
-		return nil
-	}
-	dir := filepath.Join(os.TempDir(), "forge-pnpm-store")
-	if cache, err := os.UserCacheDir(); err == nil {
-		dir = filepath.Join(cache, "forge", "pnpm-store")
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		dir = os.TempDir() // still somewhere it can write
-	}
-	return []string{"-v", dir + ":" + pnpmStore}
-}
 
 // fetchCommand gets a project's packages without running any of their scripts.
 func fetchCommand(p Project) string {
@@ -167,9 +149,16 @@ func scriptsCommand(p Project) string {
 	if p.Go {
 		return ":"
 	}
-	rebuild := "npm rebuild --no-audit --no-fund"
-	if p.PM == PNPM {
-		rebuild = "pnpm rebuild --store-dir /tmp/.pnpm-store"
-	}
-	return rebuild + ` && for s in preinstall install postinstall prepare; do npm run --if-present "$s" || exit 1; done`
+	return rebuildCommand(p) + " && " + runLifecycle
 }
+
+// rebuildCommand runs the install scripts of a project's packages.
+func rebuildCommand(p Project) string {
+	if p.PM == PNPM {
+		return "pnpm rebuild --store-dir /tmp/.pnpm-store"
+	}
+	return "npm rebuild --no-audit --no-fund"
+}
+
+// runLifecycle runs the project's own install scripts.
+const runLifecycle = `for s in preinstall install postinstall prepare; do npm run --if-present "$s" || exit 1; done`

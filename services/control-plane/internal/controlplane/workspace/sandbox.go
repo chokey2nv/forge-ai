@@ -45,7 +45,7 @@ func containerUser() (uid, gid int) {
 
 // workerArgs are the docker run arguments for a long-lived, network-isolated
 // container with worktree mounted at /workspace.
-func workerArgs(name, runID, worktree, image string) []string {
+func workerArgs(name, runID, worktree, image string, mounts ...string) []string {
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", name,
@@ -55,6 +55,7 @@ func workerArgs(name, runID, worktree, image string) []string {
 		"-v", worktree + ":/workspace:rw",
 		"--memory", "2g", "--cpus", "2", "--pids-limit", "256",
 	}
+	args = append(args, mounts...)
 	args = append(args, sandboxArgs()...)
 	return append(args, image, "sleep", "infinity")
 }

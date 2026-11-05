@@ -34,7 +34,10 @@
 #   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
 #   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
 #   feedback-budget    a task budgeted for one revision cannot be sent back
+#   shared-deps        packages install once into a read-only volume; the second task doesn't reinstall; the combined run skips repeat tests
 #   max-steps-resume   the agent runs out of steps, blocks and says so; resuming gives it more and it finishes
+#   resume-twice       blocked again after a resume: the second resume keeps its new container and the saved work
+#   container-lost     the container is removed mid-run: the run blocks and says so, the checkpoint survives, resume finishes
 #   long-model-reply   one reply outlasts STALE_AFTER: heartbeats keep the run alive, it isn't marked stale
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
@@ -54,7 +57,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery max-steps-resume long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery shared-deps max-steps-resume resume-twice container-lost long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -247,14 +250,34 @@ run_scenario() {
   child=$(child_of "$task")
   if [ "$SC" = max-steps-resume ]; then
     check "out of steps: the subtask blocks and says so ($final)" "$([ "$final" = BLOCKED ] && has_reason "$child" "max steps (10) exhausted"; echo $?)"
+    check "only a project admin changes max steps; a member gets 403" \
+      "$([ "$(as "$MEMBER" -X PUT "$CP/tasks/$task/max-steps" -H 'Content-Type: application/json' -d '{"maxSteps":12}')" = 403 ]; echo $?)"
+    check "max steps can't be changed on a subtask, or set below 1" \
+      "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$CP/tasks/$child/max-steps" -H 'Content-Type: application/json' -d '{"maxSteps":12}')" = 400 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$CP/tasks/$task/max-steps" -H 'Content-Type: application/json' -d '{"maxSteps":0}')" = 400 ]; echo $?)"
+    check "an admin changes max steps, on the task and its subtasks" \
+      "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$CP/tasks/$task/max-steps" -H 'Content-Type: application/json' -d '{"maxSteps":12}')" = 200 ] && [ "$(curl -sf "$CP/tasks/$task" | jq .budget.maxSteps)" = 12 ] && [ "$(curl -sf "$CP/tasks/$child" | jq .budget.maxSteps)" = 12 ]; echo $?)"
     check "resuming gives it more steps" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")" = 202 ]; echo $?)"
     final=$(wait_status "$task" "REVIEW_PENDING|REJECTED" 300) || true
+  fi
+  if [ "$SC" = resume-twice ]; then
+    local first second
+    check "resumed once, it blocks again" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")" = 202 ] && [ "$(wait_status "$task" "REVIEW_PENDING|BLOCKED" 300)" = BLOCKED ]; echo $?)"
+    first=$(curl -sf "$CP/runs/run-$child" | jq -r .containerName)
+    check "the second resume is accepted" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")" = 202 ]; echo $?)"
+    second=$(curl -sf "$CP/runs/run-$child" | jq -r .containerName)
+    check "each resume has its own container ($first, $second)" "$([ "$first" != "$second" ]; echo $?)"
+    final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
   fi
   stop_adapter
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
 
   case "$SC" in
+    resume-twice)
+      check "and it finishes: the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "the work survived both resumes" \
+        "$(curl -sf "$CP/runs/run-$child" | jq -e '.lastCheckpoint.workspaceDiff | contains("Math.round")' >/dev/null; echo $?)"
+      ;;
     max-steps-resume)
       check "and it finishes: the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       ;;
@@ -423,8 +446,36 @@ run_crash_resume() {
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
   check "parent reaches REVIEW_PENDING after resume" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
-  check "resumed run was given the agent's tools" "$(grep -E "runId=$run-r .*tools=[1-9]" "$WORK/adapter.log" >/dev/null; echo $?)"
-  check "run points at the resumed workspace" "$(curl -sf "$CP/runs/$run" | jq -e '.containerName | endswith("-r")' >/dev/null; echo $?)"
+  check "resumed run was given the agent's tools" "$(grep -E "runId=$run-r[0-9]+ .*tools=[1-9]" "$WORK/adapter.log" >/dev/null; echo $?)"
+  check "run points at the resumed workspace" "$(curl -sf "$CP/runs/$run" | jq -e '.containerName | test("-r[0-9]+$")' >/dev/null; echo $?)"
+}
+
+run_container_lost() {
+  local repo task child final container
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 240); do
+    child=$(child_of "$task")
+    [ -n "$child" ] && curl -sf "$CP/runs/run-$child" 2>/dev/null | jq -e '.lastCheckpoint.workspaceDiff // "" | contains("Math.round")' >/dev/null && break
+    sleep 1
+  done
+  container=$(curl -sf "$CP/runs/run-$child" | jq -r .containerName)
+  docker rm -f "$container" >/dev/null
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  check "the subtask blocks ($final, $(status_of "$child"))" "$([ "$(status_of "$child")" = BLOCKED ]; echo $?)"
+  check "the reason says the container was removed, not that the agent changed nothing" \
+    "$(has_reason "$child" "container was removed" && ! has_reason "$child" "without changing the workspace"; echo $?)"
+  check "git_status reported the missing container, not a clean tree" \
+    "$(curl -sf "$CP/runs/run-$child" | jq -e '[.lastCheckpoint.messages[] | select(.toolName == "git_status")] | length > 0 and all(.content | contains("No such container"))' >/dev/null; echo $?)"
+  check "the checkpoint kept the saved work" \
+    "$(curl -sf "$CP/runs/run-$child" | jq -e '.lastCheckpoint.workspaceDiff | contains("Math.round")' >/dev/null; echo $?)"
+  check "resume is accepted" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")" = 202 ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  reasons "$child" | sed 's/^/      /'
+  check "restored from the checkpoint, the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
 }
 
 run_add_agent() {
@@ -542,7 +593,7 @@ run_final_review_escalates() {
   check "child reviewers were shown the gate results and test output" \
     "$(jq -e -s '[.[] | select(.role == "reviewer" and (.task | contains("Task requirement:\nFix applyDiscount\n")))] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed") and contains("# pass 3"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
   check "final reviewers were shown the combined verification" \
-    "$(jq -e -s '[.[] | select(.role == "reviewer")][2:] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: passed"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
+    "$(jq -e -s '[.[] | select(.role == "reviewer")][2:] | length == 2 and all(.task | contains("Verification (run by the platform") and contains("- test: skipped (the same code already passed its tests"))' "$WORK/prompts.jsonl" >/dev/null; echo $?)"
 }
 
 # Epoch ms of a task's first FROM -> TO transition, or empty.
@@ -957,6 +1008,39 @@ run_sandbox() {
   kill "$beacon" 2>/dev/null || true; wait "$beacon" 2>/dev/null || true; BEACON_PID=""
 }
 
+run_shared_deps() {
+  local repo task child second v before after stamp tool combined
+  before=$(docker volume ls -q --filter label=forge.deps=1 | sort)
+  repo=$(new_repo with-deps)
+  # A unique package.json: this run has to build its own volume.
+  sed -i.bak "s/\"name\": \"with-deps\"/\"name\": \"with-deps-$RANDOM$RANDOM\"/" "$repo/package.json"; rm "$repo/package.json.bak"
+  git -C "$repo" add -A; git -C "$repo" -c user.name=forge -c user.email=forge@localhost commit -q -m "unique"
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  child=$(child_of "$task")
+  after=$(docker volume ls -q --filter label=forge.deps=1 | sort)
+  v=$(comm -13 <(echo "$before") <(echo "$after"))
+  echo "  parent $task -> $final, volume: $v"
+  check "the task reaches REVIEW_PENDING, using the package from the volume ($final)" "$([ "$final" = REVIEW_PENDING ] && curl -sf "$CP/runs/run-$child/verification" | jq -e '[.gates[] | select(.name == "test")][0] | .passed and (.skipped | not)' >/dev/null; echo $?)"
+  check "one volume was built" "$([ "$(echo "$v" | wc -w)" -eq 1 ]; echo $?)"
+  check "the volume is finished, and the package is in it" \
+    "$(docker run --rm --network=none -v "$v:/v:ro" "${WORKER_IMAGE:-forge-worker:dev}" sh -c 'test -f /v/.forge-complete && test -f /v/ms/index.js' ; echo $?)"
+  tool=$(curl -sf "$CP/runs/run-$child" | jq -r '[.lastCheckpoint.messages[] | select(.role == "tool") | .content | select(contains("REFUSED") or contains("WROTE"))][0] // ""')
+  check "an agent can't write to it ($tool)" "$([[ "$tool" == *"REFUSED EROFS"* ]]; echo $?)"
+  combined=$(mongosh --quiet "$DB" --eval "print(JSON.stringify(db.verificationRuns.findOne({taskId:'$task'}).gates.find(g=>g.name==='test')))")
+  check "the combined run skips tests that already passed on the same code" \
+    "$(echo "$combined" | jq -e '.skipped and (.skipReason | contains("already passed"))' >/dev/null; echo $?)"
+
+  stamp=$(docker volume inspect --format '{{.CreatedAt}}' "$v")
+  second=$(create_and_dispatch "$repo")
+  final=$(wait_status "$second" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  check "a second task reuses it: no new volume, none rebuilt ($final)" \
+    "$([ "$final" = REVIEW_PENDING ] && [ "$(docker volume ls -q --filter label=forge.deps=1 | sort)" = "$after" ] && [ "$(docker volume inspect --format '{{.CreatedAt}}' "$v")" = "$stamp" ]; echo $?)"
+  docker volume rm "$v" >/dev/null 2>&1 || true
+}
+
 child_of_latest() { curl -sf "$CP/tasks/$1/children" | jq -r '.[0].id // empty'; }
 run_budget() {
   local repo task child code final s
@@ -1096,6 +1180,7 @@ for SC in "${SCENARIOS[@]}"; do
   case "$SC" in
     crash-resume) run_crash_resume ;;
     add-agent) run_add_agent ;;
+    container-lost) run_container_lost ;;
     escalate-accept) run_escalation accept ;;
     escalate-retry) run_escalation retry ;;
     final-review-escalates) run_final_review_escalates ;;
@@ -1120,6 +1205,7 @@ for SC in "${SCENARIOS[@]}"; do
       check "the test gate ran in app/ with pnpm, failing then passing" \
         "$(echo "$v" | jq -e '.[0].passed == false and (.[0].skipped | not) and (.[0].output | contains("== app") and contains("node --test")) and .[-1].passed == true and (.[-1].skipped | not)' >/dev/null; echo $?)"
       ;;
+    shared-deps) run_shared_deps ;;
     cycle-rejected)
       repo=$(new_repo parallel-features); start_adapter "$SCEN/$SC.json"; task=$(create_and_dispatch "$repo")
       final=$(wait_status "$task" "BLOCKED|DISPATCHED|REVIEW_PENDING" 120) || true; stop_adapter

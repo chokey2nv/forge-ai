@@ -26,8 +26,9 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		domain.Checkpoint
-		Role  string       `json:"role"`
-		Spend *SpendReport `json:"spend,omitempty"`
+		Role          string       `json:"role"`
+		Spend         *SpendReport `json:"spend,omitempty"`
+		WorkspaceLost bool         `json:"workspaceLost,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -42,7 +43,7 @@ func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cp.WorkspaceDiff = keptDiff(run, cp.WorkspaceDiff)
+	cp.WorkspaceDiff = keptDiff(run, cp.WorkspaceDiff, body.WorkspaceLost)
 	task, _ := h.Tasks.Get(ctx, run.TaskID)
 	// First checkpoint: DISPATCHED → RUNNING on the task
 	if run.Status == domain.RunDispatched {

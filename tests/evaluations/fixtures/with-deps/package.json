@@ -1,0 +1,7 @@
+{
+  "name": "with-deps",
+  "private": true,
+  "type": "commonjs",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "ms": "2.1.3" }
+}

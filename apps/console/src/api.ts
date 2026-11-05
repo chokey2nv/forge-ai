@@ -34,6 +34,7 @@ export interface Skill {
 }
 
 export interface Task {
+  budget?: { maxSteps: number };
   id: string;
   requirement: string;
   acceptance: string[];
@@ -398,6 +399,8 @@ export const api = {
         j<Project>(`/projects/${pid}/repos`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, defaultTarget: defaultTarget || undefined }),
         }),
+    setTaskMaxSteps: (taskId: string, maxSteps: number) =>
+        j<{ maxSteps: number }>(`/tasks/${taskId}/max-steps`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ maxSteps }) }),
     removeProjectRepo: (pid: string, path: string) =>
         fetch(`${BASE}/projects/${pid}/repos?${new URLSearchParams({ path })}`, { method: "DELETE", credentials: "include" })
             .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status} — ${await r.text()}`); }),

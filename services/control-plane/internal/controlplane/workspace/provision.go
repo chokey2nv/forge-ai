@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -62,13 +64,14 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	}
 
 	// Setup container: has network, installs deps, then disappears.
-	if err := installDeps(ctx, worktreeDir, image, setupTimeout); err != nil {
+	mounts, err := installDeps(ctx, worktreeDir, image, setupTimeout)
+	if err != nil {
 		removeWorkspaceDir(ctx, repoPath, worktreeDir)
 		return nil, err
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := workerArgs(containerName, runID, worktreeDir, image)
+	args := workerArgs(containerName, runID, worktreeDir, image, mounts...)
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		removeWorkspaceDir(ctx, repoPath, worktreeDir)
@@ -78,9 +81,11 @@ func ProvisionWithSetup(ctx context.Context, repoPath, baseCommit, image, runID 
 	return &Workspace{WorktreePath: worktreeDir, ContainerName: containerName, BaseCommit: baseCommit}, nil
 }
 
-func installDeps(ctx context.Context, worktreePath, image string, timeout time.Duration) error {
+func installDeps(ctx context.Context, worktreePath, image string, timeout time.Duration) ([]string, error) {
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	mounts, perWorkspace, ownScripts := prepareSharedDeps(sctx, worktreePath, image)
 
 	base := filepath.Base(worktreePath)
 	step := func(name, network, script string, extra ...string) error {
@@ -114,14 +119,70 @@ func installDeps(ctx context.Context, worktreePath, image string, timeout time.D
 	// code, which may include install hooks. Packages are fetched with the
 	// network but none of their scripts run; the scripts (the dependencies'
 	// and the project's own) then run with no network.
-	projects := Projects(worktreePath)
-	if len(projects) == 0 {
-		return nil
+	if len(perWorkspace) > 0 {
+		var store []string
+		if slices.ContainsFunc(perWorkspace, func(p Project) bool { return p.PM == PNPM }) {
+			var err error
+			if store, err = pnpmStoreArgs(sctx, image); err != nil {
+				return nil, err
+			}
+		}
+		if err := step("forge-setup-"+base, "bridge", ForEachProject(perWorkspace, fetchCommand), store...); err != nil {
+			return nil, err
+		}
+		if err := step("forge-setup-scripts-"+base, "none", ForEachProject(perWorkspace, scriptsCommand)); err != nil {
+			return nil, err
+		}
 	}
-	if err := step("forge-setup-"+base, "bridge", ForEachProject(projects, fetchCommand), packageStoreArgs(projects)...); err != nil {
-		return err
+	// A project on a shared volume still runs its own scripts here, offline:
+	// they're agent-writable, so they never run against a writable volume.
+	if len(ownScripts) > 0 {
+		if err := step("forge-setup-own-"+base, "none", ForEachProject(ownScripts, func(Project) string { return runLifecycle }), mounts...); err != nil {
+			return nil, err
+		}
 	}
-	return step("forge-setup-scripts-"+base, "none", ForEachProject(projects, scriptsCommand))
+	return mounts, nil
+}
+
+// prepareSharedDeps sorts a checkout's projects: those with packages on a
+// shared volume (the mounts), those that install in this workspace, and those
+// of the first kind with install scripts of their own. An install that fails on
+// a volume falls back to this workspace, which reports it if it fails there too.
+func prepareSharedDeps(ctx context.Context, worktreePath, image string) (mounts []string, perWorkspace, ownScripts []Project) {
+	var id string
+	for _, p := range Projects(worktreePath) {
+		dir := filepath.Join(worktreePath, p.Dir)
+		m, ok := readManifest(dir)
+		if p.Go || !ok {
+			perWorkspace = append(perWorkspace, p)
+			continue
+		}
+		if !shareable(dir, p, m) {
+			perWorkspace = append(perWorkspace, p)
+			continue
+		}
+		if lifecycleScripts(m) {
+			ownScripts = append(ownScripts, p)
+		}
+		if !m.hasDependencies() {
+			continue
+		}
+		if id == "" {
+			id = imageID(ctx, image)
+		}
+		name, err := depsVolumeName(dir, p, id)
+		if err == nil {
+			err = ensureDepsVolume(ctx, name, dir, p, image)
+		}
+		if err != nil {
+			log.Printf("workspace: packages for %s not shared: %v", p.Dir, err)
+			perWorkspace = append(perWorkspace, p)
+			ownScripts = slices.DeleteFunc(ownScripts, func(o Project) bool { return o.Dir == p.Dir })
+			continue
+		}
+		mounts = append(mounts, depsMountArgs(name, p)...)
+	}
+	return mounts, perWorkspace, ownScripts
 }
 
 func mktempDir(prefix string) (string, error) {

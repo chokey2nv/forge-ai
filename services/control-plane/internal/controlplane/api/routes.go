@@ -94,6 +94,7 @@ func (h *Handlers) Routes() []Route {
 		{"POST /tasks/{id}/rollback", Reviewer, h.RollbackTask},
 		{"GET /tasks/{id}/spend", Viewer, h.GetTaskSpend},
 		{"PUT /tasks/{id}/budget", ProjectAdmin, h.SetTaskBudget},
+		{"PUT /tasks/{id}/max-steps", ProjectAdmin, h.SetTaskMaxSteps},
 
 		{"POST /evals/results", Member, h.RecordEval},
 		{"GET /evals/results", Viewer, h.ListEvals},

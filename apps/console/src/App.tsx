@@ -462,21 +462,21 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       setThreads(isParent(t) ? await api.listThreads(id).catch(() => null) : null);
       setDelivery(!t.parentId ? await api.getDelivery(id).catch(() => null) : null);
       setSpend(await api.getTaskSpend(id).catch(() => null));
-      setBlockedWhy(t.status === "BLOCKED" ? (await api.getTaskEvents(id).catch(() => [] as Event[])).filter((e) => e.to === "BLOCKED").pop()?.reason ?? "" : "");
+      setBlockedWhy(t.status === "BLOCKED" ? (await api.getTaskEvents(id).catch(() => [] as Event[])).filter((e) => e.to === "BLOCKED" || e.type === "resume.failed").pop()?.reason ?? "" : "");
       setErr("");
     } catch (e) { setErr(String(e)); }
   };
 
-  const childWhy = (c: Task) => (childEvents[c.id] ?? []).filter((e) => e.to === "BLOCKED").pop()?.reason ?? "";
+  const childWhy = (c: Task) => (childEvents[c.id] ?? []).filter((e) => e.to === "BLOCKED" || e.type === "resume.failed").pop()?.reason ?? "";
   const blockedChild = children.find((c) => c.status === "BLOCKED");
 
   useEffect(() => { reload(); }, [id]);
   // Follow a task while the pipeline is still moving it.
   useEffect(() => {
-    if (!task || TERMINAL.has(task.status)) return;
+    if (!task || (TERMINAL.has(task.status) && run?.status !== "PROVISIONING")) return;
     const t = setInterval(reload, 3000);
     return () => clearInterval(t);
-  }, [id, task?.status]);
+  }, [id, task?.status, run?.status]);
 
   const reloadThreads = () => { api.listThreads(id).then(setThreads).catch((e) => setErr(String(e))); };
   const unresolved = (threads?.threads ?? []).filter((t) => t.status !== "resolved").length;
@@ -539,7 +539,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {spend && (
         <SpendPanel title={task.parentId ? "Spend (with the parent task)" : "Spend"} view={spend.task}
           onSave={!task.parentId && allows(role, "admin") ? async (l) => { await api.setTaskBudget(task.id, l); await reload(); } : undefined}>
-          {task.parentId && <p className="hint">Subtasks share their parent's budget; change it on the parent.</p>}
+          {task.parentId && <p className="hint">Subtasks share their parent's budget and max steps; change them on the parent.</p>}
+          {!task.parentId && allows(role, "admin") && <MaxStepsForm task={task} onSaved={reload} />}
           {task.status === "BLOCKED" && !task.parentId && children.length === 0 && !task.delivery && (
             <p>
               Blocked before its subtasks were planned{blockedWhy ? `: ${blockedWhy}` : ""}.{" "}
@@ -584,7 +585,13 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </p>
       )}
 
-      {task.status === "BLOCKED" && !task.delivery && (children.length > 0 || task.parentId) && (
+      {run?.status === "PROVISIONING" && (
+        <p className="warning blocked-why">
+          Resuming: building a new workspace and installing packages. This can take several minutes, and it carries on if you leave this page.
+        </p>
+      )}
+
+      {task.status === "BLOCKED" && !task.delivery && (children.length > 0 || task.parentId) && run?.status !== "PROVISIONING" && (
         <p className="warning blocked-why">
           {blockedChild
             ? <>Blocked by subtask “{blockedChild.title ?? blockedChild.requirement.slice(0, 100)}”{childWhy(blockedChild) ? `: ${childWhy(blockedChild)}` : "."}</>
@@ -946,6 +953,22 @@ function Reviews({ reviews, title }: { reviews: Review[]; title: string }) {
 }
 
 /** What model calls have cost so far against the caps (13.6). */
+function MaxStepsForm({ task, onSaved }: { task: Task; onSaved: () => Promise<void> }) {
+  const [steps, setSteps] = useState(String(task.budget?.maxSteps ?? ""));
+  const [err, setErr] = useState("");
+  const save = () => {
+    setErr("");
+    api.setTaskMaxSteps(task.id, Number(steps)).then(onSaved).catch((e) => setErr(String(e)));
+  };
+  return (
+    <div className="inline-form">
+      <label>Max steps per agent <input type="number" min={1} value={steps} onChange={(e) => setSteps(e.target.value)} /></label>
+      <button disabled={Number(steps) < 1} onClick={save}>Save steps</button>
+      {err && <span className="error">{err}</span>}
+    </div>
+  );
+}
+
 function SpendPanel({ title, view, onSave, children }: { title: string; view: SpendView; onSave?: (l: Limits) => Promise<void>; children?: ReactNode }) {
   const { spend: s, limits: l } = view;
   const tokens = s.inputTokens + s.outputTokens;

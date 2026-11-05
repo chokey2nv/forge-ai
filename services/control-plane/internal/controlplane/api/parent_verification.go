@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
@@ -26,7 +28,12 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 		return err
 	}
 
-	vr := h.Verifier.Run(ctx, ws.ContainerName, ws.WorktreePath, nil)
+	var vr *domain.VerificationRun
+	if child := h.verifiedSameCode(ctx, parent, ws.WorktreePath); child != "" {
+		vr = h.Verifier.RunWithoutTests(ctx, ws.ContainerName, ws.WorktreePath, "the same code already passed its tests in subtask "+child)
+	} else {
+		vr = h.Verifier.Run(ctx, ws.ContainerName, ws.WorktreePath, nil)
+	}
 	vr.ID = combinedVerificationID(parent)
 	vr.RunID = finalReviewRunID(parent) // so the final reviewers are shown these results
 	vr.TaskID = parent.ID
@@ -66,6 +73,34 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 	}
 	h.startReviews(ctx, run, parent)
 	return nil
+}
+
+// verifiedSameCode names a subtask whose passing verification was of exactly
+// the code now on the parent branch, as it is with one subtask or the last of a
+// sequence: its tests don't need another run.
+func (h *Handlers) verifiedSameCode(ctx context.Context, parent *domain.Task, worktree string) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", worktree, "status", "--porcelain").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "" {
+		return ""
+	}
+	tree, err := exec.CommandContext(ctx, "git", "-C", worktree, "rev-parse", "HEAD^{tree}").Output()
+	if err != nil {
+		return ""
+	}
+	children, err := h.Tasks.ListChildren(ctx, parent.ID)
+	if err != nil {
+		return ""
+	}
+	for _, c := range children {
+		vr, err := h.Verifications.LatestForRun(ctx, "run-"+c.ID)
+		if err != nil || vr == nil || !vr.Passed || vr.Tree == "" {
+			continue
+		}
+		if vr.Tree == strings.TrimSpace(string(tree)) {
+			return c.ID
+		}
+	}
+	return ""
 }
 
 func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (provider, model string) {

@@ -88,14 +88,21 @@ func TestCompletionAfterStaleMarking(t *testing.T) {
 func TestEmptyCompletionFromStaleRun(t *testing.T) {
 	stale := &domain.WorkflowRun{ID: "run-c", TaskID: "c", Status: domain.RunResumable,
 		LastCheckpoint: &domain.Checkpoint{WorkspaceDiff: "diff --git a/x b/x"}}
-	if keptDiff(stale, " \n") != "diff --git a/x b/x" {
+	if keptDiff(stale, " \n", false) != "diff --git a/x b/x" {
 		t.Error("an empty diff from a stale run replaced the checkpoint's")
 	}
-	if keptDiff(stale, "new") != "new" {
+	if keptDiff(stale, "new", false) != "new" {
 		t.Error("a real diff from a stale run is used")
 	}
-	if keptDiff(&domain.WorkflowRun{Status: domain.RunRunning, LastCheckpoint: stale.LastCheckpoint}, "") != "" {
+	live := &domain.WorkflowRun{Status: domain.RunRunning, LastCheckpoint: stale.LastCheckpoint}
+	if keptDiff(live, "", false) != "" {
 		t.Error("a live run's empty diff is reported as it is")
+	}
+	if keptDiff(live, "", true) != "diff --git a/x b/x" {
+		t.Error("a live run whose workspace can't be read replaced the checkpoint's diff")
+	}
+	if keptDiff(&domain.WorkflowRun{Status: domain.RunRunning}, "", true) != "" {
+		t.Error("with no checkpoint there is nothing to keep")
 	}
 
 	tasks := &casTasks{status: map[string]domain.TaskStatus{"c": domain.StatusResumable}}

@@ -66,6 +66,7 @@ type AgentCompleteBody struct {
 	StepCount     int              `json:"stepCount"`
 	Usage         []domain.Usage   `json:"usage"`
 	WorkspaceDiff string           `json:"workspaceDiff"`
+	WorkspaceLost bool             `json:"workspaceLost,omitempty"` // the diff could not be read
 	Messages      []domain.Message `json:"messages"`
 	Spend         *SpendReport     `json:"spend,omitempty"`
 }
@@ -98,7 +99,7 @@ func (h *Handlers) RecordComplete(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cp := &domain.Checkpoint{
 			Messages: body.Messages, StepCount: body.StepCount, Usage: body.Usage,
-			Status: body.Status, WorkspaceDiff: keptDiff(run, body.WorkspaceDiff), SavedAt: time.Now().UTC(),
+			Status: body.Status, WorkspaceDiff: keptDiff(run, body.WorkspaceDiff, body.WorkspaceLost), SavedAt: time.Now().UTC(),
 		}
 		if err := h.Runs.SaveCheckpoint(ctx, runID, cp, time.Now().UTC()); err != nil {
 			log.Printf("complete %s: save checkpoint failed (diff %d bytes): %v", runID, len(cp.WorkspaceDiff), err)
@@ -123,6 +124,12 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 		log.Printf("complete %s: empty diff from a run marked stale; leaving it resumable", run.ID)
 		return
 	}
+	if body.WorkspaceLost {
+		reason := "the workspace's container was removed before the agent finished, so its work since the last checkpoint could not be read. Resume restores the last checkpoint"
+		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunBlocked, reason, time.Now().UTC())
+		_ = h.SM.Transition(ctx, task, domain.StatusBlocked, reason)
+		return
+	}
 	// Implementers have no submission tool, so a text-only "I'm blocked" reply
 	// arrives as status=complete. An unchanged workspace is never a success.
 	if strings.TrimSpace(body.WorkspaceDiff) == "" {
@@ -144,10 +151,11 @@ func (h *Handlers) handleImplementerDone(ctx context.Context, run *domain.Workfl
 }
 
 // keptDiff is the diff to checkpoint: a run marked stale may report an empty
-// one because its workspace is being removed, which must not replace the
-// work a resume would rebuild from.
-func keptDiff(run *domain.WorkflowRun, diff string) string {
-	if strings.TrimSpace(diff) == "" && run.Status == domain.RunResumable && run.LastCheckpoint != nil {
+// one because its workspace is being removed, and any run's workspace can
+// become unreadable (lost). Neither may replace the work a resume would
+// rebuild from.
+func keptDiff(run *domain.WorkflowRun, diff string, lost bool) string {
+	if run.LastCheckpoint != nil && (lost || strings.TrimSpace(diff) == "" && run.Status == domain.RunResumable) {
 		return run.LastCheckpoint.WorkspaceDiff
 	}
 	return diff

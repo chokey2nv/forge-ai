@@ -109,11 +109,13 @@ export async function executeToolCall(
 
       case "git_diff": {
         const r = await ws.exec(["git", "diff"]);
+        if (r.exitCode !== 0) return { ok: false, output: r.stderr };
         return { ok: true, output: r.stdout || "(no changes)" };
       }
 
       case "git_status": {
         const r = await ws.exec(["git", "status", "--porcelain"]);
+        if (r.exitCode !== 0) return { ok: false, output: r.stderr };
         return { ok: true, output: r.stdout || "(clean)" };
       }
 

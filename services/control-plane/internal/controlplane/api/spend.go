@@ -242,6 +242,36 @@ func decodeLimits(w http.ResponseWriter, r *http.Request) (domain.Limits, bool) 
 
 // SetTaskBudget changes a top-level task's token and cost caps. Raising them
 // does not restart anything: retry or resume what the cap blocked.
+// SetTaskMaxSteps changes how many steps each of a task's agents gets, for the
+// task and its subtasks; a resume then gives that many more.
+func (h *Handlers) SetTaskMaxSteps(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	task, err := h.Tasks.Get(ctx, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if task.ParentID != "" {
+		http.Error(w, "a subtask shares its parent's budget: set it on "+task.ParentID, http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		MaxSteps int `json:"maxSteps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.MaxSteps < 1 {
+		http.Error(w, "maxSteps must be at least 1", http.StatusBadRequest)
+		return
+	}
+	if err := h.Tasks.SetMaxSteps(ctx, task.ID, body.MaxSteps, time.Now().UTC()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a := actorOf(r)
+	_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, Type: "budget.changed", Payload: body,
+		Actor: a.Name, ActorID: a.ID, At: time.Now().UTC()})
+	writeJSON(w, http.StatusOK, body)
+}
+
 func (h *Handlers) SetTaskBudget(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	task, err := h.Tasks.Get(ctx, r.PathValue("id"))

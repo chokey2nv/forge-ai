@@ -19,15 +19,29 @@ func NewRunner() *Runner {
 }
 
 func (r *Runner) Run(ctx context.Context, containerName, worktreePath string, diffScope []string) *domain.VerificationRun {
+	return r.run(ctx, containerName, worktreePath, diffScope, "")
+}
+
+// RunWithoutTests runs the other gates: the same code has already passed its
+// tests, and why is the reason shown for skipping them.
+func (r *Runner) RunWithoutTests(ctx context.Context, containerName, worktreePath, why string) *domain.VerificationRun {
+	return r.run(ctx, containerName, worktreePath, nil, why)
+}
+
+func (r *Runner) run(ctx context.Context, containerName, worktreePath string, diffScope []string, skipTests string) *domain.VerificationRun {
 	start := time.Now()
 	vr := &domain.VerificationRun{
 		StartedAt: start,
 	}
 
 	pctx := ProjectContext{Projects: workspace.Projects(worktreePath), DiffScopeAllow: diffScope}
-	vr.WorkspaceDiff = getDiff(ctx, containerName)
+	vr.WorkspaceDiff, vr.Tree = getDiff(ctx, containerName)
 
 	for _, g := range r.Gates {
+		if g.Name == "test" && skipTests != "" {
+			vr.Gates = append(vr.Gates, domain.GateResult{Name: g.Name, Passed: true, Skipped: true, SkipReason: skipTests})
+			continue
+		}
 		cmd, shouldRun := g.Command(pctx)
 		if !shouldRun {
 			vr.Gates = append(vr.Gates, domain.GateResult{
@@ -77,11 +91,15 @@ func truncateOutput(out string, limit int) string {
 	return out[:head] + "\n...[truncated]...\n" + out[len(out)-(limit-head):]
 }
 
-func getDiff(ctx context.Context, containerName string) string {
+func getDiff(ctx context.Context, containerName string) (diff, tree string) {
 	workspace.RunInContainer(ctx, containerName, []string{"git", "add", "-A"}, 10*time.Second)
 	r := workspace.RunInContainer(ctx, containerName, []string{"git", "diff", "--cached", "HEAD"}, 10*time.Second)
+	t := workspace.RunInContainer(ctx, containerName, []string{"git", "write-tree"}, 10*time.Second)
 	workspace.RunInContainer(ctx, containerName, []string{"git", "reset"}, 5*time.Second)
-	return r.Stdout
+	if t.ExitCode == 0 {
+		tree = strings.TrimSpace(t.Stdout)
+	}
+	return r.Stdout, tree
 }
 
 func (r *Runner) SummaryText(vr *domain.VerificationRun) string {

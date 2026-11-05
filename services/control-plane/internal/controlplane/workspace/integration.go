@@ -63,13 +63,14 @@ func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, chil
 		return nil, fmt.Errorf("child workspace: %w", err)
 	}
 
-	if err := installDeps(ctx, worktree, image, setupDuration(setupTimeoutSeconds)); err != nil {
+	mounts, err := installDeps(ctx, worktree, image, setupDuration(setupTimeoutSeconds))
+	if err != nil {
 		removeWorkspaceDir(ctx, parentRepoPath, worktree)
 		return nil, err
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := workerArgs(containerName, runID, worktree, image)
+	args := workerArgs(containerName, runID, worktree, image, mounts...)
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		removeWorkspaceDir(ctx, parentRepoPath, worktree)
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)
@@ -81,12 +82,13 @@ func ProvisionChild(ctx context.Context, parentRepoPath, integrationBranch, chil
 // ProvisionParentContainer starts a network-isolated container for a parent's
 // integration worktree (used after all children integrate, for combined verification).
 func ProvisionParentContainer(ctx context.Context, repoPath, integrationWorktree, image, runID string, setupTimeoutSeconds int) (*Workspace, error) {
-	if err := installDeps(ctx, integrationWorktree, image, setupDuration(setupTimeoutSeconds)); err != nil {
+	mounts, err := installDeps(ctx, integrationWorktree, image, setupDuration(setupTimeoutSeconds))
+	if err != nil {
 		return nil, err
 	}
 
 	containerName := fmt.Sprintf("forge-worker-%s", runID)
-	args := workerArgs(containerName, runID, integrationWorktree, image)
+	args := workerArgs(containerName, runID, integrationWorktree, image, mounts...)
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %s: %w", out, err)

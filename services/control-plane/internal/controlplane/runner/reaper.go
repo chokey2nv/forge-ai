@@ -29,8 +29,9 @@ var activeStatuses = []domain.TaskStatus{
 // use them, and sweeps labeled containers and workspace directories that no
 // active run owns (crashes, killed dependency installs, replaced retries).
 type Reaper struct {
-	Runs  store.RunRepo
-	Tasks store.TaskRepo
+	lastVolumeSweep time.Time
+	Runs            store.RunRepo
+	Tasks           store.TaskRepo
 
 	// OrphanGrace protects containers created moments ago whose run record
 	// is not written yet.
@@ -76,6 +77,10 @@ func (r *Reaper) Run(ctx context.Context) {
 
 // Sweep runs one reclamation pass.
 func (r *Reaper) Sweep(ctx context.Context) {
+	if time.Since(r.lastVolumeSweep) > time.Hour {
+		r.lastVolumeSweep = time.Now()
+		workspace.RemoveUnusedDepsVolumes(ctx)
+	}
 	active, err := r.activeTasks(ctx)
 	if err != nil {
 		log.Printf("reaper: list active tasks: %v", err)

@@ -302,6 +302,10 @@ The steps below do the same by hand.
 
 **Where verification looks.** A project is a folder with a `go.mod` or `package.json`: at the top of the repository or, when nothing above holds it, up to three folders down (not `node_modules`, `vendor`, `dist`, `build`, `target`, `fixtures`, `testdata`, `examples` or hidden folders). Every workspace except the head engineer's installs each project's packages, with pnpm or yarn when it has their lockfile, otherwise npm. The test gate runs each project's `test` script, or `go test`; a project with no test script is skipped. pnpm's packages are kept between workspaces in the user's cache folder (`forge/pnpm-store`).
 
+**Packages are installed once.** A project's packages go in a Docker volume named for its dependency files (`package.json`, the lockfile, `.npmrc`, `pnpm-workspace.yaml`), its folder and the worker image, and every workspace with the same ones mounts it read-only, so only the first has to wait. The install runs from those files alone, without the project's scripts. Changing one builds a new volume at the next workspace; `.vite` and `.cache` inside `node_modules` are writable per container. A project's own install scripts run in each workspace, offline, and can't write to the volume. Monorepos (`workspaces`, or `packages:` in `pnpm-workspace.yaml`), local dependencies and Go projects still install per workspace, as does a project whose volume build fails (logged as "not shared"). A volume unused for 14 days is removed; `docker volume ls --filter label=forge.deps=1` lists them, and `docker volume rm` is always safe when nothing is running. pnpm's downloads are kept in the `forge-pnpm-store` volume, which isn't cleaned up automatically.
+
+A parent's combined verification skips the test gate when its code is exactly what a subtask already passed (the gate shows as skipped, and why).
+
 A failing test blocks the task, including one that already failed before the task. Keep a repository's suite passing, and passing inside a worker's limits (2 CPUs, 2 GB, no network), or every code task on it will block.
 
 Run each in its own terminal, in this order: Mongo → control plane → adapter.
@@ -680,7 +684,10 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
 | `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
-| `max-steps-resume` | The implementer uses all its steps | `BLOCKED` with the reason; `POST /runs/{id}/resume` gives it the task's steps again, and it reaches `REVIEW_PENDING` |
+| `shared-deps` | A repository with a real package (fetched from the npm registry) | Installed once into a labelled volume; the agent's write to it fails with `EROFS`; the combined run skips the test gate on the same code; a second task builds nothing |
+| `max-steps-resume` | The implementer uses all its steps | `BLOCKED` with the reason; `PUT /tasks/{id}/max-steps` changes the limit on the task and its subtasks (project admins); `POST /runs/{id}/resume` gives it that many more, and it reaches `REVIEW_PENDING` |
+| `resume-twice` | The agent blocks again after a resume | Each resume gets its own container; the second keeps its container and the saved work, and the task reaches `REVIEW_PENDING` |
+| `container-lost` | The container is removed mid-run | `BLOCKED` with a reason that says so, `git_status` reports the error, the checkpoint keeps the work; `POST /runs/{id}/resume` finishes the task |
 | `long-model-reply` | A model reply takes longer than `STALE_AFTER` | The adapter's heartbeats keep the run alive; it isn't marked `RESUMABLE` |
 | `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
 | `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |

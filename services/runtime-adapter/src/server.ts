@@ -202,7 +202,8 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
           stepCount: state.stepCount,
           usage: state.usage,
           status: state.status,
-          workspaceDiff: diff,
+          workspaceDiff: diff ?? "",
+          workspaceLost: diff === null,
           spend: spend(state.usage),
         });
         if (answer?.stop) {
@@ -221,7 +222,8 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       stepCount: result.state.stepCount,
       usage: result.state.usage,
       messages: result.state.messages,
-      workspaceDiff: diff,
+      workspaceDiff: diff ?? "",
+      workspaceLost: diff === null,
       spend: spend(result.state.usage),
     });
   })().catch((err) => {
@@ -255,12 +257,14 @@ async function execInContainer(containerName: string, argv: string[], env?: Reco
   });
 }
 
-async function getWorkspaceDiff(containerName: string): Promise<string> {
+// null: the workspace can't be read (its container is gone), which says nothing
+// about the agent's work, unlike an empty diff.
+async function getWorkspaceDiff(containerName: string): Promise<string | null> {
   // Capture all changes including untracked: stage everything then diff HEAD, then unstage.
   await execInContainer(containerName, ["sh", "-c", "git add -A"]);
   const r = await execInContainer(containerName, ["git", "diff", "--cached", "HEAD"]);
   await execInContainer(containerName, ["git", "reset"]);
-  return r.stdout;
+  return r.exitCode === 0 ? r.stdout : null;
 }
 
 async function postCallback(url: string, token: string, body: unknown) {

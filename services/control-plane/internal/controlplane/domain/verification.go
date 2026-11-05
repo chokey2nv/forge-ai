@@ -10,9 +10,11 @@ type VerificationRun struct {
 	Passed        bool         `bson:"passed" json:"passed"`
 	Gates         []GateResult `bson:"gates" json:"gates"`
 	WorkspaceDiff string       `bson:"workspaceDiff" json:"workspaceDiff"`
-	StartedAt     time.Time    `bson:"startedAt" json:"startedAt"`
-	FinishedAt    time.Time    `bson:"finishedAt" json:"finishedAt"`
-	DurationMS    int          `bson:"durationMs" json:"durationMs"`
+	// Tree is the git tree verified: the same tree is the same code.
+	Tree       string    `bson:"tree,omitempty" json:"tree,omitempty"`
+	StartedAt  time.Time `bson:"startedAt" json:"startedAt"`
+	FinishedAt time.Time `bson:"finishedAt" json:"finishedAt"`
+	DurationMS int       `bson:"durationMs" json:"durationMs"`
 }
 
 type GateResult struct {

@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -9,6 +11,15 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
+
+// resumeFailed puts the run back so it can be tried again, and records why: a
+// resume can take minutes, and whoever asked may have left the page.
+func (h *Handlers) resumeFailed(ctx context.Context, run *domain.WorkflowRun, status domain.RunStatus, reason, why string) {
+	log.Printf("resume %s: %s", run.ID, why)
+	_ = h.Runs.UpdateStatus(ctx, run.ID, status, reason, time.Now().UTC())
+	_ = h.Events.Append(ctx, &domain.Event{TaskID: run.TaskID, RunID: run.ID, Type: "resume.failed",
+		Reason: "resume failed: " + why, At: time.Now().UTC()})
+}
 
 // resumedMaxSteps gives a resumed agent the task's steps again, on top of those
 // it has used: otherwise one stopped at the limit stops again at once. The spend
@@ -76,9 +87,12 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	// 	return
 	// }
 	_ = h.Runs.UpdateStatus(ctx, runID, domain.RunProvisioning, "", time.Now().UTC())
-	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, run.ID+"-r", h.SetupTimeout)
+	// Named for this resume: retiring the run's previous workspace below must
+	// not remove the container just made.
+	resumeID := fmt.Sprintf("%s-r%d", run.ID, time.Now().Unix())
+	ws, err := workspace.ProvisionWithSetup(ctx, task.RepoPath, run.BaseCommit, h.WorkerImage, resumeID, h.SetupTimeout)
 	if err != nil {
-		_ = h.Runs.UpdateStatus(ctx, runID, statusBefore, reasonBefore, time.Now().UTC())
+		h.resumeFailed(ctx, run, statusBefore, reasonBefore, err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -94,7 +108,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		checkpoint = run.LastCheckpoint
 		if err := workspace.ApplyDiff(ctx, ws.WorktreePath, run.LastCheckpoint.WorkspaceDiff); err != nil {
 			workspace.Cleanup(ctx, ws, task.RepoPath)
-			_ = h.Runs.UpdateStatus(ctx, runID, statusBefore, reasonBefore, time.Now().UTC())
+			h.resumeFailed(ctx, run, statusBefore, reasonBefore, "apply checkpoint diff: "+err.Error())
 			http.Error(w, "apply checkpoint diff: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -114,7 +128,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	h.reopenParent(ctx, task)
 
 	if _, err := h.Adapter.StartRun(ctx, &adapter.StartRunRequest{
-		RunID:          run.ID + "-r",
+		RunID:          resumeID,
 		CallbackRunID:  run.ID,
 		ContainerName:  ws.ContainerName,
 		WorktreePath:   ws.WorktreePath,
