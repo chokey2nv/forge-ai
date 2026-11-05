@@ -294,6 +294,17 @@ func roundPassed(round []*domain.Review) bool {
 	return true
 }
 
+// allErrored is true when no reviewer in the round managed to judge the
+// change, as when the model can't be reached.
+func allErrored(round []*domain.Review) bool {
+	for _, rv := range round {
+		if rv.Verdict != domain.VerdictError {
+			return false
+		}
+	}
+	return len(round) > 0
+}
+
 // roundSummary is one line per reviewer, for logs and transition reasons.
 func roundSummary(round []*domain.Review) string {
 	parts := make([]string, 0, len(round))
@@ -388,6 +399,9 @@ func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRu
 	// rejected final review goes straight to a human (accept or reject).
 	if isParentReview(task) {
 		reason := "final review rejected: " + summary
+		if allErrored(round) {
+			reason = "the final reviewers could not give a verdict, so this needs a person: " + round[0].Summary
+		}
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunEscalated, reason, now)
 		_ = h.SM.Transition(ctx, task, domain.StatusEscalated, reason)
 		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, RunID: run.ID, Type: "review.escalated", Reason: reason, At: now})

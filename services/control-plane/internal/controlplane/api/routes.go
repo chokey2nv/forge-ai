@@ -81,6 +81,7 @@ func (h *Handlers) Routes() []Route {
 		{"POST /tasks/{id}/reject", Reviewer, h.RejectTask},
 		{"POST /tasks/{id}/request-changes", Reviewer, h.RequestChanges},
 		{"POST /tasks/{id}/escalation", Reviewer, h.DecideEscalation},
+		{"POST /tasks/{id}/escalate", Member, h.EscalateTask},
 		{"GET /tasks/{id}/children", Viewer, h.ListTaskChildren},
 		{"GET /tasks/{id}/events", Viewer, h.ListTaskEvents},
 		{"GET /tasks/{id}/delivery", Viewer, h.GetDelivery},

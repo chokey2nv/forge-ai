@@ -469,6 +469,8 @@ export const api = {
             body: JSON.stringify({ rationale }),
         }),
     retryDelivery: (taskId: string) => j<{ status: string }>(`/tasks/${taskId}/deliver`, { method: "POST" }),
+    escalate: (taskId: string) =>
+        j<{ status: string }>(`/tasks/${taskId}/escalate`, { method: "POST" }),
     decideEscalation: (taskId: string, decision: EscalationDecision, rationale: string, guidance: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalation`, {
             method: "POST",

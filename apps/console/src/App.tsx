@@ -558,7 +558,14 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {task.status === "ESCALATED" && mayDecide && (
         <section className="approval escalation">
           <h3>Escalated — your decision</h3>
-          <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
+          {verification && !verification.passed ? (
+            <p>{sentence(reviewRun?.blockedReason ?? "Verification failed")} What failed is under <em>Verification</em> below. Accepting takes the change as it is, without those checks passing.</p>
+          ) : reviews.length > 0 ? (
+            <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
+          ) : (
+            <p>{sentence(reviewRun?.blockedReason ?? "This needs a decision")} Accepting takes the change as it is, without the remaining checks.</p>
+          )}
+          <p className="hint">Accepting calls no model, so it works when Claude can't be reached. Send back needs one.</p>
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="rationale (recorded with the decision)" />
           <textarea value={guidance} onChange={(e) => setGuidance(e.target.value)}
             placeholder={`guidance for the ${isParent(task) ? "head engineer" : "implementer"} (used by Send back)`} />
@@ -605,6 +612,24 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
               </button>
             </>
           )}
+          {allows(role, "member") && !blockedChild && (isParent(task) ? children.every((c) => c.status === "INTEGRATED") : run?.status === "BLOCKED") && (
+            <>
+              {" "}
+              <button className="neutral" onClick={() => api.escalate(task.id).then(reload).catch((e) => setErr(String(e)))}>
+                Escalate
+              </button>
+            </>
+          )}
+        </p>
+      )}
+
+      {(task.status === "VERIFYING" || task.status === "AGENT_REVIEW") && allows(role, "member") && (
+        <p className="hint">
+          {task.status === "VERIFYING" ? "The checks are running." : "The reviewers are working."} If you're satisfied without them, or Claude can't be reached, you can stop and decide yourself.{" "}
+          <button className="neutral"
+            onClick={() => { if (window.confirm("Stop the remaining checks and decide on this change yourself?")) api.escalate(task.id).then(reload).catch((e) => setErr(String(e))); }}>
+            Skip the checks
+          </button>
         </p>
       )}
 

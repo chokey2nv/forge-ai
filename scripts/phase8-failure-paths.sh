@@ -40,6 +40,10 @@
 #   container-lost     the container is removed mid-run: the run blocks and says so, the checkpoint survives, resume finishes
 #   review-retry-steps review sends back an agent near its step limit: it gets more steps, not an instant stop
 #   scope-conflict     the agent reports a criterion it can't meet: the first rejection escalates, naming it
+#   verify-escalate    verification fails twice; escalating lets a person send it back with guidance, and it passes
+#   combined-escalate  each subtask passes but the combined change fails; escalating and accepting reaches REVIEW_PENDING
+#   skip-checks        a person stops the running checks; accepting integrates the subtask, and the parent goes to review without its own
+#   no-model-accept    the model refuses every call: nothing retries, and a subtask with saved work can still be accepted
 #   long-model-reply   one reply outlasts STALE_AFTER: heartbeats keep the run alive, it isn't marked stale
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
@@ -59,7 +63,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery shared-deps max-steps-resume resume-twice container-lost review-retry-steps scope-conflict long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery shared-deps max-steps-resume resume-twice container-lost review-retry-steps scope-conflict verify-escalate combined-escalate skip-checks no-model-accept long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -502,6 +506,107 @@ run_scope_conflict() {
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
   check "parent reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+}
+
+run_verify_escalate() {
+  local repo task child s final code guidance="Round to cents with Math.round."
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 120); do child=$(child_of "$task"); [ -n "$child" ] && break; sleep 1; done
+  s=$(wait_status "$child" "ESCALATED|BLOCKED|INTEGRATED|REJECTED" 300) || true
+  check "the subtask blocks after failing verification ($s)" "$([ "$s" = BLOCKED ] && has_reason "$child" "verification failed after 2 attempts"; echo $?)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/escalate")
+  check "a parent blocked by its subtask can't be escalated itself (HTTP $code)" "$([ "$code" = 409 ]; echo $?)"
+  check "a viewer can't escalate (403)" "$([ "$(as "$VIEWER" -X POST "$CP/tasks/$child/escalate")" = 403 ]; echo $?)"
+  check "a member escalates (HTTP 202)" "$([ "$(as "$MEMBER" -X POST "$CP/tasks/$child/escalate")" = 202 ]; echo $?)"
+  check "the subtask is ESCALATED, naming the failed gate" "$([ "$(status_of "$child")" = ESCALATED ] && has_reason "$child" "verification failed (test); escalated by"; echo $?)"
+  check "the parent waits on it instead of being blocked" "$([ "$(status_of "$task")" = DISPATCHED ]; echo $?)"
+  check "escalating twice is refused (409)" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$child/escalate")" = 409 ]; echo $?)"
+  code=$(decide "$child" retry "$guidance")
+  check "send back accepted (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  reasons "$child" | sed 's/^/      /'
+  check "the agent was told what failed, and the guidance" \
+    "$(curl -sf "$CP/runs/run-$child" | jq -e --arg g "$guidance" '[.lastCheckpoint.messages[].content] | any(contains("failed verification") and contains("test: FAILED") and contains($g))' >/dev/null; echo $?)"
+  check "it passes, and no review round was used" \
+    "$([ "$final" = REVIEW_PENDING ] && verdicts "run-$child" | grep -q '^1 reviewer pass'; echo $?)"
+}
+
+run_combined_escalate() {
+  local repo task s code final
+  repo=$(new_repo parallel-features)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  s=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 400) || true
+  check "each subtask passes, the combined change fails ($s)" "$([ "$s" = BLOCKED ] && has_reason "$task" "combined verification failed"; echo $?)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/escalate")
+  check "the parent escalates (HTTP $code)" "$([ "$code" = 202 ] && [ "$(status_of "$task")" = ESCALATED ]; echo $?)"
+  code=$(decide "$task" accept "")
+  check "accepting is taken (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+  final=$(status_of "$task")
+  stop_adapter
+  echo "  parent $task -> $final"
+  reasons "$task" | sed 's/^/      /'
+  check "the change goes up for human review as a revision ($final)" \
+    "$([ "$final" = REVIEW_PENDING ] && [ "$(curl -sf "$CP/tasks/$task" | jq '.revisions | length')" = 1 ]; echo $?)"
+}
+
+run_skip_checks() {
+  local repo task child s code final
+  repo=$(new_repo)
+  mkdir -p "$repo/tests"
+  cat > "$repo/tests/slow.test.js" <<'SLOW'
+const { test } = require("node:test");
+test("slow", () => new Promise((r) => setTimeout(r, 120000)));
+SLOW
+  git -C "$repo" add -A && git -C "$repo" -c user.name=forge -c user.email=forge@localhost commit -q -m slow
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 120); do child=$(child_of "$task"); [ -n "$child" ] && break; sleep 1; done
+  s=$(wait_status "$child" "VERIFYING" 200) || true
+  check "the subtask's checks are running ($s)" "$([ "$s" = VERIFYING ]; echo $?)"
+  check "a running agent can't be escalated: the parent has subtasks in progress (409)" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/escalate")" = 409 ]; echo $?)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$child/escalate")
+  check "stopping them is accepted (HTTP $code)" "$([ "$code" = 202 ] && [ "$(status_of "$child")" = ESCALATED ]; echo $?)"
+  code=$(decide "$child" accept "")
+  check "accepting integrates the subtask (HTTP $code)" "$([ "$code" = 202 ] && [ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
+  s=$(wait_status "$task" "VERIFYING" 60) || true
+  check "the parent's combined check starts ($s)" "$([ "$s" = VERIFYING ]; echo $?)"
+  sleep 3
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$task/escalate")
+  check "stopping the parent's is accepted too (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+  code=$(decide "$task" accept "")
+  final=$(status_of "$task")
+  check "accepting puts it up for human review (HTTP $code, $final)" "$([ "$code" = 202 ] && [ "$final" = REVIEW_PENDING ]; echo $?)"
+  sleep 8
+  s=$(status_of "$task")
+  code=$(mongosh --quiet "$DB" --eval "print(db.verificationRuns.countDocuments({taskId:{\$in:['$task','$child']}}))")
+  check "the stopped checks don't change anything later ($s, $code results kept)" "$([ "$s" = REVIEW_PENDING ] && [ "$code" = 0 ]; echo $?)"
+  check "their containers are gone" "$([ -z "$(docker ps -q --filter "name=forge-worker-$task")" ] && [ -z "$(docker ps -q --filter "name=forge-worker-$child")" ]; echo $?)"
+  stop_adapter
+  reasons "$task" | sed 's/^/      /'
+}
+
+run_no_model_accept() {
+  local repo task child s code final
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 120); do child=$(child_of "$task"); [ -n "$child" ] && break; sleep 1; done
+  s=$(wait_status "$child" "ESCALATED|BLOCKED|INTEGRATED|REJECTED" 200) || true
+  check "out of steps, it blocks with saved work ($s)" "$([ "$s" = BLOCKED ]; echo $?)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/tasks/$child/escalate")
+  check "any blocked subtask with saved work can be escalated (HTTP $code)" "$([ "$code" = 202 ] && has_reason "$child" "max steps (10) exhausted; escalated by"; echo $?)"
+  code=$(decide "$child" accept "")
+  check "accepting integrates it without a model (HTTP $code)" "$([ "$code" = 202 ] && [ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|ESCALATED|REJECTED" 300) || true
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  check "the reviewers can't run, so the parent escalates and says why ($final)" \
+    "$([ "$final" = ESCALATED ] && [ "$(event_count "$task" state.transition "could not give a verdict")" -ge 1 ]; echo $?)"
 }
 
 run_add_agent() {
@@ -1208,6 +1313,10 @@ for SC in "${SCENARIOS[@]}"; do
     add-agent) run_add_agent ;;
     container-lost) run_container_lost ;;
     scope-conflict) run_scope_conflict ;;
+    verify-escalate) run_verify_escalate ;;
+    combined-escalate) run_combined_escalate ;;
+    skip-checks) run_skip_checks ;;
+    no-model-accept) run_no_model_accept ;;
     escalate-accept) run_escalation accept ;;
     escalate-retry) run_escalation retry ;;
     final-review-escalates) run_final_review_escalates ;;

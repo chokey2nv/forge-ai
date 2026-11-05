@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { ClaudeProvider } from "./claude-provider";
-import { RateLimitError } from "./types";
+import { ModelRefusedError, RateLimitError } from "./types";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -54,4 +54,14 @@ test("a 429 without retry-after is still a rate limit, and a 500 is not", async 
   await assert.rejects(provider().complete(request), (e: unknown) => e instanceof RateLimitError && e.retryAfterMs === undefined);
   respondWith(new Response("{}", { status: 500 }));
   await assert.rejects(provider().complete(request), (e: unknown) => e instanceof Error && !(e instanceof RateLimitError));
+});
+
+test("no credit or a bad key is refused, not worth retrying", async () => {
+  const lowCredit = JSON.stringify({ error: { message: "Your credit balance is too low to access the API" } });
+  for (const res of [new Response(lowCredit, { status: 400 }), new Response("{}", { status: 401 }), new Response("{}", { status: 402 }), new Response("{}", { status: 403 })]) {
+    respondWith(res);
+    await assert.rejects(provider().complete(request), (e: unknown) => e instanceof ModelRefusedError);
+  }
+  respondWith(new Response("{}", { status: 400 }));
+  await assert.rejects(provider().complete(request), (e: unknown) => e instanceof Error && !(e instanceof ModelRefusedError));
 });

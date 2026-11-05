@@ -1,4 +1,4 @@
-import { RateLimitError, type ModelMessage, type ModelProvider, type ModelRequest, type ModelResponse, type ModelTool, type ModelUsage } from "./types";
+import { ModelRefusedError, RateLimitError, type ModelMessage, type ModelProvider, type ModelRequest, type ModelResponse, type ModelTool, type ModelUsage } from "./types";
 import { executeToolCall } from "./executor";
 import type { Workspace } from "./workspace";
 
@@ -195,6 +195,10 @@ async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[], maxToke
       };
       return await cfg.provider.complete(req);
     } catch (e) {
+      if (e instanceof ModelRefusedError) {
+        console.error("[adapter] the model provider refused the call:", e.message);
+        return `the model provider refused the call, so no agent can run until that's fixed (check the API key and credit): ${e.message}`;
+      }
       if (e instanceof RateLimitError) {
         if (waited >= maxWait) {
           return `still rate limited by the model provider after waiting ${Math.round(waited / 1000)}s; resume it once other work has finished`;

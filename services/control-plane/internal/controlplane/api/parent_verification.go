@@ -34,6 +34,9 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 	} else {
 		vr = h.Verifier.Run(ctx, ws.ContainerName, ws.WorktreePath, nil)
 	}
+	if !h.stillVerifying(ctx, parent.ID) {
+		return nil // stopped by a person, who is deciding without it
+	}
 	vr.ID = combinedVerificationID(parent)
 	vr.RunID = finalReviewRunID(parent) // so the final reviewers are shown these results
 	vr.TaskID = parent.ID
@@ -75,9 +78,9 @@ func (h *Handlers) RunParentVerification(parent *domain.Task) error {
 	return nil
 }
 
-// verifiedSameCode names a subtask whose passing verification was of exactly
-// the code now on the parent branch, as it is with one subtask or the last of a
-// sequence: its tests don't need another run.
+// verifiedSameCode names a subtask whose tests passed on exactly the code now
+// on the parent branch, as it is with one subtask or the last of a sequence:
+// they don't need another run.
 func (h *Handlers) verifiedSameCode(ctx context.Context, parent *domain.Task, worktree string) string {
 	out, err := exec.CommandContext(ctx, "git", "-C", worktree, "status", "--porcelain").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "" {
@@ -93,7 +96,7 @@ func (h *Handlers) verifiedSameCode(ctx context.Context, parent *domain.Task, wo
 	}
 	for _, c := range children {
 		vr, err := h.Verifications.LatestForRun(ctx, "run-"+c.ID)
-		if err != nil || vr == nil || !vr.Passed || vr.Tree == "" {
+		if err != nil || vr == nil || vr.Tree == "" || !testsPassed(vr) {
 			continue
 		}
 		if vr.Tree == strings.TrimSpace(string(tree)) {
@@ -101,6 +104,17 @@ func (h *Handlers) verifiedSameCode(ctx context.Context, parent *domain.Task, wo
 		}
 	}
 	return ""
+}
+
+// testsPassed: the test gate ran and passed, whatever other gates said (a
+// person may have accepted a subtask that failed its scope check, say).
+func testsPassed(vr *domain.VerificationRun) bool {
+	for _, g := range vr.Gates {
+		if g.Name == "test" {
+			return g.Passed && !g.Skipped
+		}
+	}
+	return false
 }
 
 func parentProvenance(ctx context.Context, h *Handlers, parent *domain.Task) (provider, model string) {

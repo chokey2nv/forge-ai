@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runAgent, type AgentConfig } from "./agent";
-import { RateLimitError, type ModelProvider, type ModelRequest, type ModelResponse } from "./types";
+import { ModelRefusedError, RateLimitError, type ModelProvider, type ModelRequest, type ModelResponse } from "./types";
 import type { Workspace } from "./workspace";
 
 const reply = (r: Partial<ModelResponse>): ModelResponse => ({
@@ -114,4 +114,13 @@ test("any other failure still uses up retries", async () => {
   const { finalMessage } = await runAgent(cfg, "t");
   assert.equal(calls(), 1);
   assert.equal(finalMessage, "model call failed after 0 retries");
+});
+
+test("a refused call isn't retried, and says why", async () => {
+  const { cfg, calls } = limitedThen([new ModelRefusedError("HTTP 400 credit balance too low")], reply({ content: "done" }));
+  cfg.maxRetries = 2;
+  const { state, finalMessage } = await runAgent(cfg, "t");
+  assert.equal(calls(), 1);
+  assert.equal(state.status, "error");
+  assert.match(finalMessage, /refused the call.*credit balance too low/);
 });

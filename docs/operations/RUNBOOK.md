@@ -691,6 +691,10 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `container-lost` | The container is removed mid-run | `BLOCKED` with a reason that says so, `git_status` reports the error, the checkpoint keeps the work; `POST /runs/{id}/resume` finishes the task |
 | `review-retry-steps` | Review sends back an agent close to its step limit | It gets the task's steps again on top of those used, and finishes |
 | `scope-conflict` | The agent calls `report_out_of_scope` | The first rejection escalates with the criterion and what it needs; a person decides |
+| `verify-escalate` | Verification fails twice | `BLOCKED`; `POST /tasks/{id}/escalate` (members; any blocked or checking task with work to accept) makes it `ESCALATED`, naming the failed gates; Send back gives the agent the failures and guidance, without using a review round |
+| `combined-escalate` | Each subtask passes but the combined change fails | The parent can be escalated too; accepting puts the change up for human review as a revision |
+| `skip-checks` | A person stops running checks with `POST /tasks/{id}/escalate` | The subtask or parent is `ESCALATED` and accepting moves it on; the stopped checks' result is discarded |
+| `no-model-accept` | No agent can run | A blocked subtask with saved work can be escalated and accepted; reviewers that can't run escalate the parent, which says why |
 | `long-model-reply` | A model reply takes longer than `STALE_AFTER` | The adapter's heartbeats keep the run alive; it isn't marked `RESUMABLE` |
 | `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
 | `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |

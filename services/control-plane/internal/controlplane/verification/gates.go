@@ -49,20 +49,24 @@ if [ -n "$HITS" ]; then echo "Potential secrets in added lines:"; echo "$HITS"; 
 				if len(p.DiffScopeAllow) == 0 {
 					return Command{}, false
 				}
+				// "$@" keeps a pattern whole: expanded unquoted, the shell turns
+				// dir/** into dir's top-level entries, and files below them fail.
 				script := `
-ALLOW="$@"
 changed=$( { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | sort -u)
 viol=""
-for f in $changed; do
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   ok=0
-  for pat in $ALLOW; do
+  for pat in "$@"; do
     case "$pat" in
       *"/**") pfx="${pat%/\*\*}"; case "$f" in "$pfx"/*) ok=1; break;; esac ;;
       *)      [ "$f" = "$pat" ] && { ok=1; break; } ;;
     esac
   done
   [ "$ok" = "0" ] && viol="$viol $f"
-done
+done <<EOF
+$changed
+EOF
 if [ -n "$viol" ]; then echo "Files outside allowed scope:$viol"; exit 1; fi
 `
 				args := append([]string{"-c", script, "sh"}, p.DiffScopeAllow...)

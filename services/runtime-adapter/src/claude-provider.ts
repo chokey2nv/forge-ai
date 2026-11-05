@@ -8,7 +8,7 @@ import type {
   ModelToolCall,
   ModelUsage,
 } from "./types";
-import { RateLimitError } from "./types";
+import { ModelRefusedError, RateLimitError } from "./types";
 import type { ModelMessage } from "./types";
 
 export interface ClaudeProviderConfig {
@@ -177,6 +177,10 @@ export class ClaudeProvider implements ModelProvider {
       if (res.status === 429) {
         const seconds = Number(res.headers.get("retry-after") ?? NaN);
         throw new RateLimitError(message, Number.isFinite(seconds) ? seconds * 1000 : undefined);
+      }
+      // A credit balance that has run out can also arrive as a 400.
+      if (res.status === 401 || res.status === 402 || res.status === 403 || /credit balance/i.test(text)) {
+        throw new ModelRefusedError(message);
       }
       throw new Error(message);
     }

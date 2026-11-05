@@ -46,6 +46,7 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusRejected,
 	},
 	domain.StatusVerifying: {
+		domain.StatusEscalated, // someone stopped the checks to decide
 		domain.StatusAgentReview,
 		domain.StatusReviewPending,
 		domain.StatusRunning,
@@ -103,6 +104,7 @@ var taskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.StatusDelivering,  // delivery retried after fixing what blocked it
 		domain.StatusDispatched,  // parent: a blocked subtask was resumed (13.6)
 		domain.StatusDecomposing, // blocked before any subtask was planned: started again (13.6)
+		domain.StatusEscalated,   // someone asked a person to decide
 	},
 	domain.StatusResumable: {domain.StatusRunning},
 	// Integrated, Rejected, RolledBack terminal

@@ -167,3 +167,20 @@ func TestContinuingAgentGetsMoreSteps(t *testing.T) {
 		t.Errorf("past the limit: %d", n)
 	}
 }
+
+// A subtask accepted after failing another gate still proved its tests.
+func TestTestsPassed(t *testing.T) {
+	vr := func(g ...domain.GateResult) *domain.VerificationRun { return &domain.VerificationRun{Gates: g} }
+	if !testsPassed(vr(domain.GateResult{Name: "diff-scope"}, domain.GateResult{Name: "test", Passed: true})) {
+		t.Error("the test gate passed, the scope gate didn't")
+	}
+	if testsPassed(vr(domain.GateResult{Name: "test"})) {
+		t.Error("the test gate failed")
+	}
+	if testsPassed(vr(domain.GateResult{Name: "test", Passed: true, Skipped: true})) {
+		t.Error("skipped proves nothing")
+	}
+	if testsPassed(vr(domain.GateResult{Name: "build", Passed: true})) {
+		t.Error("no test gate")
+	}
+}

@@ -1,0 +1,166 @@
+{
+  "head-engineer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_task_graph",
+          "arguments": {
+            "tasks": [
+              {
+                "acceptance": [
+                  "npm test passes"
+                ],
+                "assignedAgent": "implementer",
+                "dependsOn": [],
+                "rationale": "Independent.",
+                "id": "t1",
+                "title": "Add the marker check",
+                "diffScope": [
+                  "tests/marker.test.js"
+                ]
+              },
+              {
+                "acceptance": [
+                  "npm test passes"
+                ],
+                "assignedAgent": "implementer",
+                "dependsOn": [],
+                "rationale": "Independent.",
+                "id": "t2",
+                "title": "Add the marker",
+                "diffScope": [
+                  "marker.txt"
+                ]
+              }
+            ],
+            "notes": "Two siblings."
+          }
+        }
+      ]
+    }
+  ],
+  "implementer": {
+    "Add the marker check\n": [
+      {
+        "toolCalls": [
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "tests/marker.test.js",
+              "content": "const { test } = require(\"node:test\");\nconst assert = require(\"node:assert/strict\");\nconst fs = require(\"node:fs\");\n\ntest(\"no marker\", () => assert.equal(fs.existsSync(\"marker.txt\"), false));\n"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Added."
+      }
+    ],
+    "Add the marker\n": [
+      {
+        "toolCalls": [
+          {
+            "name": "write_file",
+            "arguments": {
+              "path": "marker.txt",
+              "content": "x\n"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Added."
+      }
+    ]
+  },
+  "reviewer": [
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    },
+    {
+      "toolCalls": [
+        {
+          "name": "submit_review",
+          "arguments": {
+            "verdict": "pass",
+            "summary": "Meets every acceptance criterion."
+          }
+        }
+      ]
+    }
+  ]
+}

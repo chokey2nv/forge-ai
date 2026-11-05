@@ -11,7 +11,8 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 )
 
-// Escalation decisions for a task whose reviewers kept rejecting it.
+// Escalation decisions for a task whose reviewers kept rejecting it, or that
+// someone asked a person to decide on (EscalateTask).
 const (
 	EscalationAccept = "accept" // integrate (child) or go to human approval (root)
 	EscalationRetry  = "retry"  // one more round, with the human's guidance (a parent: a head engineer follow-up)
@@ -112,12 +113,23 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case EscalationRetry:
+		failed := h.failedVerification(ctx, run.ID)
 		feedback, err := h.escalationFeedback(ctx, run, req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if failed != nil {
+			feedback = h.verificationFeedback(failed, req)
+		}
 		if isParentReview(task) {
+			if failed != nil {
+				if _, code, err := h.startFollowUp(bg, task, domain.FollowUpEscalationRetry, who, req.Guidance, "# Combined verification (escalated)\n\n"+h.Verifier.SummaryText(failed)); err != nil {
+					http.Error(w, err.Error(), code)
+					return
+				}
+				break
+			}
 			// The combined change has no single implementer: the head
 			// engineer plans the follow-up work, as for requested changes.
 			if _, code, err := h.startFollowUp(bg, task, domain.FollowUpEscalationRetry, who, req.Guidance, "# Final review (escalated)\n\n"+rejectionFeedback(roundOf(ctx, h, run))); err != nil {
@@ -130,9 +142,14 @@ func (h *Handlers) DecideEscalation(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		// One more round, numbered after the escalated one, with fresh
-		// verification attempts. Another rejection escalates again.
-		_ = h.Runs.StartReviewRound(ctx, run.ID, run.ReviewRound+1, now)
+		if failed != nil || len(roundOf(ctx, h, run)) == 0 {
+			// Fresh verification attempts; no review round was used.
+			_ = h.Runs.UpdateVerification(ctx, run.ID, 0, false, domain.RunRunning, "", now)
+		} else {
+			// One more round, numbered after the escalated one, with fresh
+			// verification attempts. Another rejection escalates again.
+			_ = h.Runs.StartReviewRound(ctx, run.ID, run.ReviewRound+1, now)
+		}
 		go h.reinvokeImplementer(run, task, feedback) // provisioning takes a while
 	}
 
@@ -175,7 +192,11 @@ func (h *Handlers) escalationFeedback(ctx context.Context, run *domain.WorkflowR
 
 func escalationMessage(round []*domain.Review, req escalationRequest) string {
 	var b strings.Builder
-	b.WriteString(rejectionFeedback(round))
+	if len(round) > 0 {
+		b.WriteString(rejectionFeedback(round))
+	} else {
+		b.WriteString("A person sent your change back.\n")
+	}
 	fmt.Fprintf(&b, "\n## Guidance from %s (human reviewer)\n", req.Reviewer)
 	if req.Guidance != "" {
 		b.WriteString(req.Guidance)

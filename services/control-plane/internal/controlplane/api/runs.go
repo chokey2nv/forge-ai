@@ -205,6 +205,10 @@ func (h *Handlers) runVerificationAndReview(ctx context.Context, run *domain.Wor
 	attempt := run.VerificationAttempt + 1
 
 	vr := h.Verifier.Run(ctx, run.ContainerName, run.WorktreePath, task.DiffScope)
+	if !h.stillVerifying(ctx, task.ID) {
+		log.Printf("verification %s: stopped by a person; result discarded", run.ID)
+		return
+	}
 	vr.ID = fmt.Sprintf("vr-%s-r%d-%d", run.ID, run.ReviewRound, attempt)
 	vr.RunID, vr.TaskID, vr.Attempt = run.ID, task.ID, attempt
 	_ = h.Verifications.Create(ctx, vr)

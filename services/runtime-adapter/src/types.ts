@@ -38,6 +38,9 @@ export class RateLimitError extends Error {
   }
 }
 
+/** The provider won't serve this key (no credit, or a bad key): trying again can't help. */
+export class ModelRefusedError extends Error {}
+
 export interface ModelUsage {
   /** Tokens at full price. Cached ones are counted apart. */
   inputTokens?: number;
