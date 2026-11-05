@@ -680,6 +680,7 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `deliver-dirty` | The target checkout has an uncommitted edit | `BLOCKED` with "uncommitted changes", edit untouched; after cleaning, `POST /tasks/{id}/deliver` → `MERGED`; retrying a delivered task → 409 |
 | `deliver-pr` | A GitHub remote (pushes go to a local bare repo) | `PR_OPEN`; branch on origin; stub `gh` saw `pr create --base … --head … --repo github.com/example/app` with the criteria and reviews in the body; PR merged → `MERGED` |
 | `deliver-pr-closed` | Same, the PR is closed | `REJECTED` ("closed without merging") |
+| `long-model-reply` | A model reply takes longer than `STALE_AFTER` | The adapter's heartbeats keep the run alive; it isn't marked `RESUMABLE` |
 | `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
 | `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |
 | `subfolder-tests` | The project is in `app/` and uses pnpm; the first fix is wrong | The test gate runs `pnpm test` in `app/`, fails, the retry passes, `REVIEW_PENDING` |

@@ -9,6 +9,17 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 )
 
+// RecordHeartbeat: the adapter is still working on the run. A step can far
+// outlast STALE_AFTER (a long model reply, a test suite), so liveness can't
+// wait for the next checkpoint.
+func (h *Handlers) RecordHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if err := h.Runs.Heartbeat(r.Context(), r.PathValue("id"), time.Now().UTC()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handlers) RecordCheckpoint(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	runID := r.PathValue("id")

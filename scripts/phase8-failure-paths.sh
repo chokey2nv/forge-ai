@@ -34,6 +34,7 @@
 #   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
 #   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
 #   feedback-budget    a task budgeted for one revision cannot be sent back
+#   long-model-reply   one reply outlasts STALE_AFTER: heartbeats keep the run alive, it isn't marked stale
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
 #   blank-reply        the agent stops with no text and no change: blocked, and the reason says so
@@ -52,7 +53,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery cut-off-reply cut-off-always blank-reply subfolder-tests)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -248,6 +249,10 @@ run_scenario() {
   reasons "$child" | sed 's/^/      /'
 
   case "$SC" in
+    long-model-reply)
+      check "the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      check "the run was never marked stale" "$(! has_reason "$child" "no heartbeat"; echo $?)"
+      ;;
     cut-off-reply)
       check "asked again with a higher limit, the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "the cut-off call is spent, the partial reply isn't kept" \
@@ -398,10 +403,14 @@ run_crash_resume() {
   check "watcher marks the child RESUMABLE" "$([ "$s" = RESUMABLE ]; echo $?)"
 
   start_adapter "$SCEN/crash-resume-b.json"
+  # An earlier resume that died part-way must not stop this one.
+  mongosh --quiet "$DB" --eval "db.workflowRuns.updateOne({_id: '$run'}, {\$set: {status: 'PROVISIONING'}})" >/dev/null
   local code; code=$(curl -s -o "$WORK/resume.out" -w '%{http_code}' -X POST "$CP/runs/$run/resume")
   check "resume accepted (HTTP $code: $(head -c 120 "$WORK/resume.out"))" "$([ "$code" = 202 ]; echo $?)"
   final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
   stop_adapter
+  check "the resumed agent is told it was interrupted" \
+    "$(curl -sf "$CP/runs/$run" | jq -e '[.lastCheckpoint.messages[] | select(.role == "user" and (.content | contains("You were interrupted")))] | length == 1' >/dev/null; echo $?)"
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
   check "parent reaches REVIEW_PENDING after resume" "$([ "$final" = REVIEW_PENDING ]; echo $?)"

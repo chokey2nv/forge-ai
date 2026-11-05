@@ -74,7 +74,7 @@ You review diffs for security defects.
 		assignable = append(assignable, a.Name)
 	}
 	sort.Strings(assignable)
-	if got, want := strings.Join(assignable, ","), "implementer,qa-engineer"; got != want {
+	if got, want := strings.Join(assignable, ","), "frontend-engineer,implementer,qa-engineer"; got != want {
 		t.Errorf("assignable agents = %s, want %s (reviewers, planners and the head engineer must not take subtasks)", got, want)
 	}
 

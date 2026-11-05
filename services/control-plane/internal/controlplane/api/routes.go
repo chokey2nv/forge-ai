@@ -107,6 +107,7 @@ func (h *Handlers) Routes() []Route {
 		{"POST /runs/{id}/resume", Member, h.ResumeRun},
 
 		{"POST /runs/{id}/checkpoint", RunCallback, h.RecordCheckpoint},
+		{"POST /runs/{id}/heartbeat", RunCallback, h.RecordHeartbeat},
 		{"POST /runs/{id}/complete", RunCallback, h.RecordComplete},
 	}
 }

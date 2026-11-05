@@ -425,6 +425,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [delivery, setDelivery] = useState<DeliveryPreview | null>(null);
   const [spend, setSpend] = useState<TaskSpend | null>(null);
   const [blockedWhy, setBlockedWhy] = useState("");
+  const [resuming, setResuming] = useState(false);
   // Decisions and comments are recorded as the signed-in user (13.3); what
   // they may do follows their role in the task's project (13.4).
   const me = useContext(CurrentUser);
@@ -577,6 +578,18 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
+      {task.status === "RESUMABLE" && run && (
+        <p className="warning blocked-why">
+          This run was interrupted: its agent stopped reporting, because the agent or Forge stopped or lost contact. Its work up to the last checkpoint is kept.{" "}
+          {allows(role, "member") && (
+            <button className="neutral" disabled={resuming}
+              onClick={() => { setResuming(true); api.resumeRun(run.id).then(reload).catch((e) => setErr(String(e))).finally(() => setResuming(false)); }}>
+              {resuming ? "Resuming… (installing packages can take minutes)" : "Resume"}
+            </button>
+          )}
+        </p>
+      )}
+
       {task.status === "BLOCKED" && !task.delivery && (children.length > 0 || task.parentId) && (
         <p className="warning blocked-why">
           {blockedChild
@@ -597,6 +610,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
                   <td>
                     {c.title ?? c.requirement.slice(0, 100)}
                     {c.status === "BLOCKED" && childWhy(c) && <div className="warning blocked-why">{childWhy(c)}</div>}
+                    {c.status === "RESUMABLE" && <div className="warning blocked-why">Interrupted: open it to resume.</div>}
                   </td>
                   <td><code>{c.assignedAgent}</code></td>
                   <td>

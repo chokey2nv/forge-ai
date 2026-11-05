@@ -5,6 +5,7 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/delivery"
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/domain"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/adapter"
@@ -16,6 +17,8 @@ import (
 )
 
 type Handlers struct {
+	// resuming: runs whose workspace a resume is building right now.
+	resuming      sync.Map
 	Tasks         store.TaskRepo
 	Runs          store.RunRepo
 	Events        store.EventRepo

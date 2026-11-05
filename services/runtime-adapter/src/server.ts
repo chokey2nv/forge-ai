@@ -24,6 +24,8 @@ import { randomUUID, timingSafeEqual } from "crypto";
   }
 })();
 
+const HEARTBEAT_MS = 5_000;
+
 const IMPLEMENTER_SYSTEM = `You are an autonomous implementer agent working inside a sandboxed workspace.
 
 Tools: read_file, list_dir, search, write_file, apply_patch, run_command, git_diff, git_status.
@@ -143,6 +145,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
   res.status(202).json({ accepted: true });
 
   // Fire and forget — the loop posts callbacks to the control plane.
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   void (async () => {
     const role = body.role ?? "implementer";
 
@@ -166,6 +169,16 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
     const spend = (usage: any[]) => ({ invocation, model, usage: usage.slice(priorCalls) });
     let stopReason: string | undefined;
 
+    // Liveness, separate from checkpoints: one step can far outlast
+    // STALE_AFTER. It stops with the adapter, and past the run's wall clock,
+    // so a truly stuck call is still found.
+    const callbackId = body.callbackRunId ?? body.runId;
+    const heartbeatUntil = Date.now() + (body.wallClockMs ?? 1_800_000);
+    heartbeat = setInterval(() => {
+      if (Date.now() > heartbeatUntil) return;
+      callback(`/runs/${callbackId}/heartbeat`, {}).catch(() => {});
+    }, HEARTBEAT_MS);
+
     const result = await runAgent({
       provider,
       model,
@@ -183,7 +196,6 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
       stopReason: () => stopReason,
       onCheckpoint: async (state) => {
         const diff = await workspaceDiff();
-        const callbackId = body.callbackRunId ?? body.runId;
         const answer = await callback(`/runs/${callbackId}/checkpoint`, {
           role,
           messages: state.messages,
@@ -201,7 +213,6 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
     }, body.task);
 
     const diff = await workspaceDiff();
-    const callbackId = body.callbackRunId ?? body.runId;
     await callback(`/runs/${callbackId}/complete`, {
       role,
       status: result.state.status,
@@ -216,6 +227,7 @@ app.post("/runs", async (req: express.Request, res: express.Response) => {
   })().catch((err) => {
     console.error(`[adapter] run ${body.runId} failed during completion:`, err);
   }).finally(() => {
+    clearInterval(heartbeat);
     active.delete(body.runId);
   });
 });
