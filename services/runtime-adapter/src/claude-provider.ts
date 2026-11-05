@@ -8,6 +8,7 @@ import type {
   ModelToolCall,
   ModelUsage,
 } from "./types";
+import { RateLimitError } from "./types";
 import type { ModelMessage } from "./types";
 
 export interface ClaudeProviderConfig {
@@ -16,6 +17,8 @@ export interface ClaudeProviderConfig {
   defaultModel: string;
   timeoutMs?: number;
   version?: string;
+  /** Off for a proxy that rejects cache_control. */
+  promptCache?: boolean;
 }
 
 const DEFAULT_ANTHROPIC_VERSION = "2026-10-21";
@@ -46,7 +49,12 @@ interface AnthropicResponse {
     | { type: "tool_use"; id: string; name: string; input?: Record<string, unknown> }
   >;
   stop_reason?: string;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
 }
 
 /**
@@ -131,7 +139,16 @@ export class ClaudeProvider implements ModelProvider {
       max_tokens: req.maxTokens ?? 4096,
       messages,
     };
-    if (system) body.system = system;
+    // An agent resends its whole conversation at every step. One marker keeps
+    // the tools and system prompt, and the top-level one moves along with the
+    // conversation, so a step pays full price only for what it added.
+    const cache = this.cfg.promptCache !== false;
+    if (system) {
+      body.system = cache
+        ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }]
+        : system;
+    }
+    if (cache) body.cache_control = { type: "ephemeral" };
     if (this.supportsSamplingParams() && req.temperature !== undefined) {
       body.temperature = req.temperature;
     }
@@ -156,7 +173,12 @@ export class ClaudeProvider implements ModelProvider {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`complete: HTTP ${res.status} — ${redact(text)}`);
+      const message = `complete: HTTP ${res.status} — ${redact(text)}`;
+      if (res.status === 429) {
+        const seconds = Number(res.headers.get("retry-after") ?? NaN);
+        throw new RateLimitError(message, Number.isFinite(seconds) ? seconds * 1000 : undefined);
+      }
+      throw new Error(message);
     }
 
     const json = (await res.json()) as AnthropicResponse;
@@ -176,6 +198,8 @@ export class ClaudeProvider implements ModelProvider {
     const usage: ModelUsage = {
       inputTokens: json.usage?.input_tokens,
       outputTokens: json.usage?.output_tokens,
+      cacheReadTokens: json.usage?.cache_read_input_tokens,
+      cacheWriteTokens: json.usage?.cache_creation_input_tokens,
       wallMs: Date.now() - start,
     };
     return { content: textOut, toolCalls, finishReason, usage };

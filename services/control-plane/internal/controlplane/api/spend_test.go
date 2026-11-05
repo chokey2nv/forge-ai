@@ -66,6 +66,19 @@ func TestSpendPricing(t *testing.T) {
 	if !near(s.CostUSD, 0.01+0.005+0.1+0.025) {
 		t.Errorf("haiku long context: %v", s.CostUSD)
 	}
+	// Cached tokens count towards token caps, at their own prices.
+	s = spendOf(prices, "claude-sonnet-5-5", []domain.Usage{{InputTokens: 1000, CacheReadTokens: 10_000, CacheWriteTokens: 1000, OutputTokens: 1000}})
+	if s.InputTokens != 12_000 || !near(s.CostUSD, (1000+1000+1250)*2/1e6+1000*10/1e6) {
+		t.Errorf("sonnet with cache: %+v", s)
+	}
+	if s := spendOf(DefaultPrices, "claude-opus-5-5", []domain.Usage{{CacheReadTokens: 1_000_000}}); !near(s.CostUSD, 0.20) {
+		t.Errorf("opus 5.5 cache reads: %v", s.CostUSD)
+	}
+	// A long prompt is priced as long even when most of it is cached.
+	s = spendOf(prices, "claude-haiku-5-5", []domain.Usage{{InputTokens: 1000, CacheReadTokens: 150_000}})
+	if !near(s.CostUSD, (1000+15_000)*0.50/1e6) {
+		t.Errorf("haiku long context with cache: %v", s.CostUSD)
+	}
 	s = spendOf(prices, "qwen3-coder:30b", []domain.Usage{{InputTokens: 700, OutputTokens: 300}})
 	if s.Tokens() != 1000 || s.UnpricedTokens != 1000 || s.CostUSD != 0 {
 		t.Errorf("an unpriced model counts tokens only: %+v", s)

@@ -46,6 +46,7 @@ export function createProvider(cfg: ProviderConfig): ModelProvider {
         defaultModel: cfg.modelName,
         timeoutMs: cfg.timeoutMs,
         version: process.env.ANTHROPIC_API_VERSION,
+        promptCache: process.env.ANTHROPIC_PROMPT_CACHE !== "off",
       });
     case "scripted":
       // Test double for pipeline tests; must still be on the allow-list.

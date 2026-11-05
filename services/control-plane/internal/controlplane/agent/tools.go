@@ -63,6 +63,18 @@ var ToolCatalog = map[string]ToolSchema{
 			"required": []string{"thread", "body"},
 		},
 	},
+	"report_out_of_scope": {
+		Name:        "report_out_of_scope",
+		Description: "Report an acceptance criterion you cannot meet: it needs files outside your scope, or data that does not exist. Finish everything else. If review then rejects the change, a person decides what happens instead of it being sent back to you.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"criterion": map[string]any{"type": "string", "description": "The acceptance criterion you cannot meet"},
+				"needed":    map[string]any{"type": "string", "description": "What it would take: the files or data that are missing"},
+			},
+			"required": []string{"criterion", "needed"},
+		},
+	},
 	"submit_plan": {
 		Name:        "submit_plan",
 		Description: "Submit the implementation plan. Call this when you have enough information about the codebase to describe the fix.",

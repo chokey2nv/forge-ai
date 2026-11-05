@@ -134,3 +134,36 @@ func (e *recordEvents) has(t string) bool {
 	}
 	return false
 }
+
+// Only what the agent reported since its last instructions counts: feedback or
+// guidance may have settled an earlier report.
+func TestScopeGaps(t *testing.T) {
+	report := func(criterion string) domain.Message {
+		return domain.Message{Role: "assistant", ToolCalls: []domain.ToolCall{{Name: "report_out_of_scope",
+			Arguments: map[string]any{"criterion": criterion, "needed": "more data"}}}}
+	}
+	run := func(m ...domain.Message) *domain.WorkflowRun {
+		return &domain.WorkflowRun{LastCheckpoint: &domain.Checkpoint{Messages: m}}
+	}
+	if g := scopeGaps(&domain.WorkflowRun{}); g != nil {
+		t.Errorf("no checkpoint: %v", g)
+	}
+	feedback := domain.Message{Role: "user", Content: "Code review rejected your change."}
+	if g := scopeGaps(run(report("old"), feedback, domain.Message{Role: "assistant", Content: "done"})); g != nil {
+		t.Errorf("reported before the feedback: %v", g)
+	}
+	g := scopeGaps(run(feedback, report("a"), report("b")))
+	if len(g) != 2 || g[0] != "a (needs: more data)" || g[1] != "b (needs: more data)" {
+		t.Errorf("in order: %v", g)
+	}
+	if g := scopeGaps(run(report("a"), domain.Message{Role: "user", Content: resumeNote})); len(g) != 1 {
+		t.Errorf("a resume keeps the report: %v", g)
+	}
+}
+
+func TestContinuingAgentGetsMoreSteps(t *testing.T) {
+	task := &domain.Task{Budget: domain.Budget{MaxSteps: 30}}
+	if n := resumedMaxSteps(&domain.WorkflowRun{LastCheckpoint: &domain.Checkpoint{StepCount: 66}}, task); n != 96 {
+		t.Errorf("past the limit: %d", n)
+	}
+}

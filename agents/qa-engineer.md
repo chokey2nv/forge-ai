@@ -14,6 +14,7 @@ tools:
   - run_command
   - git_status
   - git_diff
+  - report_out_of_scope
 reviewers:
   - reviewer
 ---

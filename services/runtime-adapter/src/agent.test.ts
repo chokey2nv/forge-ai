@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runAgent, type AgentConfig } from "./agent";
-import type { ModelProvider, ModelRequest, ModelResponse } from "./types";
+import { RateLimitError, type ModelProvider, type ModelRequest, type ModelResponse } from "./types";
 import type { Workspace } from "./workspace";
 
 const reply = (r: Partial<ModelResponse>): ModelResponse => ({
@@ -74,4 +74,44 @@ test("MODEL_MAX_OUTPUT_TOKENS sets the room for a reply", async () => {
   const { cfg, limits } = agentWith([reply({ finishReason: "length" }), reply({ content: "done" })]);
   await runAgent({ ...cfg, maxOutputTokens: 50000 }, "t");
   assert.deepEqual(limits, [50000, 100000]);
+});
+
+function limitedThen(failures: Error[], then: ModelResponse) {
+  const { cfg } = agentWith([]);
+  let calls = 0;
+  cfg.provider = {
+    id: "fake",
+    complete: async () => {
+      calls++;
+      const e = failures.shift();
+      if (e) throw e;
+      return then;
+    },
+  } as unknown as ModelProvider;
+  return { cfg, calls: () => calls };
+}
+
+test("a rate limit is waited out without using up retries", async () => {
+  const { cfg, calls } = limitedThen(
+    [1, 2, 3].map(() => new RateLimitError("429", 1)),
+    reply({ content: "done" }),
+  );
+  const { state } = await runAgent(cfg, "t");
+  assert.equal(state.status, "complete");
+  assert.equal(calls(), 4);
+});
+
+test("a rate limit that outlasts the wait blocks, and says so", async () => {
+  const { cfg } = limitedThen([1, 2, 3, 4].map(() => new RateLimitError("429", 2)), reply({ content: "done" }));
+  cfg.rateLimitMaxWaitMs = 3;
+  const { state, finalMessage } = await runAgent(cfg, "t");
+  assert.equal(state.status, "error");
+  assert.match(finalMessage, /still rate limited/);
+});
+
+test("any other failure still uses up retries", async () => {
+  const { cfg, calls } = limitedThen([new Error("boom")], reply({ content: "done" }));
+  const { finalMessage } = await runAgent(cfg, "t");
+  assert.equal(calls(), 1);
+  assert.equal(finalMessage, "model call failed after 0 retries");
 });

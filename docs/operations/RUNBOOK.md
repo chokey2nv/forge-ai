@@ -231,6 +231,7 @@ All variables live in `.env` at the repo root. The adapter loads `.env` via `dot
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Adapter | Override for compatible proxies |
 | `ANTHROPIC_API_KEY` | *(unset)* | Adapter | Required only when `MODEL_PROVIDER=claude` |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Adapter | Override for compatible proxies; accepted with or without the trailing `/v1` (the Anthropic SDKs' form, without it, works too). A value already exported in the adapter's shell wins over `.env` |
+| `ANTHROPIC_PROMPT_CACHE` | *(on)* | Adapter | `off` stops prompt caching, for a proxy that rejects `cache_control` |
 | `FORGE_ALLOWED_PROVIDERS` | `ollama` | Adapter + CP | Comma-separated allow-list; enabling `openai` / `claude` requires opt-in |
 | `MONGODB_URI` | `mongodb://127.0.0.1:27017` | Control plane | Mongo connection |
 | `MONGODB_DATABASE` | `forge_ai` | Control plane | Database name |
@@ -688,6 +689,8 @@ The harness starts its own control plane and adapter on `:8090` / `:8091` agains
 | `max-steps-resume` | The implementer uses all its steps | `BLOCKED` with the reason; `PUT /tasks/{id}/max-steps` changes the limit on the task and its subtasks (project admins); `POST /runs/{id}/resume` gives it that many more, and it reaches `REVIEW_PENDING` |
 | `resume-twice` | The agent blocks again after a resume | Each resume gets its own container; the second keeps its container and the saved work, and the task reaches `REVIEW_PENDING` |
 | `container-lost` | The container is removed mid-run | `BLOCKED` with a reason that says so, `git_status` reports the error, the checkpoint keeps the work; `POST /runs/{id}/resume` finishes the task |
+| `review-retry-steps` | Review sends back an agent close to its step limit | It gets the task's steps again on top of those used, and finishes |
+| `scope-conflict` | The agent calls `report_out_of_scope` | The first rejection escalates with the criterion and what it needs; a person decides |
 | `long-model-reply` | A model reply takes longer than `STALE_AFTER` | The adapter's heartbeats keep the run alive; it isn't marked `RESUMABLE` |
 | `cut-off-reply` | The implementer's first reply hits the output limit | Asked again with a higher limit; the partial reply isn't kept; the task reaches `REVIEW_PENDING` and the cut-off call is in its spend |
 | `cut-off-always` | Every reply hits the limit | `BLOCKED` after two tries (16,384, then 32,768 tokens), and the reason says so and names `MODEL_MAX_OUTPUT_TOKENS` |

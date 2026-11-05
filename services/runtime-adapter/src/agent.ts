@@ -1,4 +1,4 @@
-import type { ModelMessage, ModelProvider, ModelRequest, ModelTool, ModelUsage } from "./types";
+import { RateLimitError, type ModelMessage, type ModelProvider, type ModelRequest, type ModelResponse, type ModelTool, type ModelUsage } from "./types";
 import { executeToolCall } from "./executor";
 import type { Workspace } from "./workspace";
 
@@ -19,6 +19,8 @@ export interface AgentConfig {
   tools: ModelTool[];
   maxSteps: number;
   maxRetries: number;
+  /** How long one model call may wait out rate limits before the run blocks. */
+  rateLimitMaxWaitMs?: number;
   wallClockMs: number;
   systemPrompt: string;
   /** Room for one model reply (MODEL_MAX_OUTPUT_TOKENS). */
@@ -50,6 +52,12 @@ export interface AgentState {
 // A long report or a whole file in a tool call needs room; only what the model
 // writes is billed. A reply that's cut off anyway gets one more try with double.
 const DEFAULT_MAX_OUTPUT_TOKENS = 16384;
+
+// Rate limits are per minute, so a retry within seconds fails too. Waiting
+// doesn't use up maxRetries, which is for calls that actually failed.
+const RATE_LIMIT_MAX_WAIT_MS = 5 * 60_000;
+const RATE_LIMIT_DEFAULT_WAIT_MS = 30_000;
+const RATE_LIMIT_LONGEST_WAIT_MS = 60_000;
 
 export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<AgentResult> {
   const messages: ModelMessage[] = cfg.resumeFrom && cfg.resumeFrom.messages.length > 0
@@ -90,9 +98,9 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
     }
 
     const resp = await callWithRetry(cfg, state.messages, limit);
-    if (!resp) {
+    if (typeof resp === "string") {
       state.status = "error";
-      state.blockedReason = `model call failed after ${cfg.maxRetries} retries`;
+      state.blockedReason = resp;
       break;
     }
 
@@ -170,7 +178,11 @@ export async function runAgent(cfg: AgentConfig, taskPrompt: string): Promise<Ag
   return { state, finalMessage: state.blockedReason ?? "done" };
 }
 
-async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[], maxTokens: number) {
+/** The model's reply, or why there is none. */
+async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[], maxTokens: number): Promise<ModelResponse | string> {
+  const failed = `model call failed after ${cfg.maxRetries} retries`;
+  const maxWait = cfg.rateLimitMaxWaitMs ?? RATE_LIMIT_MAX_WAIT_MS;
+  let waited = 0;
   let attempt = 0;
   while (attempt <= cfg.maxRetries) {
     try {
@@ -183,13 +195,23 @@ async function callWithRetry(cfg: AgentConfig, messages: ModelMessage[], maxToke
       };
       return await cfg.provider.complete(req);
     } catch (e) {
+      if (e instanceof RateLimitError) {
+        if (waited >= maxWait) {
+          return `still rate limited by the model provider after waiting ${Math.round(waited / 1000)}s; resume it once other work has finished`;
+        }
+        const wait = Math.min(e.retryAfterMs ?? RATE_LIMIT_DEFAULT_WAIT_MS, RATE_LIMIT_LONGEST_WAIT_MS);
+        console.error(`[adapter] rate limited; waiting ${Math.round(wait / 1000)}s:`, e.message);
+        waited += wait;
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
       attempt++;
       console.error(`[adapter] model call failed (attempt ${attempt}/${cfg.maxRetries + 1}):`, e instanceof Error ? e.message : e);
-      if (attempt > cfg.maxRetries) return null;
+      if (attempt > cfg.maxRetries) return failed;
       await new Promise((r) => setTimeout(r, 1000 * attempt));
     }
   }
-  return null;
+  return failed;
 }
 
 function truncate(s: string, n: number): string {

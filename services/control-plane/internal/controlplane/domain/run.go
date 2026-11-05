@@ -85,7 +85,10 @@ type ToolCall struct {
 type Usage struct {
 	InputTokens  int `bson:"inputTokens,omitempty" json:"inputTokens,omitempty"`
 	OutputTokens int `bson:"outputTokens,omitempty" json:"outputTokens,omitempty"`
-	WallMS       int `bson:"wallMs" json:"wallMs"`
+	// Cached parts of the prompt, not included in InputTokens.
+	CacheReadTokens  int `bson:"cacheReadTokens,omitempty" json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int `bson:"cacheWriteTokens,omitempty" json:"cacheWriteTokens,omitempty"`
+	WallMS           int `bson:"wallMs" json:"wallMs"`
 }
 
 type Event struct {

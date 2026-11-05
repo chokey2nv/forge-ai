@@ -21,9 +21,10 @@ func (h *Handlers) resumeFailed(ctx context.Context, run *domain.WorkflowRun, st
 		Reason: "resume failed: " + why, At: time.Now().UTC()})
 }
 
-// resumedMaxSteps gives a resumed agent the task's steps again, on top of those
-// it has used: otherwise one stopped at the limit stops again at once. The spend
-// caps still bound it.
+// resumedMaxSteps gives an agent continuing its conversation (resumed, or sent
+// back by verification or review) the task's steps again, on top of those it
+// has used: otherwise one past the limit stops again at once. The spend caps
+// still bound it.
 func resumedMaxSteps(run *domain.WorkflowRun, task *domain.Task) int {
 	if run.LastCheckpoint == nil {
 		return task.Budget.MaxSteps

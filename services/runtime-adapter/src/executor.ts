@@ -129,6 +129,15 @@ export async function executeToolCall(
         return { ok: true, output: `Noted. Your reply on ${thread} is posted when your change is integrated.` };
       }
 
+      case "report_out_of_scope": {
+        // Nothing happens in the workspace; the control plane reads the call
+        // from the conversation if review rejects the change.
+        const criterion = String(call.arguments.criterion ?? "").trim();
+        const needed = String(call.arguments.needed ?? "").trim();
+        if (!criterion || !needed) return { ok: false, output: "report_out_of_scope needs a criterion and what it needs" };
+        return { ok: true, output: "Noted. Finish everything else, then reply with your summary." };
+      }
+
       default:
         return { ok: false, output: `unknown tool: ${call.name}` };
     }

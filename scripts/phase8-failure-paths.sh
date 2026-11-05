@@ -38,6 +38,8 @@
 #   max-steps-resume   the agent runs out of steps, blocks and says so; resuming gives it more and it finishes
 #   resume-twice       blocked again after a resume: the second resume keeps its new container and the saved work
 #   container-lost     the container is removed mid-run: the run blocks and says so, the checkpoint survives, resume finishes
+#   review-retry-steps review sends back an agent near its step limit: it gets more steps, not an instant stop
+#   scope-conflict     the agent reports a criterion it can't meet: the first rejection escalates, naming it
 #   long-model-reply   one reply outlasts STALE_AFTER: heartbeats keep the run alive, it isn't marked stale
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
@@ -57,7 +59,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery shared-deps max-steps-resume resume-twice container-lost long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery shared-deps max-steps-resume resume-twice container-lost review-retry-steps scope-conflict long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -273,6 +275,10 @@ run_scenario() {
   reasons "$child" | sed 's/^/      /'
 
   case "$SC" in
+    review-retry-steps)
+      check "sent back near its step limit, it finishes ($final)" "$([ "$final" = REVIEW_PENDING ] && ! has_reason "$child" "max steps"; echo $?)"
+      check "review rejected it once" "$(has_reason "$child" "review rejected; retrying"; echo $?)"
+      ;;
     resume-twice)
       check "and it finishes: the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "the work survived both resumes" \
@@ -476,6 +482,26 @@ run_container_lost() {
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
   check "restored from the checkpoint, the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+}
+
+run_scope_conflict() {
+  local repo task child s final code
+  repo=$(new_repo)
+  start_adapter "$SCEN/$SC.json"
+  task=$(create_and_dispatch "$repo")
+  for _ in $(seq 1 120); do child=$(child_of "$task"); [ -n "$child" ] && break; sleep 1; done
+  s=$(wait_status "$child" "ESCALATED|BLOCKED|INTEGRATED|REJECTED" 300) || true
+  check "the first rejection escalates ($s)" \
+    "$([ "$s" = ESCALATED ] && has_reason "$child" "review rejected the change in 1 round(s)"; echo $?)"
+  check "the reason names the criterion and what it needs" \
+    "$([ "$(event_count "$child" state.transition "Shows per-run result rows .needs: seed data")" -ge 1 ]; echo $?)"
+  code=$(decide "$child" accept "")
+  check "accepting it continues (HTTP $code)" "$([ "$code" = 202 ]; echo $?)"
+  final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
+  stop_adapter
+  echo "  parent $task -> $final, child $child -> $(status_of "$child")"
+  reasons "$child" | sed 's/^/      /'
+  check "parent reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
 }
 
 run_add_agent() {
@@ -1181,6 +1207,7 @@ for SC in "${SCENARIOS[@]}"; do
     crash-resume) run_crash_resume ;;
     add-agent) run_add_agent ;;
     container-lost) run_container_lost ;;
+    scope-conflict) run_scope_conflict ;;
     escalate-accept) run_escalation accept ;;
     escalate-retry) run_escalation retry ;;
     final-review-escalates) run_final_review_escalates ;;

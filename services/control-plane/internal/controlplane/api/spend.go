@@ -26,15 +26,24 @@ type Price struct {
 	// Above LongAbove input tokens in one call, LongIn and LongOut apply.
 	LongAbove       int
 	LongIn, LongOut float64
+	// What a cached token read costs, as a share of the input price, when it
+	// isn't the usual defaultCacheRead.
+	CacheRead float64
 }
+
+// Prompt caching, as shares of the input price (5-minute entries).
+const (
+	defaultCacheRead = 0.1
+	cacheWrite       = 1.25
+)
 
 // DefaultPrices are Anthropic's first-party API prices (October 2026).
 // FORGE_MODEL_PRICES adds to or overrides them. Models without a price
 // (local ones, for example) count towards token caps only.
 var DefaultPrices = map[string]Price{
-	"claude-fable-5-1":  {In: 10, Out: 50},
+	"claude-fable-5-1":  {In: 10, Out: 50, CacheRead: 0.025},
 	"claude-fable-5":    {In: 10, Out: 50},
-	"claude-opus-5-5":   {In: 4, Out: 20},
+	"claude-opus-5-5":   {In: 4, Out: 20, CacheRead: 0.05},
 	"claude-opus-5":     {In: 5, Out: 25},
 	"claude-opus-4-8":   {In: 5, Out: 25},
 	"claude-opus-4-7":   {In: 5, Out: 25},
@@ -75,7 +84,9 @@ func spendOf(prices map[string]Price, model string, usage []domain.Usage) domain
 	var s domain.Spend
 	p, priced := prices[model]
 	for _, u := range usage {
-		in, out := int64(u.InputTokens), int64(u.OutputTokens)
+		// Token caps count the whole prompt, however much of it was cached.
+		prompt := u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens
+		in, out := int64(prompt), int64(u.OutputTokens)
 		s.InputTokens += in
 		s.OutputTokens += out
 		if !priced {
@@ -83,10 +94,15 @@ func spendOf(prices map[string]Price, model string, usage []domain.Usage) domain
 			continue
 		}
 		pin, pout := p.In, p.Out
-		if p.LongAbove > 0 && u.InputTokens > p.LongAbove {
+		if p.LongAbove > 0 && prompt > p.LongAbove {
 			pin, pout = p.LongIn, p.LongOut
 		}
-		s.CostUSD += (float64(in)*pin + float64(out)*pout) / 1e6
+		read := p.CacheRead
+		if read == 0 {
+			read = defaultCacheRead
+		}
+		input := float64(u.InputTokens) + float64(u.CacheReadTokens)*read + float64(u.CacheWriteTokens)*cacheWrite
+		s.CostUSD += (input*pin + float64(out)*pout) / 1e6
 	}
 	return s
 }

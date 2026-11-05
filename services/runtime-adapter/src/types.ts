@@ -31,9 +31,19 @@ export interface ModelToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** The provider refused the call for now; retryAfterMs is how long it asked to wait, if it said. */
+export class RateLimitError extends Error {
+  constructor(message: string, readonly retryAfterMs?: number) {
+    super(message);
+  }
+}
+
 export interface ModelUsage {
+  /** Tokens at full price. Cached ones are counted apart. */
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   wallMs: number;
 }
 

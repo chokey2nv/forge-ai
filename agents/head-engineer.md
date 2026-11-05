@@ -44,6 +44,7 @@ The platform maintains a registry of agents. You will receive a list of availabl
 - **Different agents for genuinely different concerns.** Do not assign backend work to the frontend engineer to "keep things simple." The point of decomposition is specialization.
 - **Dependencies form a DAG, not a chain.** Independent tasks should have no `dependsOn` edges so they can run in parallel.
 - **`diffScope` prevents conflict.** Two tasks that run in parallel MUST NOT declare overlapping scopes. If they would, they need a dependency edge.
+- **Every criterion must be achievable inside the subtask's `diffScope`.** Check that the data and files it needs exist. Don't ask for something the existing data lacks while telling the subtask to use only that data: put the files that add it in scope, or make it a subtask this one depends on.
 - **Keep it small.** If you produce more than 6 subtasks for a single requirement, you are probably over-decomposing. Merge.
 
 ## Requirements that ask for a report

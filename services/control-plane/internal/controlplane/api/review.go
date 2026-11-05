@@ -328,6 +328,33 @@ func rejectionFeedback(round []*domain.Review) string {
 	return b.String()
 }
 
+// scopeGaps are the report_out_of_scope calls the implementer made for the
+// change under review: since its last instructions, as review feedback or a
+// person's guidance may have settled earlier ones. Being resumed isn't new
+// instructions.
+func scopeGaps(run *domain.WorkflowRun) []string {
+	if run.LastCheckpoint == nil {
+		return nil
+	}
+	var gaps []string
+	messages := run.LastCheckpoint.Messages
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role == "user" && m.Content != resumeNote {
+			break
+		}
+		for _, c := range m.ToolCalls {
+			if c.Name != "report_out_of_scope" {
+				continue
+			}
+			criterion, _ := c.Arguments["criterion"].(string)
+			needed, _ := c.Arguments["needed"].(string)
+			gaps = append([]string{strings.TrimSpace(criterion) + " (needs: " + strings.TrimSpace(needed) + ")"}, gaps...)
+		}
+	}
+	return gaps
+}
+
 func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRun, task *domain.Task, round []*domain.Review) {
 	now := time.Now().UTC()
 	reviewWS := &workspace.Workspace{WorktreePath: run.WorktreePath, ContainerName: run.ContainerName}
@@ -369,11 +396,17 @@ func (h *Handlers) finishReviewRound(ctx context.Context, run *domain.WorkflowRu
 	}
 
 	rejections := run.ReviewRound + 1
-	if rejections >= h.MaxReviewRounds {
+	gaps := scopeGaps(run)
+	if rejections >= h.MaxReviewRounds || len(gaps) > 0 {
 		// Reviewer judgement, not an objective failure: a human decides
 		// (POST /tasks/{id}/escalation). Accept integrates from the
 		// checkpoint diff and retry provisions afresh, so the workspace goes.
+		// A gap the implementer reported can't be fixed by sending it back.
 		reason := fmt.Sprintf("review rejected the change in %d round(s): %s", rejections, summary)
+		if len(gaps) > 0 {
+			reason += ". The implementer reported it cannot meet this in its scope: " + strings.Join(gaps, "; ") +
+				". Sending it back without changing that will not help"
+		}
 		_ = h.Runs.UpdateStatus(ctx, run.ID, domain.RunEscalated, reason, now)
 		_ = h.SM.Transition(ctx, task, domain.StatusEscalated, reason)
 		_ = h.Events.Append(ctx, &domain.Event{TaskID: task.ID, RunID: run.ID, Type: "review.escalated", Reason: reason, At: now})
