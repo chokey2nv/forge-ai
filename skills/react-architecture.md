@@ -1,7 +1,7 @@
 ---
 name: react-architecture
 description: Enforces presentation/integration separation in React codebases.
-applies_to: [implementer, qa-engineer]
+applies_to: [implementer, qa-engineer, frontend-engineer]
 ---
 
 ## React architecture rules
