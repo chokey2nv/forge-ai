@@ -34,6 +34,7 @@
 #   feedback-unhandled-thread the follow-up graph leaves a thread unhandled: refused, back to REVIEW_PENDING
 #   feedback-escalated-parent-retry  the final review escalates; a human sends it back with guidance -> fixed -> r1
 #   feedback-budget    a task budgeted for one revision cannot be sent back
+#   max-steps-resume   the agent runs out of steps, blocks and says so; resuming gives it more and it finishes
 #   long-model-reply   one reply outlasts STALE_AFTER: heartbeats keep the run alive, it isn't marked stale
 #   cut-off-reply      the model's reply hits the output limit; it's asked again with a higher one
 #   cut-off-always     every reply hits the limit: blocked, and the reason says so
@@ -53,7 +54,7 @@ SCEN="$ROOT/tests/failure-paths"
 FIXTURE="$ROOT/tests/evaluations/fixtures/cart-pricing"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forge-failpaths.XXXXXX")
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(verify-retry two-reviewers-pass split-verdict exhaustion crash-resume add-agent reviewer-timeout escalate-accept escalate-retry final-review-escalates parallel-siblings diamond concurrency-cap overlap-serialized cycle-rejected parallel-reviewers deliver-local deliver-target-moved deliver-dirty deliver-pr deliver-pr-closed deliver-pr-moved rollback-local rollback-pr feedback-request-changes feedback-unhandled-thread feedback-escalated-parent-retry feedback-budget sandbox-postinstall budget-tokens restart-mid-delivery max-steps-resume long-model-reply cut-off-reply cut-off-always blank-reply subfolder-tests)
 
 for p in $CP_PORT $AD_PORT; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "port $p is in use"; exit 2; fi
@@ -244,11 +245,19 @@ run_scenario() {
   task=$(create_and_dispatch "$repo")
   final=$(wait_status "$task" "REVIEW_PENDING|BLOCKED|REJECTED" 300) || true
   child=$(child_of "$task")
+  if [ "$SC" = max-steps-resume ]; then
+    check "out of steps: the subtask blocks and says so ($final)" "$([ "$final" = BLOCKED ] && has_reason "$child" "max steps (10) exhausted"; echo $?)"
+    check "resuming gives it more steps" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/runs/run-$child/resume")" = 202 ]; echo $?)"
+    final=$(wait_status "$task" "REVIEW_PENDING|REJECTED" 300) || true
+  fi
   stop_adapter
   echo "  parent $task -> $final, child $child -> $(status_of "$child")"
   reasons "$child" | sed 's/^/      /'
 
   case "$SC" in
+    max-steps-resume)
+      check "and it finishes: the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
+      ;;
     long-model-reply)
       check "the task reaches REVIEW_PENDING ($final)" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "the run was never marked stale" "$(! has_reason "$child" "no heartbeat"; echo $?)"

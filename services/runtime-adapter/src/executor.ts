@@ -86,7 +86,7 @@ export async function executeToolCall(
         const b64 = Buffer.from(diff, "utf8").toString("base64");
         const r = await ws.exec([
           "sh", "-c",
-          `printf %s ${shellQuote(b64)} | base64 -d | git apply --whitespace=nowarn`,
+          `printf %s ${shellQuote(b64)} | base64 -d | git apply --recount --whitespace=nowarn`,
         ]);
         return {
           ok: r.exitCode === 0,

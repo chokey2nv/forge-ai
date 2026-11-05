@@ -127,7 +127,7 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
   const [config, setConfig] = useState<Config | null>(null);
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
-  const [maxSteps, setMaxSteps] = useState(30);
+  const [maxSteps, setMaxSteps] = useState(60);
   const [maxTokens, setMaxTokens] = useState("");
   const [maxCost, setMaxCost] = useState("");
   const [maxRetries, setMaxRetries] = useState(2);
@@ -546,12 +546,6 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
               {allows(role, "member") && <button className="neutral" onClick={() => api.startTask(task.id, run?.provenance?.provider ?? "", run?.provenance?.model ?? "").then(reload).catch((e) => setErr(String(e)))}>Start again</button>}
             </p>
           )}
-          {task.status === "BLOCKED" && !!task.parentId && run?.status === "BLOCKED" && /budget reached/.test(run.blockedReason ?? "") && (
-            <p>
-              {sentence(run.blockedReason!)}{" "}
-              {allows(role, "member") && <button className="neutral" onClick={() => api.resumeRun(run.id).then(reload).catch((e) => setErr(String(e)))}>Resume</button>}
-            </p>
-          )}
         </SpendPanel>
       )}
 
@@ -595,6 +589,15 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           {blockedChild
             ? <>Blocked by subtask “{blockedChild.title ?? blockedChild.requirement.slice(0, 100)}”{childWhy(blockedChild) ? `: ${childWhy(blockedChild)}` : "."}</>
             : <>Blocked{blockedWhy ? `: ${blockedWhy}` : "."}</>}
+          {!!task.parentId && run?.status === "BLOCKED" && allows(role, "member") && (
+            <>
+              {" "}
+              <button className="neutral" disabled={resuming}
+                onClick={() => { setResuming(true); api.resumeRun(run.id).then(reload).catch((e) => setErr(String(e))).finally(() => setResuming(false)); }}>
+                {resuming ? "Resuming… (installing packages can take minutes)" : "Resume"}
+              </button>
+            </>
+          )}
         </p>
       )}
 

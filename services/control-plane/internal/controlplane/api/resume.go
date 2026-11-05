@@ -10,6 +10,16 @@ import (
 	"github.com/chokey2nv/forge-ai/services/control-plane/internal/controlplane/workspace"
 )
 
+// resumedMaxSteps gives a resumed agent the task's steps again, on top of those
+// it has used: otherwise one stopped at the limit stops again at once. The spend
+// caps still bound it.
+func resumedMaxSteps(run *domain.WorkflowRun, task *domain.Task) int {
+	if run.LastCheckpoint == nil {
+		return task.Budget.MaxSteps
+	}
+	return run.LastCheckpoint.StepCount + task.Budget.MaxSteps
+}
+
 // resumeNote tells a resumed agent what happened: its history may end with
 // failures from a workspace that was removed, or with it giving up.
 const resumeNote = "You were interrupted and this is a new workspace, restored from your last checkpoint. " +
@@ -116,7 +126,7 @@ func (h *Handlers) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		CallbackURL:    h.SelfURL,
 		Provider:       run.Provenance.Provider,
 		Model:          run.Provenance.Model,
-		MaxSteps:       task.Budget.MaxSteps,
+		MaxSteps:       resumedMaxSteps(run, task),
 		MaxRetries:     task.Budget.MaxRetries,
 		WallClockMS:    task.Budget.WallClockMS,
 		Checkpoint:     checkpoint,

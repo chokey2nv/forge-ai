@@ -55,3 +55,12 @@ test("search with no matches is not an error", async () => {
   assert.ok(r.ok);
   assert.equal(r.output, "(no matches)");
 });
+
+test("apply_patch tolerates wrong line counts in a hunk header", async () => {
+  const ws = repo();
+  const diff = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1,9 +1,9 @@\n-Westgard elsewhere\n+Westgard here\n axb\n";
+  const r = await executeToolCall(ws, { id: "1", name: "apply_patch", arguments: { diff } });
+  assert.ok(r.ok, r.output);
+  const read = await search(ws, { query: "Westgard here" });
+  assert.ok(read.ok);
+});
