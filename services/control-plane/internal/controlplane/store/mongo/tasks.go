@@ -172,6 +172,11 @@ func (r *TaskRepo) AssignProject(ctx context.Context, repoPath, projectID string
 	return res.ModifiedCount, nil
 }
 
+func (r *TaskRepo) SetBoardLane(ctx context.Context, id string, lane domain.BoardLane, at time.Time) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"boardLane": lane, "updatedAt": at}})
+	return err
+}
+
 // SetMaxSteps sets it on a task and its subtasks, which each hold a copy.
 func (r *TaskRepo) SetMaxSteps(ctx context.Context, id string, steps int, at time.Time) error {
 	res, err := r.coll.UpdateMany(ctx, bson.M{"$or": bson.A{bson.M{"_id": id}, bson.M{"parentId": id}}},

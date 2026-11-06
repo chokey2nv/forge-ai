@@ -36,6 +36,8 @@ type TaskRepo interface {
 	SetFollowUpOutcome(ctx context.Context, id string, n int, outcome string, at time.Time) error
 	// SetSpendLimits changes a task's token and cost caps (13.6).
 	SetSpendLimits(ctx context.Context, id string, l domain.Limits, at time.Time) error
+	// SetBoardLane records a person's choice of board column.
+	SetBoardLane(ctx context.Context, id string, lane domain.BoardLane, at time.Time) error
 	// SetMaxSteps changes the steps each agent gets, on a task and its subtasks.
 	SetMaxSteps(ctx context.Context, id string, steps int, at time.Time) error
 }

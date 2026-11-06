@@ -5,11 +5,6 @@ export type TaskStatus =
   | "AGENT_REVIEW" | "ESCALATED" | "REVIEW_PENDING" | "INTEGRATING" | "INTEGRATED"
   | "APPROVED" | "DELIVERING" | "PR_OPEN" | "MERGED" | "ROLLING_BACK" | "REVERT_PR_OPEN" | "ROLLED_BACK" | "BLOCKED" | "RESUMABLE" | "REJECTED";
 
-export const TASK_STATUSES: TaskStatus[] = [
-  "CREATED", "DECOMPOSING", "DISPATCHED", "RUNNING", "VERIFYING", "AGENT_REVIEW", "ESCALATED",
-  "INTEGRATING", "INTEGRATED", "REVIEW_PENDING", "APPROVED", "DELIVERING", "PR_OPEN", "MERGED", "ROLLING_BACK", "REVERT_PR_OPEN", "ROLLED_BACK", "BLOCKED", "RESUMABLE", "REJECTED",
-];
-
 
 export interface AgentDefinition {
   name: string;
@@ -34,7 +29,7 @@ export interface Skill {
 }
 
 export interface Task {
-  budget?: { maxSteps: number };
+  budget?: { maxSteps: number; maxCostUsd?: number };
   id: string;
   requirement: string;
   acceptance: string[];
@@ -62,6 +57,8 @@ export interface Task {
   followUps?: FollowUp[];
   /** Follow-up subtask: the review threads it takes on. */
   addresses?: string[];
+  /** A person's choice of board column, where the status leaves one. */
+  boardLane?: "todo" | "closed";
 }
 
 export interface FollowUp {
@@ -386,10 +383,11 @@ export const api = {
     listChildren: (parentId: string) => j<Task[]>(`/tasks/${parentId}/children`),
 
 
-    listTasks: (status?: string, projectId?: string) => {
+    listTasks: (status?: string, projectId?: string, limit?: number) => {
         const q = new URLSearchParams();
         if (status) q.set("status", status);
         if (projectId) q.set("projectId", projectId);
+        if (limit) q.set("limit", String(limit));
         return j<Task[]>(`/tasks${q.size ? `?${q}` : ""}`);
     },
     listProjects: () => j<Project[]>("/projects"),
@@ -469,6 +467,8 @@ export const api = {
             body: JSON.stringify({ rationale }),
         }),
     retryDelivery: (taskId: string) => j<{ status: string }>(`/tasks/${taskId}/deliver`, { method: "POST" }),
+    moveOnBoard: (taskId: string, column: string) =>
+        j<Task>(`/tasks/${taskId}/board`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ column }) }),
     escalate: (taskId: string) =>
         j<{ status: string }>(`/tasks/${taskId}/escalate`, { method: "POST" }),
     decideEscalation: (taskId: string, decision: EscalationDecision, rationale: string, guidance: string) =>

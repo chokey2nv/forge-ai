@@ -1,12 +1,22 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import {
-  api, SIGNED_OUT, allows, type Project, type ProjectRole, type User, isParent, reviewRunId, TASK_STATUSES,
+  api, SIGNED_OUT, allows, type Project, type ProjectRole, type User, isParent, reviewRunId,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
   type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, type Limits, type SpendView, type TaskSpend, AgentDefinition, Skill,
 } from "./api";
+import { Board, StartDialog, StatusBadge } from "./Board";
 import { DiffView } from "./DiffView";
 
 type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" } | { kind: "project" };
+
+/** The page lives in the address, so reloading stays on it and Back works. */
+function viewFromHash(): View {
+  const [page, id] = window.location.hash.replace(/^#\/?/, "").split("/");
+  if (page === "task" && id) return { kind: "task", id };
+  if (page === "evals" || page === "new" || page === "project") return { kind: page };
+  return { kind: "tasks" };
+}
+const hashOf = (v: View) => (v.kind === "task" ? `#/task/${v.id}` : v.kind === "tasks" ? "#/" : `#/${v.kind}`);
 
 /** The signed-in person (Phase 13.2). */
 const CurrentUser = createContext<User | null>(null);
@@ -25,7 +35,13 @@ function useProjectRole(projectId?: string): ProjectRole | "" {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>({ kind: "tasks" });
+  const [view, setViewState] = useState<View>(viewFromHash);
+  useEffect(() => {
+    const follow = () => { setViewState(viewFromHash()); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, []);
+  const setView = (v: View) => { window.location.hash = hashOf(v); };
   // undefined: still asking who is signed in; null: nobody.
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
@@ -50,25 +66,31 @@ export default function App() {
   return (
     <CurrentUser.Provider value={user}>
     <Projects.Provider value={{ list: projects, current, select, reload: reloadProjects }}>
-    <div className="app">
-      <header>
-        <h1>Forge</h1>
-        <nav>
+    <div className={view.kind === "tasks" ? "app app-wide" : "app"}>
+      <header className="topbar">
+        <div className="topbar-left">
+          <h1>Forge</h1>
           {projects.length > 0 && (
-            <select className="project-switch" value={current?.id ?? ""} onChange={(e) => { select(e.target.value); setView({ kind: "tasks" }); }} title="Project">
+            <select className="project-switch" value={current?.id ?? ""} onChange={(e) => { select(e.target.value); setView({ kind: "tasks" }); }} aria-label="Project">
               {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
+          <nav aria-label="Pages">
+            <button className={view.kind === "tasks" || view.kind === "task" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Board</button>
+            <button className={view.kind === "project" ? "active" : ""} onClick={() => setView({ kind: "project" })}>Project</button>
+            <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
+          </nav>
+        </div>
+        <div className="topbar-right">
+          {allows(myRole, "member") && <button className="approve" onClick={() => setView({ kind: "new" })}>New task</button>}
           <span className="signed-in">{user.name} · {myRole || "no project"}</span>
-          {allows(myRole, "member") && <button className={view.kind === "new" ? "active" : ""} onClick={() => setView({ kind: "new" })}>New task</button>}
-          <button className={view.kind === "tasks" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Tasks</button>
-          <button className={view.kind === "project" ? "active" : ""} onClick={() => setView({ kind: "project" })}>Project</button>
-          <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
-          <button onClick={signOut}>Sign out</button>
-        </nav>
+          <button className="link" onClick={signOut}>Sign out</button>
+        </div>
       </header>
-      <main>
-        {view.kind === "tasks" && <Tasks onOpen={(id) => setView({ kind: "task", id })} />}
+      <main className={view.kind === "tasks" ? "main-board" : ""}>
+        {view.kind === "tasks" && (current
+          ? <Board projectId={current.id} canMove={allows(myRole, "member")} onOpen={(id) => setView({ kind: "task", id })} onNew={() => setView({ kind: "new" })} />
+          : <p className="hint">{projects.length === 0 ? "You are not in any project yet. An instance admin creates projects and a project admin adds you." : "Pick a project."}</p>)}
         {view.kind === "task"  && (
           <TaskDetail key={view.id} id={view.id} onOpen={(id) => setView({ kind: "task", id })} onBack={() => setView({ kind: "tasks" })} />
         )}
@@ -173,8 +195,10 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
         // the repository's setup), so this can take a while.
         // If it fails, the task exists anyway and its page shows why (BLOCKED).
         await api.startTask(task.id, provider, model).catch(() => {});
+        onCreated(task.id);
+      } else {
+        onCancel(); // it waits in Backlog: back to the board to see it there
       }
-      onCreated(task.id);
     } catch (e) { setErr(String(e)); setBusy(""); }
   };
 
@@ -249,12 +273,12 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
             <label>Cost cap ($) <input type="number" min={0} step="0.01" value={maxCost} onChange={(e) => setMaxCost(e.target.value)} placeholder="default" /></label>
           </div>
         </details>
-        <label className="inline"><input type="checkbox" checked={startNow} onChange={(e) => setStartNow(e.target.checked)} /> Start now (hand it to the head engineer)</label>
+        <label className="inline"><input type="checkbox" checked={startNow} onChange={(e) => setStartNow(e.target.checked)} /> Start now (hand it to the head engineer). Otherwise it waits in Backlog and calls no model.</label>
       </section>
 
-      <div>
-        <button className="approve" disabled={!ready} onClick={submit}>{busy === "creating" ? "Creating…" : busy === "starting" ? "Starting… (preparing the workspace)" : startNow ? "Create and start" : "Create"}</button>
-        <button className="neutral" onClick={onCancel}>Cancel</button>
+      <div className="form-actions">
+        <button className="approve" disabled={!ready} onClick={submit}>{busy === "creating" ? "Creating…" : busy === "starting" ? "Starting… (preparing the workspace)" : startNow ? "Create and start" : "Add to Backlog"}</button>
+        <button onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );
@@ -351,64 +375,13 @@ function AgentDetail({ name, onBack }: { name: string; onBack: () => void }) {
     </div>
   );
 }
-function Tasks({ onOpen }: { onOpen: (id: string) => void }) {
-  const { current: project, list } = useContext(Projects);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [status, setStatus] = useState("");
-  const [showSubtasks, setShowSubtasks] = useState(false);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    if (!project) { setTasks([]); return; }
-    api.listTasks(status || undefined, project.id)
-      .then(setTasks)
-      .catch((e) => setErr(String(e)));
-  }, [status, project?.id]);
-
-  if (!project) {
-    return <p className="hint">{list.length === 0 ? "You are not in any project yet. An instance admin creates projects and a project admin adds you." : "Pick a project."}</p>;
-  }
-
-  // Subtasks are reached from their parent; listing them is opt-in. An
-  // escalated subtask needs a human, so it is always listed.
-  const shown = tasks.filter((t) => showSubtasks || !t.parentId || t.status === "ESCALATED");
-
-  return (
-    <div>
-      <div className="toolbar">
-        <label>Status:&nbsp;
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">all</option>
-            {TASK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-        <label className="inline">
-          <input type="checkbox" checked={showSubtasks} onChange={(e) => setShowSubtasks(e.target.checked)} /> Show subtasks
-        </label>
-      </div>
-      {err && <p className="error">{err}</p>}
-      <table>
-        <thead><tr><th>Status</th><th>Task</th><th>Agent</th><th>Created</th></tr></thead>
-        <tbody>
-          {shown.map((t) => (
-            <tr key={t.id} onClick={() => onOpen(t.id)} className="clickable">
-              <td><StatusBadge status={t.status} /></td>
-              <td>{t.parentId ? <span className="subtask">↳ {t.title ?? t.requirement.slice(0, 120)}</span> : t.requirement.slice(0, 120)}</td>
-              <td>{t.assignedAgent ?? (isParent(t) ? "head-engineer" : "—")}</td>
-              <td>{new Date(t.createdAt).toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 const TERMINAL = new Set(["MERGED", "REJECTED", "INTEGRATED", "ROLLED_BACK"]);
 
 const PRE_FINAL_REVIEW = new Set(["CREATED", "DECOMPOSING", "DISPATCHED", "INTEGRATING"]);
 
 const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : s.trim() + ".");
+
+type DetailTab = "overview" | "changes" | "checks" | "activity";
 
 function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (id: string) => void }) {
   const [task, setTask] = useState<Task | null>(null);
@@ -426,6 +399,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [spend, setSpend] = useState<TaskSpend | null>(null);
   const [blockedWhy, setBlockedWhy] = useState("");
   const [resuming, setResuming] = useState(false);
+  const [tab, setTab] = useState<DetailTab>("overview");
+  const [starting, setStarting] = useState(false);
   // Decisions and comments are recorded as the signed-in user (13.3); what
   // they may do follows their role in the task's project (13.4).
   const me = useContext(CurrentUser);
@@ -447,8 +422,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       setChildEvents(evs);
       if (t.latestRunId) {
         setRun(await api.getRun(t.latestRunId));
-        setEvents(await api.getEvents(t.latestRunId));
       }
+      setEvents(await api.getTaskEvents(id).catch(() => []));
       // Reviews and gates belong to the run under review: a parent's final
       // review, otherwise the task's own run.
       // A parent's final-review run only exists once its subtasks are integrated.
@@ -515,9 +490,21 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
 
   const titleOf = (tid: string) => children.find((c) => c.id === tid)?.title ?? tid;
 
+  const failedChecks = verification?.gates.filter((g) => !g.skipped && !g.passed).length ?? 0;
+  const deliveryStuck = task.status === "BLOCKED" && !!task.delivery;
+  const deliveryPanel = task.delivery
+    ? <DeliveryRecord task={task} onRetry={mayDecide ? retryDelivery : undefined} onRollback={mayDecide ? rollback : undefined} />
+    : delivery && <DeliveryHint preview={delivery} />;
+  const tabs: { id: DetailTab; label: string; alert?: boolean }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "changes", label: isParent(task) && unresolved > 0 ? `Changes (${unresolved} open)` : "Changes" },
+    { id: "checks", label: "Checks and reviews", alert: failedChecks > 0 },
+    { id: "activity", label: "Activity" },
+  ];
+
   return (
     <div className="detail">
-      <button className="link" onClick={onBack}>← Back</button>
+      <button className="link back" onClick={onBack}>← Board</button>
       {parent && (
         <p className="crumb">
           Subtask of <button className="link" onClick={() => onOpen(parent.id)}>{parent.requirement.slice(0, 80)}</button>
@@ -525,32 +512,31 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           {task.assignedAgent && <> · assigned to <code>{task.assignedAgent}</code></>}
         </p>
       )}
-      <h2><StatusBadge status={task.status} /> {task.title ?? task.requirement}</h2>
+      <div className="detail-head">
+        <h2>{task.title ?? task.requirement}</h2>
+        <StatusBadge status={task.status} />
+      </div>
       {task.title && task.requirement.replace(task.title, "").trim() && (
         <p className="requirement">{task.requirement.replace(task.title, "").trim()}</p>
       )}
       {err && <p className="error">{err}</p>}
 
-      <section>
-        <h3>Acceptance criteria</h3>
-        <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
-      </section>
+      {task.status === "CREATED" && !task.parentId && (
+        <section className="next-step">
+          <p>Not started yet. Nothing runs, and nothing is spent, until you start it.</p>
+          {allows(role, "member") && <button className="approve" onClick={() => setStarting(true)}>Start</button>}
+        </section>
+      )}
+      {starting && <StartDialog task={task} onClose={() => setStarting(false)} onStarted={() => { setStarting(false); reload(); }} onFailed={setErr} />}
 
-      {spend && (
-        <SpendPanel title={task.parentId ? "Spend (with the parent task)" : "Spend"} view={spend.task}
-          onSave={!task.parentId && allows(role, "admin") ? async (l) => { await api.setTaskBudget(task.id, l); await reload(); } : undefined}>
-          {task.parentId && <p className="hint">Subtasks share their parent's budget and max steps; change them on the parent.</p>}
-          {!task.parentId && allows(role, "admin") && <MaxStepsForm task={task} onSaved={reload} />}
-          {task.status === "BLOCKED" && !task.parentId && children.length === 0 && !task.delivery && (
-            <p>
-              Blocked before its subtasks were planned{blockedWhy ? `: ${blockedWhy}` : ""}.{" "}
-              {allows(role, "member") && <button className="neutral" onClick={() => api.startTask(task.id, run?.provenance?.provider ?? "", run?.provenance?.model ?? "").then(reload).catch((e) => setErr(String(e)))}>Start again</button>}
-            </p>
-          )}
-        </SpendPanel>
+      {task.status === "BLOCKED" && !task.parentId && children.length === 0 && !task.delivery && (
+        <section className="next-step next-step-stuck">
+          <p className="blocked-why">Blocked before its subtasks were planned{blockedWhy ? `: ${blockedWhy}` : ""}.</p>
+          {allows(role, "member") && <button className="neutral" onClick={() => api.startTask(task.id, run?.provenance?.provider ?? "", run?.provenance?.model ?? "").then(reload).catch((e) => setErr(String(e)))}>Start again</button>}
+        </section>
       )}
 
-      {task.delivery ? <DeliveryRecord task={task} onRetry={mayDecide ? retryDelivery : undefined} onRollback={mayDecide ? rollback : undefined} /> : delivery && <DeliveryHint preview={delivery} />}
+      {deliveryStuck && deliveryPanel}
 
       {task.status === "ESCALATED" && !mayDecide && (
         <p className="hint">Escalated: waiting for a reviewer to decide.</p>
@@ -559,9 +545,9 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <section className="approval escalation">
           <h3>Escalated — your decision</h3>
           {verification && !verification.passed ? (
-            <p>{sentence(reviewRun?.blockedReason ?? "Verification failed")} What failed is under <em>Verification</em> below. Accepting takes the change as it is, without those checks passing.</p>
+            <p>{sentence(reviewRun?.blockedReason ?? "Verification failed")} What failed is on the <button className="link" onClick={() => setTab("checks")}>Checks and reviews</button> tab. Accepting takes the change as it is, without those checks passing.</p>
           ) : reviews.length > 0 ? (
-            <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are under <em>Reviews</em> below.</p>
+            <p>{sentence(reviewRun?.blockedReason ?? "The reviewers kept rejecting this change")} Their findings are on the <button className="link" onClick={() => setTab("checks")}>Checks and reviews</button> tab.</p>
           ) : (
             <p>{sentence(reviewRun?.blockedReason ?? "This needs a decision")} Accepting takes the change as it is, without the remaining checks.</p>
           )}
@@ -633,36 +619,6 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </p>
       )}
 
-      {children.length > 0 && (
-        <section>
-          <h3>Subtasks</h3>
-          <table>
-            <thead><tr><th>Status</th><th>Subtask</th><th>Agent</th><th>Depends on</th></tr></thead>
-            <tbody>
-              {children.map((c) => (
-                <tr key={c.id} className="clickable" onClick={() => onOpen(c.id)}>
-                  <td><StatusBadge status={c.status} /></td>
-                  <td>
-                    {c.title ?? c.requirement.slice(0, 100)}
-                    {c.status === "BLOCKED" && childWhy(c) && <div className="warning blocked-why">{childWhy(c)}</div>}
-                    {c.status === "RESUMABLE" && <div className="warning blocked-why">Interrupted: open it to resume.</div>}
-                  </td>
-                  <td><code>{c.assignedAgent}</code></td>
-                  <td>
-                    {[...(c.dependsOn ?? []).map(titleOf), ...(c.implicitDependsOn ?? []).map((d) => `${titleOf(d)} (overlapping scope)`)]
-                      .join(", ") || "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-
-      {children.length > 1 && <Timeline children={children} events={childEvents} onOpen={onOpen} />}
-
-      {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
-
       {task.status === "REVIEW_PENDING" && !mayDecide && (
         <p className="hint">Waiting for a reviewer's decision.{allows(role, "member") && isParent(task) ? " You can comment on the change below." : ""}</p>
       )}
@@ -695,6 +651,50 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
+      <div className="tabs" role="tablist">
+        {tabs.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "tab active" : "tab"} onClick={() => setTab(t.id)}>
+            {t.label}{t.alert && <span className="tab-alert" title="A check failed" />}
+          </button>
+        ))}
+      </div>
+
+      {/* Hidden, not removed: a half-written comment on the change must survive switching tabs. */}
+      <div className="overview" hidden={tab !== "overview"}>
+        <div className="overview-main">
+      <section>
+        <h3>Acceptance criteria</h3>
+        <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
+      </section>
+
+      {children.length > 0 && (
+        <section>
+          <h3>Subtasks</h3>
+          <table>
+            <thead><tr><th>Status</th><th>Subtask</th><th>Agent</th><th>Depends on</th></tr></thead>
+            <tbody>
+              {children.map((c) => (
+                <tr key={c.id} className="clickable" onClick={() => onOpen(c.id)}>
+                  <td><StatusBadge status={c.status} /></td>
+                  <td>
+                    {c.title ?? c.requirement.slice(0, 100)}
+                    {c.status === "BLOCKED" && childWhy(c) && <div className="warning blocked-why">{childWhy(c)}</div>}
+                    {c.status === "RESUMABLE" && <div className="warning blocked-why">Interrupted: open it to resume.</div>}
+                  </td>
+                  <td><code>{c.assignedAgent}</code></td>
+                  <td>
+                    {[...(c.dependsOn ?? []).map(titleOf), ...(c.implicitDependsOn ?? []).map((d) => `${titleOf(d)} (overlapping scope)`)]
+                      .join(", ") || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {children.length > 1 && <Timeline children={children} events={childEvents} onOpen={onOpen} />}
+
       {run?.plan && (
         <section>
           <h3>Plan</h3>
@@ -702,22 +702,6 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
             <li key={i}>{s.description}{s.files?.length ? <span className="files"> [{s.files.join(", ")}]</span> : null}</li>
           ))}</ol>
           {run.plan.risks?.length ? <p><strong>Risks:</strong> {run.plan.risks.join("; ")}</p> : null}
-        </section>
-      )}
-
-      {verification && (
-        <section>
-          <h3>Verification{isParent(task) ? " (combined change)" : ""}</h3>
-          <ul className="gates">
-            {verification.gates.map((g, i) => (
-              <li key={i} className={g.skipped ? "skipped" : g.passed ? "passed" : "failed"}>
-                <strong>{g.name}</strong> {g.skipped ? `(skipped${g.skipReason ? `: ${g.skipReason}` : ""})` : g.passed ? "passed" : `FAILED (exit ${g.exitCode})`}
-                {g.output?.trim() && !g.skipped && (
-                  <details><summary>output</summary><pre className="gate-output">{g.output}</pre></details>
-                )}
-              </li>
-            ))}
-          </ul>
         </section>
       )}
 
@@ -737,10 +721,50 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         </section>
       )}
 
-      <DiffView task={task} feedback={isParent(task) ? { threads, user: me, role, onChange: reloadThreads } : undefined} />
+        </div>
+        <aside className="overview-side">
+      {spend && (
+        <SpendPanel title={task.parentId ? "Spend (with the parent task)" : "Spend"} view={spend.task}
+          onSave={!task.parentId && allows(role, "admin") ? async (l) => { await api.setTaskBudget(task.id, l); await reload(); } : undefined}>
+          {task.parentId && <p className="hint">Subtasks share their parent's budget and max steps; change them on the parent.</p>}
+          {!task.parentId && allows(role, "admin") && <MaxStepsForm task={task} onSaved={reload} />}
+        </SpendPanel>
+      )}
 
+          {!deliveryStuck && deliveryPanel}
+        </aside>
+      </div>
+
+      <div hidden={tab !== "changes"}>
+        <DiffView task={task} feedback={isParent(task) ? { threads, user: me, role, onChange: reloadThreads } : undefined} />
+      </div>
+
+      <div hidden={tab !== "checks"}>
+        {!verification && reviews.length === 0 && <p className="hint">No checks or reviews have run yet.</p>}
+      {verification && (
+        <section>
+          <h3>Verification{isParent(task) ? " (combined change)" : ""}</h3>
+          <ul className="gates">
+            {verification.gates.map((g, i) => (
+              <li key={i} className={g.skipped ? "skipped" : g.passed ? "passed" : "failed"}>
+                <strong>{g.name}</strong> {g.skipped ? `(skipped${g.skipReason ? `: ${g.skipReason}` : ""})` : g.passed ? "passed" : `FAILED (exit ${g.exitCode})`}
+                {g.output?.trim() && !g.skipped && (
+                  <details><summary>output</summary><pre className="gate-output">{g.output}</pre></details>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {reviews.length > 0 && <Reviews reviews={reviews} title={isParent(task) ? "Final review (combined change)" : "Reviews"} />}
+
+      </div>
+
+      <div hidden={tab !== "activity"}>
       <section>
         <h3>Events</h3>
+        {events.length === 0 && <p className="hint">Nothing has happened yet.</p>}
         <ul className="events">
           {events.map((e) => (
             <li key={e.id}>
@@ -768,6 +792,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
           ))}</ul>
         </section>
       )}
+      </div>
     </div>
   );
 }
@@ -1013,22 +1038,24 @@ function SpendPanel({ title, view, onSave, children }: { title: string; view: Sp
         {!l.maxTokens && !l.maxCostUsd && <span className="version"> no cap</span>}
       </p>
       {s.unpricedTokens > 0 && <p className="hint">{s.unpricedTokens.toLocaleString()} tokens are from models with no price, so they are not in the cost.</p>}
-      {children}
-      {onSave && (
-        <div className="inline-form">
-          <input value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} inputMode="numeric" placeholder="token cap (none)" aria-label="Token cap" />
-          <input value={maxCost} onChange={(e) => setMaxCost(e.target.value)} inputMode="decimal" placeholder="cost cap in $ (none)" aria-label="Cost cap in dollars" />
-          <button onClick={save}>Save caps</button>
-        </div>
+      {(children || onSave) && (
+        <details className="limits">
+          <summary>Limits</summary>
+          {children}
+          {onSave && (
+            <div className="inline-form">
+              <input value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} inputMode="numeric" placeholder="token cap (none)" aria-label="Token cap" />
+              <input value={maxCost} onChange={(e) => setMaxCost(e.target.value)} inputMode="decimal" placeholder="cost cap in $ (none)" aria-label="Cost cap in dollars" />
+              <button onClick={save}>Save caps</button>
+            </div>
+          )}
+        </details>
       )}
       {err && <p className="error">{err}</p>}
     </section>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return <span className={`badge badge-${status.toLowerCase()}`}>{status}</span>;
-}
 /**
  * The current project's repositories and members (13.4). Project admins
  * add and remove them; instance admins also create projects.

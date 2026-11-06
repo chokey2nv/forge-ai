@@ -107,7 +107,18 @@ type Task struct {
 
 	// Child task only: the review threads this follow-up subtask addresses.
 	Addresses []string `bson:"addresses,omitempty" json:"addresses,omitempty"`
+
+	// BoardLane is the one thing about a card's column the status can't say:
+	// a task not started yet is in Backlog or Todo, a merged one Done or Closed.
+	BoardLane BoardLane `bson:"boardLane,omitempty" json:"boardLane,omitempty"`
 }
+
+type BoardLane string
+
+const (
+	LaneTodo   BoardLane = "todo"
+	LaneClosed BoardLane = "closed"
+)
 
 // Follow-up kinds.
 const (
