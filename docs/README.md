@@ -11,6 +11,7 @@
 
 **History.** These describe the project as it was when written, so check anything in them against the code:
 
+- [`book/building-a-harness.md`](book/building-a-harness.md): the story of the build from Phase 1 to 6 November 2026, with the decisions and what went wrong.
 - [`plans/`](plans/): the design of each phase from 9 to 13.
 - [`mile-stone-review.md`](../mile-stone-review.md): a review from the Phase 8 build.
 - [`README-TEST-SERVER.md`](../README-TEST-SERVER.md): early notes on why Docker is needed and getting a first task unstuck.
