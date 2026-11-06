@@ -170,6 +170,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 			ParentID:          task.ID,
 			Title:             t.Title,
 			AssignedAgent:     t.AssignedAgent,
+			Rationale:         t.Rationale,
 			Requirement:       t.Title + "\n\n" + t.Rationale + threadBrief(threads, addressedBy[t.ID]),
 			Addresses:         addressedBy[t.ID],
 			Acceptance:        t.Acceptance,
@@ -217,6 +218,7 @@ func (h *Handlers) handleHeadEngineerDone(run *domain.WorkflowRun, task *domain.
 	_ = h.Events.Append(ctx, &domain.Event{
 		TaskID: task.ID, RunID: run.ID,
 		Type:    "decomposition.complete",
+		Reason:  sub.Notes,
 		Payload: map[string]any{"childCount": len(sub.Tasks), "notes": sub.Notes},
 		At:      time.Now().UTC(),
 	})

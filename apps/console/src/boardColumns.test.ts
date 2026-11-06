@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ago, columnOf, matches, moveTo, onBoard, sortCards, COLUMNS } from "./boardColumns.ts";
+import { agentsOnBoard, ago, columnOf, matches, moveTo, onBoard, sortCards, COLUMNS } from "./boardColumns.ts";
 import type { Task, TaskStatus } from "./api.ts";
 
 const task = (status: TaskStatus, more: Partial<Task> = {}): Task => ({
@@ -77,4 +77,9 @@ test("ages read in the largest whole unit", () => {
   assert.equal(ago("2026-11-05T11:15:00Z", now), "45m ago");
   assert.equal(ago("2026-11-05T09:00:00Z", now), "3h ago");
   assert.equal(ago("2026-11-02T12:00:00Z", now), "3d ago");
+});
+
+test("the agent filter lists each agent with work once, in order", () => {
+  const tasks = [task("RUNNING", { assignedAgent: "qa-engineer" }), task("CREATED"), task("MERGED", { assignedAgent: "implementer" }), task("VERIFYING", { assignedAgent: "qa-engineer" })];
+  assert.deepEqual(agentsOnBoard(tasks), ["implementer", "qa-engineer"]);
 });

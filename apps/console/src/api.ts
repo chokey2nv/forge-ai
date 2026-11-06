@@ -11,9 +11,10 @@ export interface AgentDefinition {
   description: string;
   version: number;
   modelPreference?: string;
-  skills: string[];
+  skills?: string[];
   tools: string[];
-  reviewers: string[];
+  reviewers?: string[];
+  submissionTool?: string;
   systemPrompt: string;
   contentHash: string;
   loadedAt: string;
@@ -41,6 +42,10 @@ export interface Task {
   parentId?: string;
   title?: string;
   assignedAgent?: string;
+  /** The head engineer's reason for this subtask and its agent. */
+  rationale?: string;
+  /** The files this subtask may change. */
+  diffScope?: string[];
   dependsOn?: string[];
   /** Added by the platform: overlapping or undeclared diffScope, so these never run in parallel. */
   implicitDependsOn?: string[];

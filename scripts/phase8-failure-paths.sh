@@ -322,6 +322,10 @@ run_scenario() {
       check "parent reaches REVIEW_PENDING" "$([ "$final" = REVIEW_PENDING ]; echo $?)"
       check "child retried after failed verification" "$(has_reason "$child" "verification failed; retrying"; echo $?)"
       check "child integrated" "$([ "$(status_of "$child")" = INTEGRATED ]; echo $?)"
+      check "the subtask keeps the head engineer's reason for its agent" \
+        "$([ "$(curl -sf "$CP/tasks/$child" | jq -r .rationale)" = "Single file fix." ]; echo $?)"
+      check "the parent's events carry the plan's notes" \
+        "$(curl -sf "$CP/tasks/$task/events" | jq -e 'any(.[]; .type == "decomposition.complete" and .reason == "One subtask.")' >/dev/null; echo $?)"
       check "the subtask's work is on its own branch, merged into the parent branch" \
         "$(cb=$(curl -sf "$CP/tasks/$child" | jq -r .branch); git -C "$repo" show "$cb:src/price.js" | grep -q Math.round && git -C "$repo" merge-base --is-ancestor "$cb" "$(branch_of "$task")"; echo $?)"
       check "integrated fix rounds to cents" "$(git -C "$repo" show "$(branch_of "$task"):src/price.js" | grep -q Math.round; echo $?)"

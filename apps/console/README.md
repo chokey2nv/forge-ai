@@ -7,6 +7,7 @@ The React app people use. It has no router or UI library: pages are chosen from 
 | `src/App.tsx` | Top bar, routing, the task page, New task, Project, Evals |
 | `src/Board.tsx` | The Kanban board and the Start dialog |
 | `src/boardColumns.ts` | Pure rules: which column a task is in, what a drop means. Tested. |
+| `src/Team.tsx`, `src/agentRoles.ts` | The Team page, and the pure rules for an agent's role and who reviews what. Tested. |
 | `src/DiffView.tsx`, `src/diff.ts` | The change viewer and line comments |
 | `src/api.ts` | Every API call and the shared types |
 | `src/styles.css` | All styles; colours are variables on `:root` |

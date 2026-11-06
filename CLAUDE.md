@@ -62,6 +62,7 @@ Settings and the API key live in `.env` (ignored by git; `.env.example` lists th
 | An HTTP route and who may call it | `api/routes.go` |
 | A model provider | `services/runtime-adapter/src/provider-factory.ts` |
 | The board | `apps/console/src/Board.tsx`, `boardColumns.ts` |
+| The Team page | `apps/console/src/Team.tsx`, `agentRoles.ts` |
 
 Bare paths above are under `services/control-plane/internal/controlplane/`.
 

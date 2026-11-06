@@ -81,7 +81,9 @@ type Task struct {
 	// DependsOn so its intent stays visible.
 	ImplicitDependsOn []string `bson:"implicitDependsOn,omitempty" json:"implicitDependsOn,omitempty"`
 	AssignedAgent     string   `bson:"assignedAgent,omitempty" json:"assignedAgent,omitempty"`
-	Title             string   `bson:"title,omitempty" json:"title,omitempty"`
+	// Rationale: the head engineer's reason for this subtask and its agent.
+	Rationale string `bson:"rationale,omitempty" json:"rationale,omitempty"`
+	Title     string `bson:"title,omitempty" json:"title,omitempty"`
 
 	// Child task only: which branch it works on. Parent tasks have a branch too.
 	Branch string `bson:"branch,omitempty" json:"branch,omitempty"`

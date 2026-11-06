@@ -289,3 +289,23 @@ button.tab.active { border-bottom-color: var(--ink); color: var(--ink); font-wei
   .column { scroll-snap-align: start; max-height: none; }
   .timeline-row { grid-template-columns: 1fr; }
 }
+
+/* Who does what */
+.team { max-width: 100%; }
+.team-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.team section { margin-top: 24px; }
+.table-scroll { overflow-x: auto; }
+.team td { vertical-align: top; }
+a.back { display: inline-block; margin-bottom: 12px; }
+.team td:first-child { white-space: nowrap; }
+.agent-link code { overflow-wrap: anywhere; }
+.assignment dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 8px 0 0; }
+.assignment dt { color: var(--ink-2); }
+.assignment dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.subtask-why { margin-top: 4px; color: var(--ink-2); font-size: 12px; }
+.board-agent { max-width: 200px; }
+.system-prompt, .skill-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .assignment dl { grid-template-columns: 1fr; gap: 2px 0; }
+  .assignment dd { margin-bottom: 8px; }
+}

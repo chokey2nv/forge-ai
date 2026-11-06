@@ -70,7 +70,7 @@ People sign in with a session cookie; scripts use `fgt_` API tokens. Each task b
 
 ## Agents
 
-An agent is a markdown file in `agents/`: frontmatter for its tools, skills, reviewers and submission tool, and a system prompt as the body. `submission_tool` decides what its completion means to the pipeline, so a new agent needs no code. See the [agent package](../services/control-plane/internal/controlplane/agent/README.md).
+An agent is a markdown file in `agents/`: frontmatter for its tools, skills, reviewers and submission tool, and a system prompt as the body. `submission_tool` decides what its completion means to the pipeline, so a new agent needs no code. The head engineer assigns each subtask by choosing from the work agents' descriptions, and gives a reason; an agent's `reviewers` list decides who checks its work. The console's Team page and task pages show all of this. See the [agent package](../services/control-plane/internal/controlplane/agent/README.md).
 
 ## Money
 

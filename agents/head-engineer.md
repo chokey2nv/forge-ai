@@ -32,7 +32,7 @@ The platform maintains a registry of agents. You will receive a list of availabl
 4. For each subtask:
    - Give it a short ID (`t1`, `t2`, …)
    - Give it a clear title
-   - Assign it to exactly one agent from the registry
+   - Assign it to exactly one agent from the registry, and say in `rationale` why that agent fits
    - Write acceptance criteria specific to that subtask
    - List the IDs of tasks it depends on (must be empty if independent)
    - Optionally set `diffScope` to the files this task is allowed to modify

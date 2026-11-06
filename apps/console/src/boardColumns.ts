@@ -41,6 +41,10 @@ export const needsYou = (t: Task) => NEEDS_YOU.has(t.status);
 /** Subtasks are reached from their parent unless they need a person. */
 export const onBoard = (t: Task, showSubtasks: boolean) => showSubtasks || !t.parentId || needsYou(t);
 
+/** The agents with work on the board, for its filter. */
+export const agentsOnBoard = (tasks: Task[]) =>
+  [...new Set(tasks.flatMap((t) => t.assignedAgent ?? []))].sort();
+
 export type Move = "backlog" | "todo" | "start" | "done" | "closed";
 
 /** What dropping a card on a column does, or null if that move means nothing. */

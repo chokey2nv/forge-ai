@@ -2,21 +2,24 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import {
   api, SIGNED_OUT, allows, type Project, type ProjectRole, type User, isParent, reviewRunId,
   type Task, type Run, type Event, type VerificationRun, type EvalResult, type Approval, type Review,
-  type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, type Limits, type SpendView, type TaskSpend, AgentDefinition, Skill,
+  type EscalationDecision, type DeliveryPreview, type ThreadList, type RepoInspection, type Config, type Limits, type SpendView, type TaskSpend, type AgentDefinition,
 } from "./api";
 import { Board, StartDialog, StatusBadge } from "./Board";
 import { DiffView } from "./DiffView";
+import { AgentLink, Team } from "./Team";
+import { reviewersOf } from "./agentRoles";
 
-type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" } | { kind: "project" };
+type View = { kind: "tasks" } | { kind: "task"; id: string } | { kind: "evals" } | { kind: "new" } | { kind: "project" } | { kind: "team"; name?: string };
 
 /** The page lives in the address, so reloading stays on it and Back works. */
 function viewFromHash(): View {
   const [page, id] = window.location.hash.replace(/^#\/?/, "").split("/");
   if (page === "task" && id) return { kind: "task", id };
+  if (page === "team") return { kind: "team", name: id };
   if (page === "evals" || page === "new" || page === "project") return { kind: page };
   return { kind: "tasks" };
 }
-const hashOf = (v: View) => (v.kind === "task" ? `#/task/${v.id}` : v.kind === "tasks" ? "#/" : `#/${v.kind}`);
+const hashOf = (v: View) => (v.kind === "task" ? `#/task/${v.id}` : v.kind === "tasks" ? "#/" : v.kind === "team" ? `#/team${v.name ? `/${v.name}` : ""}` : `#/${v.kind}`);
 
 /** The signed-in person (Phase 13.2). */
 const CurrentUser = createContext<User | null>(null);
@@ -77,6 +80,7 @@ export default function App() {
           )}
           <nav aria-label="Pages">
             <button className={view.kind === "tasks" || view.kind === "task" ? "active" : ""} onClick={() => setView({ kind: "tasks" })}>Board</button>
+            <button className={view.kind === "team" ? "active" : ""} onClick={() => setView({ kind: "team" })}>Team</button>
             <button className={view.kind === "project" ? "active" : ""} onClick={() => setView({ kind: "project" })}>Project</button>
             <button className={view.kind === "evals" ? "active" : ""} onClick={() => setView({ kind: "evals" })}>Evals</button>
           </nav>
@@ -97,6 +101,7 @@ export default function App() {
         {view.kind === "evals" && <Evals />}
         {view.kind === "new" && <NewTaskForm onCreated={(id) => setView({ kind: "task", id })} onCancel={() => setView({ kind: "tasks" })} />}
         {view.kind === "project" && <ProjectPage />}
+        {view.kind === "team" && <Team name={view.name} canReload={user.instanceAdmin} />}
       </main>
     </div>
     </Projects.Provider>
@@ -284,97 +289,11 @@ function NewTaskForm({ onCreated, onCancel }: { onCreated: (id: string) => void;
   );
 }
 
-function Agents({ onOpen }: { onOpen: (name: string) => void }) {
-  const [agents, setAgents] = useState<AgentDefinition[]>([]);
-  const [err, setErr] = useState("");
-  const [reloading, setReloading] = useState(false);
-
-  const load = () => api.listAgents().then(setAgents).catch((e) => setErr(String(e)));
-  useEffect(() => { load(); }, []);
-
-  const reload = async () => {
-    setReloading(true);
-    try { await api.reloadAgents(); await load(); }
-    catch (e) { setErr(String(e)); }
-    finally { setReloading(false); }
-  };
-
-  return (
-    <div>
-      <div className="toolbar">
-        <button onClick={reload} disabled={reloading}>
-          {reloading ? "Reloading…" : "Reload from disk"}
-        </button>
-      </div>
-      {err && <p className="error">{err}</p>}
-      <table>
-        <thead><tr><th>Name</th><th>Description</th><th>Skills</th><th>Tools</th><th>Reviewers</th></tr></thead>
-        <tbody>
-          {agents.map((a) => (
-            <tr key={a.name} className="clickable" onClick={() => onOpen(a.name)}>
-              <td><strong>{a.name}</strong> <span className="version">v{a.version}</span></td>
-              <td>{a.description}</td>
-              <td>{a.skills.join(", ") || "—"}</td>
-              <td>{a.tools.length}</td>
-              <td>{a.reviewers.join(", ") || "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+function Reviewers({ names }: { names: string[] }) {
+  if (names.length === 0) return <>no agent</>;
+  return <>{names.map((n, i) => <span key={n}>{i > 0 && ", "}<AgentLink name={n} /></span>)}</>;
 }
 
-function AgentDetail({ name, onBack }: { name: string; onBack: () => void }) {
-  const [agent, setAgent] = useState<AgentDefinition | null>(null);
-  const [skills, setSkills] = useState<Skill[]>([]);
-  useEffect(() => {
-    Promise.all([api.getAgent(name), api.listSkills()])
-      .then(([a, s]) => { setAgent(a); setSkills(s.filter((x) => a.skills.includes(x.name))); })
-      .catch(() => {});
-  }, [name]);
-
-  if (!agent) return <p>Loading…</p>;
-
-  return (
-    <div className="detail">
-      <button className="link" onClick={onBack}>← Back</button>
-      <h2>{agent.name} <span className="version">v{agent.version}</span></h2>
-      <p>{agent.description}</p>
-
-      <section>
-        <h3>Tools</h3>
-        <ul>{agent.tools.map((t) => <li key={t}><code>{t}</code></li>)}</ul>
-      </section>
-
-      <section>
-        <h3>Skills</h3>
-        {skills.length === 0 ? <p>—</p> : skills.map((s) => (
-          <details key={s.name}>
-            <summary><strong>{s.name}</strong> — {s.description}</summary>
-            <pre className="skill-body">{s.content}</pre>
-          </details>
-        ))}
-      </section>
-
-      <section>
-        <h3>Reviewers</h3>
-        <p>{agent.reviewers.length ? agent.reviewers.join(", ") : "— (no agent review)"}</p>
-      </section>
-
-      <section>
-        <h3>System prompt</h3>
-        <pre className="system-prompt">{agent.systemPrompt}</pre>
-      </section>
-
-      <section>
-        <h3>Metadata</h3>
-        <p>hash: <code>{agent.contentHash}</code></p>
-        <p>loaded: {new Date(agent.loadedAt).toLocaleString()}</p>
-      </section>
-    </div>
-  );
-}
 const TERMINAL = new Set(["MERGED", "REJECTED", "INTEGRATED", "ROLLED_BACK"]);
 
 const PRE_FINAL_REVIEW = new Set(["CREATED", "DECOMPOSING", "DISPATCHED", "INTEGRATING"]);
@@ -409,6 +328,8 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
   const [rationale, setRationale] = useState("");
   const [guidance, setGuidance] = useState("");
   const [err, setErr] = useState("");
+  const [agents, setAgents] = useState<AgentDefinition[]>([]);
+  useEffect(() => { api.listAgents().then(setAgents).catch(() => setAgents([])); }, []);
 
   const reload = async () => {
     try {
@@ -442,6 +363,9 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
     } catch (e) { setErr(String(e)); }
   };
 
+  // A subtask's requirement is its title and reason, which have their own places.
+  const brief = task?.title ? task.requirement.replace(task.title, "").replace(task.rationale ?? "", "").trim() : "";
+  const plans = events.filter((e) => e.type === "decomposition.complete" && e.reason);
   const childWhy = (c: Task) => (childEvents[c.id] ?? []).filter((e) => e.to === "BLOCKED" || e.type === "resume.failed").pop()?.reason ?? "";
   const blockedChild = children.find((c) => c.status === "BLOCKED");
 
@@ -516,9 +440,7 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
         <h2>{task.title ?? task.requirement}</h2>
         <StatusBadge status={task.status} />
       </div>
-      {task.title && task.requirement.replace(task.title, "").trim() && (
-        <p className="requirement">{task.requirement.replace(task.title, "").trim()}</p>
-      )}
+      {brief && <p className="requirement">{brief}</p>}
       {err && <p className="error">{err}</p>}
 
       {task.status === "CREATED" && !task.parentId && (
@@ -662,6 +584,24 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
       {/* Hidden, not removed: a half-written comment on the change must survive switching tabs. */}
       <div className="overview" hidden={tab !== "overview"}>
         <div className="overview-main">
+      {task.parentId && (
+        <section className="assignment">
+          <h3>Who does this</h3>
+          <dl>
+            <dt>Agent</dt><dd>{task.assignedAgent ? <AgentLink name={task.assignedAgent} /> : "—"}, chosen by the head engineer</dd>
+            {task.rationale && <><dt>Why</dt><dd>{task.rationale}</dd></>}
+            <dt>May change</dt><dd>{task.diffScope?.length ? task.diffScope.map((p, i) => <span key={p}>{i > 0 && ", "}<code>{p}</code></span>) : "No limit declared, so it runs apart from its siblings"}</dd>
+            <dt>Reviewed by</dt><dd><Reviewers names={reviewersOf(task, agents)} /></dd>
+          </dl>
+        </section>
+      )}
+      {!task.parentId && plans.length > 0 && (
+        <section className="assignment">
+          <h3>The plan</h3>
+          {plans.map((e) => <p key={e.id}>{e.reason}</p>)}
+          <p className="hint">Planned by <AgentLink name="head-engineer" />. The combined change is reviewed by <Reviewers names={reviewersOf(task, agents)} />.</p>
+        </section>
+      )}
       <section>
         <h3>Acceptance criteria</h3>
         <ol>{task.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol>
@@ -680,8 +620,12 @@ function TaskDetail({ id, onBack, onOpen }: { id: string; onBack: () => void; on
                     {c.title ?? c.requirement.slice(0, 100)}
                     {c.status === "BLOCKED" && childWhy(c) && <div className="warning blocked-why">{childWhy(c)}</div>}
                     {c.status === "RESUMABLE" && <div className="warning blocked-why">Interrupted: open it to resume.</div>}
+                    {c.rationale && <div className="subtask-why">{c.rationale}</div>}
                   </td>
-                  <td><code>{c.assignedAgent}</code></td>
+                  <td>
+                    {c.assignedAgent ? <AgentLink name={c.assignedAgent} /> : "—"}
+                    <div className="subtask-why">reviewed by <Reviewers names={reviewersOf(c, agents)} /></div>
+                  </td>
                   <td>
                     {[...(c.dependsOn ?? []).map(titleOf), ...(c.implicitDependsOn ?? []).map((d) => `${titleOf(d)} (overlapping scope)`)]
                       .join(", ") || "—"}

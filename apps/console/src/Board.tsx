@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type Config, type Task } from "./api";
-import { ago, columnOf, COLUMNS, matches, moveTo, needsYou, onBoard, sortCards, STATUS_LABEL, type Column, type Move } from "./boardColumns";
+import { agentsOnBoard, ago, columnOf, COLUMNS, matches, moveTo, needsYou, onBoard, sortCards, STATUS_LABEL, type Column, type Move } from "./boardColumns";
 
 const POLL_MS = 5000;
 
@@ -103,6 +103,7 @@ export function Board({ projectId, canMove, onOpen, onNew }: { projectId: string
   const [query, setQuery] = useState("");
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [needsYouOnly, setNeedsYouOnly] = useState(false);
+  const [agent, setAgent] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [overColumn, setOverColumn] = useState<Column | null>(null);
   const [starting, setStarting] = useState<Task | null>(null);
@@ -123,7 +124,8 @@ export function Board({ projectId, canMove, onOpen, onNew }: { projectId: string
     return m;
   }, [tasks]);
   const waiting = all.filter((t) => onBoard(t, false) && needsYou(t)).length;
-  const shown = all.filter((t) => onBoard(t, showSubtasks) && matches(t, query) && (!needsYouOnly || needsYou(t)));
+  // Only subtasks have an agent, so picking one shows them whatever the checkbox says.
+  const shown = all.filter((t) => (agent ? t.assignedAgent === agent : onBoard(t, showSubtasks)) && matches(t, query) && (!needsYouOnly || needsYou(t)));
   const dragged = dragId ? byId.get(dragId) : undefined;
 
   const move = async (task: Task, m: Move) => {
@@ -150,6 +152,10 @@ export function Board({ projectId, canMove, onOpen, onNew }: { projectId: string
         <button className={needsYouOnly ? "filter on" : "filter"} aria-pressed={needsYouOnly} onClick={() => setNeedsYouOnly(!needsYouOnly)}>
           Needs you{waiting > 0 && <span className="filter-count">{waiting}</span>}
         </button>
+        <select className="board-agent" value={agent} onChange={(e) => setAgent(e.target.value)} aria-label="Filter by agent">
+          <option value="">All agents</option>
+          {agentsOnBoard(all).map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
         <label className="board-check"><input type="checkbox" checked={showSubtasks} onChange={(e) => setShowSubtasks(e.target.checked)} /> Show subtasks</label>
       </div>
       {err && <p className="error">{err}</p>}

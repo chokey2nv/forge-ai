@@ -27,7 +27,7 @@ var ToolCatalog = map[string]ToolSchema{
 							"acceptance":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 							"dependsOn":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "IDs of tasks that must integrate before this one starts"},
 							"diffScope":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional file globs this task may modify"},
-							"rationale":     map[string]any{"type": "string", "description": "Why this decomposition (visible in review)"},
+							"rationale":     map[string]any{"type": "string", "description": "Why this subtask exists and why this agent fits it (shown in the console)"},
 							"addresses":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Follow-up only: the review threads (T1, T2, …) this task deals with"},
 						},
 						"required": []string{"id", "title", "assignedAgent", "acceptance", "dependsOn"},
