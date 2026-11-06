@@ -11,7 +11,7 @@ How Forge works today. For how to run and operate it, see the [runbook](operatio
                                     └── Docker containers, git ─┘
 ```
 
-- **Control plane** owns all state and decides what happens next. It creates containers and git worktrees, runs the checks, and merges.
+- **Control plane** owns all state and decides what happens next. It creates containers and workspaces, runs the checks, and merges.
 - **Adapter** holds no lasting state. It runs one agent's loop: call the model, run its tool calls in the container, repeat. It reports heartbeats, checkpoints and completion back to the control plane.
 - **Console** is a client of the control plane's API, and never talks to the adapter.
 
@@ -25,7 +25,7 @@ Most work follows this path. Each name in capitals is a task status.
 
 **2. Plan.** `POST /tasks/{id}/runs` moves it to `DECOMPOSING` and starts the head engineer, which reads the repository and calls `submit_task_graph`. That creates the subtasks and moves the parent to `DISPATCHED`.
 
-**3. Run the subtasks.** The scheduler ticks through dispatched parents and starts each subtask whose dependencies are `INTEGRATED`, up to `MAX_CONCURRENT_RUNS`. Subtasks whose file scopes overlap, or that declare none, are made to wait for each other. Each gets its own branch, worktree and container, and goes `DISPATCHED` → `RUNNING`.
+**3. Run the subtasks.** The scheduler ticks through dispatched parents and starts each subtask whose dependencies are `INTEGRATED`, up to `MAX_CONCURRENT_RUNS`. Subtasks whose file scopes overlap, or that declare none, are made to wait for each other. Each gets its own branch, clone and container, and goes `DISPATCHED` → `RUNNING`.
 
 **4. Check a subtask.** When its agent finishes:
 - `VERIFYING`: the gates run in a container (secrets, diff-scope, build, test). A failure goes back to the agent with the output, up to `MAX_VERIFICATION_ATTEMPTS`, then `BLOCKED`.
@@ -60,7 +60,7 @@ A parent stays `BLOCKED` while any subtask is `BLOCKED` or `REJECTED`, and is re
 
 ## Workspaces and safety
 
-Each run works in a git worktree mounted at `/workspace` in a container from the worker image. Containers run as an unprivileged user with all capabilities dropped, a read-only root filesystem and no network. Packages are installed once per set of dependency files into a shared, read-only volume, with the project's own install scripts removed, so nothing an agent writes can reach other tasks.
+Each run works in its own clone of the repository, mounted at `/workspace` in a container from the worker image, so git works inside the container and a subtask's agent has no write path into the host repository. A parent's integration branch is checked out in a real worktree on the host, and its combined checks and final review run in a container with that worktree mounted. Containers run as an unprivileged user with all capabilities dropped, a read-only root filesystem and no network. Packages are installed once per set of dependency files into a shared, read-only volume, with the project's own install scripts removed, so nothing an agent writes can reach other tasks.
 
 A background reaper removes containers and workspaces nothing can use any more. It only touches ones labelled with its own database name, so a test instance on another database can't harm a running Forge.
 
