@@ -1,3 +1,5 @@
+> **History.** The design as planned for this phase, which later work may have changed. Check anything here against the code; current docs start at [`CLAUDE.md`](../../CLAUDE.md).
+
 # Phase 10 — Parallel execution
 
 **Status:** done (2 Nov 2026) · **Drafted:** 2 Nov 2026 · **Builds on:** verified Phase 9 (`docs/operations/RUNBOOK.md` §9)

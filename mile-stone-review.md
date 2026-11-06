@@ -1,3 +1,5 @@
+> **History.** A review from the Phase 8 build, with updates to Phase 10. Check anything here against the code; current docs start at [`CLAUDE.md`](CLAUDE.md).
+
 # Review of Forge AI — state of the build
 
 > **Update, 2 Nov 2026.** The review below was written at the Phase 8 build state, before anything past Phase 1 had been run. Since then:

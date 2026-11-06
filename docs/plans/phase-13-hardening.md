@@ -1,3 +1,5 @@
+> **History.** The design as planned for this phase, which later work may have changed. Check anything here against the code; current docs start at [`CLAUDE.md`](../../CLAUDE.md).
+
 # Phase 13 — Hardening: auth, sandbox, projects
 
 **Status:** 13.1–13.6 done (4 Nov 2026) · **Drafted:** 4 Nov 2026 · **Builds on:** Phase 12 (`docs/plans/phase-12-feedback.md`)

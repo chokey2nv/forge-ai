@@ -2,7 +2,9 @@
 
 Setup, startup, and validation for the platform at its current build state (Phases 1–13; §9 lists what each phase's evidence is and what isn't covered yet).
 
-**Audience:** whoever is running the platform, not building it.
+**Audience:** whoever is running the platform, not building it. New here? Start at [`CLAUDE.md`](../../CLAUDE.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+**Ports:** `scripts/forge.sh` runs Forge on 8085, 8086 and 5174. The examples below that use 8080, 8081 and 5173 are for starting services by hand.
 **Last updated:** 4 Nov 2026 (Phases 8–13 verified end to end; see §5.7–§5.12 and §9).
 
 ---
@@ -1190,7 +1192,7 @@ A repository with a remote: Forge fetches the target when creating a task and ag
 
 ## 10. File reference
 
-Files created across Phases 1–3. Missing files cause compile errors.
+**Out of date:** this lists the files from Phases 1–3. For what's there now, see the `README.md` in each code folder.
 
 ### Adapter (`services/runtime-adapter/`)
 

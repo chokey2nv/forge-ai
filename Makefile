@@ -112,7 +112,11 @@ console-dev:
 # -  const end = start + size - 1;
 # +  const end = start + size;
 # ...
-.PHONY: up down user users
+.PHONY: up down user users docs-check
+
+# Fails if the docs name files that are gone, or a code folder has no README.
+docs-check:
+	@bash scripts/check-docs.sh
 
 # The whole of Forge in one command (scripts/forge.sh; RUNBOOK §4).
 up:

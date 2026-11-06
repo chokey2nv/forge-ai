@@ -1,3 +1,5 @@
+> **History.** The design as planned for this phase, which later work may have changed. Check anything here against the code; current docs start at [`CLAUDE.md`](../../CLAUDE.md).
+
 # Phase 12 — Human feedback
 
 **Status:** Done (3 Nov 2026): 12.1–12.5 · **Drafted:** 3 Nov 2026 · **Builds on:** Phase 11 (`docs/plans/phase-11-delivery.md`)

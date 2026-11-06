@@ -1,3 +1,5 @@
+> **History.** Early notes from getting a first task running. Check anything here against the code; current docs start at [`CLAUDE.md`](CLAUDE.md).
+
 # Three things — Docker is required, the task is stuck, and OpenAI doesn't replace Docker
 
 Short answer first: **Docker is required regardless of which model you use.** OpenAI replaces the *brain*; Docker runs the *hands*. You need both.
